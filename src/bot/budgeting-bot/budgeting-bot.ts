@@ -3,7 +3,7 @@ import type { TEntryDirectionToTrend } from "@/utils/types.util";
 import BBWaitForBetSignalState from "./bb-states/bb-wait-for-bet-signal.state";
 import BBWaitForResolveSignalState from "./bb-states/bb-wait-for-resolve-signal.state";
 import BBStartingState from "./bb-states/bb-starting.state";
-import GrokAiService, { type TAICandleBreakoutTrendWithAfter, type TAiCandleTrendDirection } from "@/services/grok-ai.service";
+import GrokAiService, { type TAiCandleTrendDirection } from "@/services/grok-ai.service";
 import BBUtil from "./bb-util";
 import BBTrendWatcher from "./bb-trend-watcher";
 import type { TPositionSide } from "@/services/exchange-service/exchange-type";
@@ -35,12 +35,15 @@ class BudgetingBot {
   betSize: number;
   betDirection: TEntryDirectionToTrend;
 
-  commitedBetEntryTrend?: TAICandleBreakoutTrendWithAfter;
+  commitedBetEntryTrend?: Omit<TAiCandleTrendDirection, "Kangaroo">;
   currActiveOpenedPositionId?: number;
   currPositionSide?: TPositionSide;
-  shouldResolvePositionTrends?: (TAiCandleTrendDirection | TAICandleBreakoutTrendWithAfter)[] = [];
+  shouldResolvePositionTrends?: (TAiCandleTrendDirection)[] = [];
 
-  lastCommitedEntrySignalTrend?: TAICandleBreakoutTrendWithAfter;
+  isEarlySundayHandled = false;
+  isEarlyMondayHandled = false;
+
+  lastCommitedEntrySignalTrend?: Omit<TAiCandleTrendDirection, "Kangaroo">;
   sameTrendAsBetTrendCount = 0;
   forceResolveOnSameAsBetTrendAmt = 0;
 

@@ -16,7 +16,6 @@ class BBUtil {
     const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
     const startDate = new Date(utc + (startGmtOffset * 3600000));
     const startDayName = moment(startDate).format('dddd') as TDayName;
-    return sundayDayName;
 
     if (startDayName === sundayDayName) {
       const endGmtOffset = this.bot.sundayEndGMTTimezone;

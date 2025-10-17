@@ -1,13 +1,13 @@
-import type { IAITrend, TAICandleBreakoutTrendWithAfter } from "@/services/grok-ai.service";
+import type { IAITrend, TAiCandleTrendDirection } from "@/services/grok-ai.service";
 import BudgetingBot, { type BBState } from "../budgeting-bot";
 import TelegramService from "@/services/telegram.service";
 import moment from "moment";
 import { sundayDayName } from "../bb-util";
 import type { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
-import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
-import { BigNumber } from "bignumber.js";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
+import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
+import { BigNumber } from "bignumber.js";
 
 class BBWaitForBetSignalState implements BBState {
   private aiTrendHookRemover?: () => void;
@@ -22,9 +22,7 @@ class BBWaitForBetSignalState implements BBState {
 
   private async _trendHandler(aiTrend?: IAITrend) {
     const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName;
-
-    if ((isTodaySunday && aiTrend?.trend === "Kangaroo")
-      || (!isTodaySunday && (aiTrend?.trend === "Up" || aiTrend?.trend === "Down"))) return;
+    if (aiTrend?.trend === "Kangaroo") return;
 
     console.log("Handle bet signal triggered ai trend: ", aiTrend);
     this.aiTrendHookRemover && this.aiTrendHookRemover();
@@ -43,12 +41,8 @@ close price: ${aiTrend?.closePrice}
     const openPosDir: TPositionSide = (trendIsUp === followsTrend) ? "long" : "short";
     await this._openThenWaitAndGetOpenedPositionDetail(openPosDir);
 
-    this.bot.commitedBetEntryTrend = aiTrend?.trend as TAICandleBreakoutTrendWithAfter;
-    if (isTodaySunday) {
-      this.bot.shouldResolvePositionTrends = ["Kangaroo", aiTrend?.trend === "Up" ? "Down" : "Up"]
-    } else {
-      this.bot.shouldResolvePositionTrends = ["Up", "Down"];
-    }
+    this.bot.commitedBetEntryTrend = aiTrend?.trend as Omit<TAiCandleTrendDirection, "Kangaroo">;
+    this.bot.shouldResolvePositionTrends = ["Kangaroo", aiTrend?.trend === "Up" ? "Down" : "Up"]
 
     eventBus.emit(EEventBusEventType.StateChange);
   }
@@ -56,6 +50,8 @@ close price: ${aiTrend?.closePrice}
   private async _openThenWaitAndGetOpenedPositionDetail(posDir: TPositionSide) {
     const budget = new BigNumber(this.bot.betSize).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
     TelegramService.queueMsg(`DEBUG, opening position with budget: ${budget} USDT`);
+    this.bot.currActiveOpenedPositionId = 1234;
+    this.bot.currPositionSide = posDir;
 
     const msg = `✨️️️️️️️ Opening ${posDir} position`;
     TelegramService.queueMsg(msg);

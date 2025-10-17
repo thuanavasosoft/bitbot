@@ -2,13 +2,12 @@ import TelegramService from "./telegram.service";
 
 export type TAiCandleTrendV2 = "Up" | "Down" | "Unsure";
 export type TAiCandleTrendDirection = "Up" | "Down" | "Kangaroo";
-export type TAICandleBreakoutTrendWithAfter = "Up" | "Down" | "Already-Up" | "Already-Down";
 
 export interface IAITrend {
   startDate: Date,
   endDate: Date,
   closePrice: number,
-  trend: TAiCandleTrendDirection | TAICandleBreakoutTrendWithAfter,
+  trend: TAiCandleTrendDirection,
 }
 
 class GrokAiService {

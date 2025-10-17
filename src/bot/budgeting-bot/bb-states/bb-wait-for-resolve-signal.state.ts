@@ -20,13 +20,23 @@ class BBWaitForResolveSignalState implements BBState {
     console.log(msg);
     TelegramService.queueMsg(msg);
 
-    this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this));
+    this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this), this._handleSundayAndMondayTransition.bind(this));
+  }
+
+  private async _handleSundayAndMondayTransition() {
+    const todayDayName = this.bot.bbUtil.getTodayDayName();
+
+    const msg = `🕵️‍♀️ Found opened position (${this.bot.currActiveOpenedPositionId}) on early ${todayDayName}, force closing it...`;
+    console.log(msg);
+    TelegramService.queueMsg(msg);
+
+    this._closeCurrPosition();
   }
 
   private async _trendHandler(aiTrend: IAITrend) {
     if (!this.bot.shouldResolvePositionTrends?.includes(aiTrend.trend)) {
       this.bot.sameTrendAsBetTrendCount++;
-      TelegramService.queueMsg(`🙅‍♂️ ${aiTrend.trend} trend is not a resolve trigger trend (${this.bot.sameTrendAsBetTrendCount}/${this.bot.forceResolveOnSameAsBetTrendAmt}) not doing anything`)
+      TelegramService.queueMsg(`🙅‍♂️ ${aiTrend.trend} trend is not a resolve trigger trend (${this.bot.sameTrendAsBetTrendCount}) not doing anything`)
       return;
     }
 

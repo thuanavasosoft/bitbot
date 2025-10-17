@@ -3,24 +3,14 @@ import BudgetingBot from "./budgeting-bot";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import type { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import { generateImageOfCandles } from "@/utils/image-generator.util";
-import type { IAITrend, TAICandleBreakoutTrendWithAfter } from "@/services/grok-ai.service";
+import type { IAITrend } from "@/services/grok-ai.service";
 import { sundayDayName } from "./bb-util";
-
-const trends: TAICandleBreakoutTrendWithAfter[] = [
-  "Up",
-  "Down",
-  "Already-Down",
-  "Already-Down",
-  "Already-Down",
-  "Already-Up",
-];
-let idx = 0;
 
 class BBTrendWatcher {
 
   constructor(private bot: BudgetingBot) { }
 
-  hookAiTrends(watchFor: "betting" | "resolving", callback: (aiTrend: IAITrend) => void): () => void {
+  hookAiTrends(watchFor: "betting" | "resolving", callback: (aiTrend: IAITrend) => void, sundayMondayTransitionCb?: () => Promise<void>): () => void {
     console.log("Hooking ai trends...");
 
     let isWatchingTrend = true;
@@ -28,9 +18,9 @@ class BBTrendWatcher {
     (async () => {
       console.log("Starting watch trends: ", isWatchingTrend);
       while (isWatchingTrend) {
+
         if (this.bot.connectedClientsAmt === 0) {
           TelegramService.queueMsg("❗ It's should checking trend by now, No clients connected yet, waiting for client to be connected to check trend again, otherwise the bot will die!!!");
-
           while (true) {
             if (this.bot.connectedClientsAmt > 0) {
               TelegramService.queueMsg("✅ Client connected, checking trend again...");
@@ -40,7 +30,25 @@ class BBTrendWatcher {
           }
         }
 
-        const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName;
+        const todayDayName = this.bot.bbUtil.getTodayDayName();
+        const isTodaySunday = todayDayName === sundayDayName;
+        const isTodayMonday = todayDayName === sundayDayName;
+
+        if (!isTodaySunday && !!this.bot.isEarlySundayHandled) this.bot.isEarlySundayHandled = false;
+        if (!isTodayMonday && !!this.bot.isEarlyMondayHandled) this.bot.isEarlyMondayHandled = false;
+
+        if ((isTodaySunday && !this.bot.isEarlySundayHandled) || (isTodayMonday && !this.bot.isEarlyMondayHandled)) {
+          if (isTodayMonday) {
+            this.bot.isEarlyMondayHandled = true;
+            TelegramService.queueMsg(`🤶 !!! [INFO] Sunday is over today is Monday - will use analyze trend with after`);
+          }
+
+          if (!!sundayMondayTransitionCb) {
+            await sundayMondayTransitionCb();
+            return;
+          }
+        }
+
         const candleEndDate = new Date();
         const candleStartDate = new Date(candleEndDate.getTime() - (this.bot.candlesRollWindowInHours * 60 * 60 * 1000));
         const [candles, currMarkPrice] = await Promise.all([
@@ -59,10 +67,8 @@ class BBTrendWatcher {
         const imageData = await generateImageOfCandles(this.bot.symbol, candles, false, candleEndDate);
         TelegramService.queueMsg(imageData);
 
-        // const trend = trends[idx];
-        // idx = (idx + 1) % trends.length;
-        const trend = await (isTodaySunday ? this.bot.grokAi.analyzeTrend(imageData) : this.bot.grokAi.analyzeBreakoutTrendWithAfter(imageData));
-        TelegramService.queueMsg(`ℹ️ New ${this.bot.candlesRollWindowInHours}H ${isTodaySunday ? "trend without after" : "trend with after"} check for ${watchFor} result: ${trend} - Price: ${lastCandle.closePrice}`);
+        const trend = await (isTodaySunday ? this.bot.grokAi.analyzeTrend(imageData) : this.bot.grokAi.analyzeBreakOutTrend(imageData));
+        TelegramService.queueMsg(`ℹ️ New ${this.bot.candlesRollWindowInHours}H ${isTodaySunday ? "regular trend" : "breakout trend"} check for ${watchFor} result: ${trend} - Price: ${lastCandle.closePrice}`);
 
         if (!isWatchingTrend) return;
 
