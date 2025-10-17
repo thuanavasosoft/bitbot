@@ -32,7 +32,7 @@ class BBTrendWatcher {
 
         const todayDayName = this.bot.bbUtil.getTodayDayName();
         const isTodaySunday = todayDayName === sundayDayName;
-        const isTodayMonday = todayDayName === sundayDayName;
+        const isTodayMonday = todayDayName === "Monday";
 
         if (!isTodaySunday && !!this.bot.isEarlySundayHandled) this.bot.isEarlySundayHandled = false;
         if (!isTodayMonday && !!this.bot.isEarlyMondayHandled) this.bot.isEarlyMondayHandled = false;
@@ -45,6 +45,8 @@ class BBTrendWatcher {
 
           if (!!sundayMondayTransitionCb) {
             await sundayMondayTransitionCb();
+            if (isTodaySunday) this.bot.isEarlySundayHandled = true;
+            if (isTodayMonday) this.bot.isEarlyMondayHandled = true;
             return;
           }
         }
@@ -76,22 +78,14 @@ class BBTrendWatcher {
           startDate: new Date(candles[0].timestamp),
           endDate: new Date(lastCandle.timestamp),
           closePrice: lastCandle.closePrice,
-          trend: trend as any,
+          trend: trend,
         };
 
-        callback(aiTrend);
-
         // Gonna check for the next trend exactly on next interval check minute 0 second
-        const now = new Date();
-
-        const nextIntervalCheckMinutes = new Date(now.getTime());
-        nextIntervalCheckMinutes.setSeconds(0, 0);
-
-        if (now.getSeconds() > 0 || now.getMilliseconds() > 0) nextIntervalCheckMinutes.setMinutes(now.getMinutes() + this.bot.aiTrendIntervalCheckInMinutes);
-
-        const nextCheckTs = nextIntervalCheckMinutes.getTime()
-        const waitInMs = nextIntervalCheckMinutes.getTime() - now.getTime();
+        const { nextCheckTs, waitInMs } = this.bot.bbUtil.getWaitInMs();
         this.bot.nextTrendCheckTs = nextCheckTs;
+
+        callback(aiTrend);
         await new Promise(r => setTimeout(r, waitInMs));
       }
     })();

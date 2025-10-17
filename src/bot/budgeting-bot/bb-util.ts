@@ -25,7 +25,6 @@ class BBUtil {
       return endDayName;
     }
 
-
     return startDayName
   }
 
@@ -80,6 +79,20 @@ Next run quote baalnce: ${currExchFreeUsdtBalance} USDT
     this.bot.totalActualCalculatedProfit = new BigNumber(this.bot.totalActualCalculatedProfit).plus(iterationPnL).toNumber();
     console.log(msg);
     TelegramService.queueMsg(msg);
+  }
+
+  public getWaitInMs() {
+    const now = new Date();
+
+    const nextIntervalCheckMinutes = new Date(now.getTime());
+    nextIntervalCheckMinutes.setSeconds(0, 0);
+
+    if (now.getSeconds() > 0 || now.getMilliseconds() > 0) nextIntervalCheckMinutes.setMinutes(now.getMinutes() + this.bot.aiTrendIntervalCheckInMinutes);
+
+    const nextCheckTs = nextIntervalCheckMinutes.getTime()
+    const waitInMs = nextIntervalCheckMinutes.getTime() - now.getTime();
+
+    return { nextCheckTs, waitInMs };
   }
 }
 

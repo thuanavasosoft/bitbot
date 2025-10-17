@@ -16,9 +16,15 @@ class BBWaitForResolveSignalState implements BBState {
       throw new Error(msg);
     }
 
-    const msg = `🔁 Waiting for resolve signal...`
+    const msg = `🔁 Waiting for resolve signal ${(this.bot.shouldResolvePositionTrends || []).join(", ")} ...`
     console.log(msg);
     TelegramService.queueMsg(msg);
+
+    const nowMs = +new Date();
+    if (!!this.bot.nextTrendCheckTs && nowMs < this.bot.nextTrendCheckTs) {
+      console.log(`Waiting for ${this.bot.nextTrendCheckTs - nowMs}ms before hook ai trends`);
+      await new Promise(r => setTimeout(r, this.bot.nextTrendCheckTs - nowMs))
+    }
 
     this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this), this._handleSundayAndMondayTransition.bind(this));
   }
@@ -29,6 +35,9 @@ class BBWaitForResolveSignalState implements BBState {
     const msg = `🕵️‍♀️ Found opened position (${this.bot.currActiveOpenedPositionId}) on early ${todayDayName}, force closing it...`;
     console.log(msg);
     TelegramService.queueMsg(msg);
+
+    const { nextCheckTs } = this.bot.bbUtil.getWaitInMs();
+    this.bot.nextTrendCheckTs = nextCheckTs;
 
     this._closeCurrPosition();
   }

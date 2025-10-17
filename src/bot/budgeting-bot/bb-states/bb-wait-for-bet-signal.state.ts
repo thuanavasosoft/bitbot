@@ -17,6 +17,12 @@ class BBWaitForBetSignalState implements BBState {
     console.log("Entering wait for bet signal state");
     TelegramService.queueMsg(`🔜 Waiting for bet signal...`)
 
+    const nowMs = +new Date();
+    if (!!this.bot.nextTrendCheckTs && nowMs < this.bot.nextTrendCheckTs) {
+      console.log(`Waiting for ${this.bot.nextTrendCheckTs - nowMs}ms before hook ai trends`);
+      await new Promise(r => setTimeout(r, this.bot.nextTrendCheckTs - nowMs))
+    }
+
     this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("betting", this._trendHandler.bind(this));
   }
 
@@ -39,6 +45,10 @@ close price: ${aiTrend?.closePrice}
     const followsTrend = betMode === "follow";
 
     const openPosDir: TPositionSide = (trendIsUp === followsTrend) ? "long" : "short";
+
+    const { nextCheckTs } = this.bot.bbUtil.getWaitInMs();
+    this.bot.nextTrendCheckTs = nextCheckTs;
+
     await this._openThenWaitAndGetOpenedPositionDetail(openPosDir);
 
     this.bot.commitedBetEntryTrend = aiTrend?.trend as Omit<TAiCandleTrendDirection, "Kangaroo">;
@@ -49,9 +59,6 @@ close price: ${aiTrend?.closePrice}
 
   private async _openThenWaitAndGetOpenedPositionDetail(posDir: TPositionSide) {
     const budget = new BigNumber(this.bot.betSize).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
-    TelegramService.queueMsg(`DEBUG, opening position with budget: ${budget} USDT`);
-    this.bot.currActiveOpenedPositionId = 1234;
-    this.bot.currPositionSide = posDir;
 
     const msg = `✨️️️️️️️ Opening ${posDir} position`;
     TelegramService.queueMsg(msg);
