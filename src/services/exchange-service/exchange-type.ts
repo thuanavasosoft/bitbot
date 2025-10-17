@@ -89,7 +89,7 @@ export type TPositionSide = "long" | "short";
 export type TPositionType = "isolated" | "cross";
 
 export interface IPosition {
-  positionId: number;
+  id: number;
   symbol: string;
   size: number;
   side: TPositionSide;

@@ -28,9 +28,11 @@ class BudgetingBot {
   connectedClientsAmt: number = 0;
   nextTrendCheckTs: number = 0;
 
+  sleepDurationAfterLiquidation: string;
+  liquidationSleepFinishTs?: number;
+
   aiTrendIntervalCheckInMinutes: number;
   candlesRollWindowInHours: number;
-  sleepDurationAfterLiquidation: string;
   betSize: number;
   betDirection: TEntryDirectionToTrend;
 

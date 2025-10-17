@@ -1,6 +1,6 @@
 import moment from "moment";
 
-function parseDurationStringIntoMs(input: string): number {
+export function parseDurationStringIntoMs(input: string): number {
   const trimmed = input.trim();
   const hoursMatch = trimmed.match(/(\d+)h/);
   const minutesMatch = trimmed.match(/(\d+)m/);

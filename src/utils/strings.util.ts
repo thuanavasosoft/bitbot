@@ -14,7 +14,7 @@ export function isSameOrderLinkId(input: string, stringPattern: string): boolean
 
 export function getPositionDetailMsg(position: IPosition) {
   return `
-ID: ${position.positionId}
+ID: ${position.id}
 Side: ${position.side}
 Leverage: X${position.leverage}
 Size: ${position.size}

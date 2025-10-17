@@ -109,7 +109,7 @@ close price: ${aiTrend?.closePrice}
       throw new Error(msg);
     };
 
-    this.bot.currActiveOpenedPositionId = position.positionId;
+    this.bot.currActiveOpenedPositionId = position.id;
     this.bot.currPositionSide = posDir;
 
     console.log("Opened position: ", position);

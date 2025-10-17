@@ -338,7 +338,7 @@ class MexcExchange implements IExchangeInstance {
     const unrealizedPnl = priceDiff.times(size);
 
     const position: IPosition = {
-      positionId: mexcPos.positionId,
+      id: mexcPos.positionId,
       symbol: mexcPos.symbol,
       liquidationPrice: mexcPos.liquidatePrice,
       leverage: mexcPos.leverage,
@@ -392,7 +392,7 @@ class MexcExchange implements IExchangeInstance {
       const unrealizedPnl = priceDiff.times(size);
 
       const position: IPosition = {
-        positionId: mexcPos.positionId,
+        id: mexcPos.positionId,
         symbol: mexcPos.symbol,
         liquidationPrice: mexcPos.liquidatePrice,
         leverage: mexcPos.leverage,
@@ -461,7 +461,7 @@ class MexcExchange implements IExchangeInstance {
       }
 
       const position: IPosition = {
-        positionId: mexcPos.positionId,
+        id: mexcPos.positionId,
         symbol: mexcPos.symbol,
         liquidationPrice: mexcPos.liquidatePrice,
         leverage: mexcPos.leverage,
@@ -496,7 +496,7 @@ class MexcExchange implements IExchangeInstance {
       return position;
     }))).filter((pos): pos is IPosition => pos !== undefined);
 
-    if (!!positionId && !positions.some(p => p.positionId === positionId) && data.data.length >= limit) {
+    if (!!positionId && !positions.some(p => p.id === positionId) && data.data.length >= limit) {
       return this.getPositionsHistory({ page: page + 1, limit: limit, positionId })
     }
 

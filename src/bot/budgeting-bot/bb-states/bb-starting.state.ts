@@ -4,6 +4,7 @@ import TelegramService from "@/services/telegram.service";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import { BigNumber } from "bignumber.js";
 import { sundayDayName } from "../bb-util";
+import moment from "moment";
 
 class BBStartingState implements BBState {
   constructor(private bot: BudgetingBot) { }
@@ -45,6 +46,12 @@ class BBStartingState implements BBState {
   }
 
   async onEnter() {
+    if (!!this.bot.liquidationSleepFinishTs) {
+      TelegramService.queueMsg(`Position has just liquidated waiting for ${this.bot.sleepDurationAfterLiquidation} (finished at: ${moment(this.bot.liquidationSleepFinishTs).format("YYYY-MM-DD HH:mm:ss")})`)
+      await new Promise(r => setTimeout(r, this.bot.liquidationSleepFinishTs! - +new Date()));
+      this.bot.liquidationSleepFinishTs = undefined;
+    }
+
     // Validate sunday start and end gmt make sure they are not overlapping making it not working
     // Validate sunday start and end GMT, make sure they are not overlapping
     if (
