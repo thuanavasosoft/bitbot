@@ -1,0 +1,38 @@
+{ 
+  "compilerOptions": {
+    "outDir": "dist", 
+    "sourceMap": true,
+    "lib": ["ES2023"],
+    "target": "es2023",
+    "types": ["node"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true, 
+    "forceConsistentCasingInFileNames": true, 
+    "skipLibCheck": true, 
+
+    /* === Interop / Imports === */ 
+    "esModuleInterop": true, 
+    "resolveJsonModule": true, 
+    "allowSyntheticDefaultImports": true, 
+    // makes CJS imports easier /* === Project Behavior === */ 
+    "incremental": true, 
+    // faster subsequent builds 
+    "noEmitOnError": true, 
+    // don’t emit JS on TS errors /* === Useful Debug Options === */ 
+    "pretty": true, 
+    "noUnusedLocals": true, 
+    "noUnusedParameters": false, 
+    "noFallthroughCasesInSwitch": true, 
+
+    // Add paths mapping "baseUrl": ".", 
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"] 
+    }, 
+  },
+
+  "exclude": ["node_modules", "dist"] 
+}

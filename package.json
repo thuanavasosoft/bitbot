@@ -1,0 +1,44 @@
+{
+  "name": "bitbot",
+  "version": "1.0.0",
+  "description": "This bot will make each of us have Bugatti",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+   "start": "bun index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thuanavasosoft/bitbot.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/thuanavasosoft/bitbot/issues"
+  },
+  "homepage": "https://github.com/thuanavasosoft/bitbot#readme",
+  "devDependencies": {
+    "@types/bignumber.js": "^4.0.3",
+    "@types/moment": "^2.11.29",
+    "@types/node": "^24.7.2",
+    "@types/ws": "^8.18.1",
+    "ts-node": "^10.9.2",
+    "tsc-alias": "^1.8.16",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "bignumber.js": "^9.3.1",
+    "canvas": "^3.1.0",
+    "chart.js": "^4.4.9",
+    "chartjs-node-canvas": "^5.0.0",
+    "dotenv": "^17.2.3",
+    "drizzle-kit": "^0.31.5",
+    "drizzle-orm": "^0.44.6",
+    "moment": "^2.30.1",
+    "mysql2": "^3.15.2",
+    "telegraf": "^4.16.3",
+    "tsconfig-paths": "^4.2.0",
+    "ws": "^8.18.3"
+  }
+}

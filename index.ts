@@ -1,0 +1,41 @@
+import dotenv from 'dotenv';
+import TelegramService from "@/services/telegram.service";
+import BudgetingBot from '@/bot/budgeting-bot/budgeting-bot';
+import ExchangeService from '@/services/exchange-service/exchange-service';
+
+async function runProgram() {
+  try {
+    dotenv.config();
+
+    await TelegramService.initialize();
+
+    const symbols = process.env.SYMBOLS?.split(",") || []
+    const symbol = process.env.SYMBOL;
+
+    if (!symbol && !symbols.length) throw "PLEASE SPECIFY EITHER SYMBOL OR SYMBOLS ACCORDING TO THE BOT";
+    await ExchangeService.configure(
+      Number(process.env.EXCHANGE_ADAPTER),
+      process.env.API_KEY!,
+      process.env.API_SECRET!,
+      !!symbol ? [symbol] : symbols,
+    );
+
+    const bot = new BudgetingBot();
+    await bot.startMakeMoney()
+
+  } catch (error) {
+    console.log("Program error: ", error);
+
+    if (error instanceof Error) {
+      console.log(`Error: ${error.message}`);
+      TelegramService.queueMsg(`Error: ${error.message}`);
+    } else {
+      TelegramService.queueMsg(`An unknown error occurred. ${error}`);
+      console.log(`An unknown error occurred. ${error}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 10000)); // Wait for 10 seconds
+    process.exit(0);
+  }
+}
+
+runProgram();
