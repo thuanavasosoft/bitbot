@@ -39,30 +39,29 @@ class BBWaitForResolveSignalState implements BBState {
   }
 
   private async _closeCurrPosition() {
-    // const closedPosition = await (async () => {
-    //   for (let i = 0; i < 10; i++) { // Try 10 times
-    //     this.bot.bbWSSignaling.broadcast("close-position");
-    //     await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds before checking closed position again
+    const closedPosition = await (async () => {
+      for (let i = 0; i < 10; i++) { // Try 10 times
+        this.bot.bbWSSignaling.broadcast("close-position");
+        await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds before checking closed position again
 
-    //     console.log("Fetching position for this position id: ", this.bot.currActiveOpenedPositionId!);
-    //     const latestClosedPositions = await ExchangeService.getPositionsHistory({
-    //       positionId: this.bot.currActiveOpenedPositionId!
-    //     });
-    //     const closedPosition = latestClosedPositions?.find(p => p.positionId === this.bot.currActiveOpenedPositionId!)
-    //     console.log("Found closed position: ", closedPosition);
+        console.log("Fetching position for this position id: ", this.bot.currActiveOpenedPositionId!);
+        const latestClosedPositions = await ExchangeService.getPositionsHistory({
+          positionId: this.bot.currActiveOpenedPositionId!
+        });
+        const closedPosition = latestClosedPositions?.find(p => p.positionId === this.bot.currActiveOpenedPositionId!)
+        console.log("Found closed position: ", closedPosition);
 
-    //     if (!!closedPosition) return closedPosition;
+        if (!!closedPosition) return closedPosition;
 
-    //     TelegramService.queueMsg(`No closed position found will try again after 5 seconds attempt (${i + 1}/20)`)
-    //   }
-    // })();
+        TelegramService.queueMsg(`No closed position found will try again after 5 seconds attempt (${i + 1}/20)`)
+      }
+    })();
 
-    // if (!closedPosition) {
-    //   TelegramService.queueMsg(`Failed to fetch latest closed position that needed to get the realized PnL this will make the calculation wrong`);
-    //   process.exit(-100);
-    // }
+    if (!closedPosition) {
+      TelegramService.queueMsg(`Failed to fetch latest closed position that needed to get the realized PnL this will make the calculation wrong`);
+      process.exit(-100);
+    }
 
-    const closedPosition = { realizedPnl: 0 };
     this.bot.currActiveOpenedPositionId = undefined;
     this.bot.currPositionSide = undefined;
 
