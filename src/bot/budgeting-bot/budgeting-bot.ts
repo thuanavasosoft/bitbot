@@ -25,8 +25,7 @@ class BudgetingBot {
   currQuoteBalance!: string;
   totalActualCalculatedProfit: number = 0;
 
-  // connectedClientsAmt: number = 0;
-  connectedClientsAmt: number = 1;
+  connectedClientsAmt: number = 0;
   nextTrendCheckTs: number = 0;
 
   aiTrendIntervalCheckInMinutes: number;
