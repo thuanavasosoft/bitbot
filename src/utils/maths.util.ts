@@ -1,3 +1,4 @@
+import { IPosition } from "@/services/exchange-service/exchange-type";
 import moment from "moment";
 
 export function parseDurationStringIntoMs(input: string): number {
@@ -53,4 +54,20 @@ export function getMsDetailDuration(millis: number): { years: number, months: nu
   const seconds = remainingSeconds % 60;
 
   return { years, months, days, hours, minutes, seconds }
+}
+
+export function calc_UnrealizedPnl(pos: IPosition, p: number): number {
+  const markPrice = new BigNumber(p);
+  const avgPrice = new BigNumber(pos.avgPrice);
+  const size = new BigNumber(pos.size);
+
+  let pnl: BigNumber;
+
+  if (pos.side === "long") {
+    pnl = markPrice.minus(avgPrice).times(size);
+  } else {
+    pnl = avgPrice.minus(markPrice).times(size);
+  }
+
+  return pnl.toNumber();
 }
