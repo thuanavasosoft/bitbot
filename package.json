@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.ts",
-    "build": "echo '😎 Please use \"npx tsc\" to within the project root to generate the ./dist folder'",
+    "start": "npm run build && npm run start:prod",
+    "build": "npx tsc && npx tsc-alias -p tsconfig.json && node fix-imports.js",
     "start:prod": "node dist/index.js"
   },
   "repository": {

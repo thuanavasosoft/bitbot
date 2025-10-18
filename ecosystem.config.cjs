@@ -3,7 +3,7 @@ module.exports = {
   apps: [
     {
       name: 'dubai-main',
-      script: 'dist/index.js',
+      script: 'node dist/index.js',
       instances: 1,
       autorestart: false,
       watch: false,
