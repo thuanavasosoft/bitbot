@@ -87,7 +87,7 @@ ${!!position && getPositionDetailMsg(position)}`
     });
 
     TelegramService.appendTgCmdHandler(ETGCommand.FullUpdate, async () => {
-      const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName;
+      // const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName; // TODO: Uncomment this when sunday is implemented
       const startQuoteBalance = new BigNumber(this.bot.startQuoteBalance);
       const currQuoteBalance = new BigNumber(this.bot.currQuoteBalance);
 
