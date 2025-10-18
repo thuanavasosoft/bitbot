@@ -4,6 +4,7 @@ import TelegramService from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import { parseDurationStringIntoMs } from "@/utils/maths.util";
+import { BigNumber } from "bignumber.js";
 
 class BBWaitForResolveSignalState implements BBState {
   private aiTrendHookRemover?: () => void;
@@ -28,7 +29,8 @@ class BBWaitForResolveSignalState implements BBState {
       await new Promise(r => setTimeout(r, this.bot.nextTrendCheckTs - nowMs))
     }
 
-    this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this), this._handleSundayAndMondayTransition.bind(this));
+    this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this));
+
     this._watchForPositionLiquidation();
   }
 
