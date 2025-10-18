@@ -6,7 +6,7 @@ import BBStartingState from "./bb-states/bb-starting.state";
 import GrokAiService, { type TAiCandleTrendDirection } from "@/services/grok-ai.service";
 import BBUtil from "./bb-util";
 import BBTrendWatcher from "./bb-trend-watcher";
-import type { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
+import type { IPosition } from "@/services/exchange-service/exchange-type";
 import BBWSSignaling from "./bb-ws-signaling";
 import BBTgCmdHandler from "./bb-tg-cmd-handler";
 
