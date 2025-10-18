@@ -56,6 +56,9 @@ class BudgetingBot {
   sundayCandlesRollWindowInHours: number;
   sundayBetDirection: TEntryDirectionToTrend;
 
+  slippageAccumulation: number = 0; // NOTE: negative means good, positive means bad
+  numberOfTrades: number = 0; // NOTE: one position means 2 trades (open and close)
+
   startingState: BBStartingState;
   waitForBetSignalState: BBWaitForBetSignalState;
   waitForResolveSignalState: BBWaitForResolveSignalState;

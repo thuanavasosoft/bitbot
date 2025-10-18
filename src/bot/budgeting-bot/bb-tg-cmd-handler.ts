@@ -4,7 +4,7 @@ import { sundayDayName } from "./bb-util";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
-import { getMsDetailDuration, getRunDuration } from "@/utils/maths.util";
+import { getRunDuration } from "@/utils/maths.util";
 import { TEntryDirectionToTrend } from "@/utils/types.util";
 
 enum EBBotCommand {
@@ -98,50 +98,38 @@ ${!!position && getPositionDetailMsg(position)}`
       const stratEstimatedYearlyProfit = totalProfit.times(stratDaysWindows);
       const stratEstimatedROI = startQuoteBalance.lte(0) ? 0 : stratEstimatedYearlyProfit.div(startQuoteBalance).times(100);
 
-      const nextTrendCheckTs = this.bot.nextTrendCheckTs;
-
-      const { hours, minutes, seconds } = getMsDetailDuration(nextTrendCheckTs);
-
-      const timeToNextCheckMsg = `${hours}h${minutes}m${seconds}s`;
-
-      const tradingMsg = `${timeToNextCheckMsg}`;
+      const avgSlippage = Math.round(this.bot.slippageAccumulation / this.bot.numberOfTrades).toFixed(5);
 
       const msg = `
-[Full Update]
-
-=======GENERAL=======
+=== GENERAL ===
 Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
 Bet size: ${this.bot.betSize} USDT
-Sleep duration after liquiedation: ${this.bot.sleepDurationAfterLiquidation}
+Sleep duration after liquidation: ${this.bot.sleepDurationAfterLiquidation}
 
-Regular AI trend check interval: ${this.bot.aiTrendIntervalCheckInMinutes} minutes
-Regular Candles roll window: ${this.bot.candlesRollWindowInHours} hours
-Regular Bet direction: ${this.bot.betDirection}
+AI trend check interval: ${this.bot.aiTrendIntervalCheckInMinutes} minutes
+Candles roll window: ${this.bot.candlesRollWindowInHours} hours
+Bet direction: ${this.bot.betDirection}
 
-Is today sunday: ${isTodaySunday}
-Sunday AI trend check interval: ${this.bot.sundayAiTrendIntervalCheckInMinutes} minutes
-Sunday Candles roll window: ${this.bot.sundayCandlesRollWindowInHours} hours
-Sunday Bet direction: ${this.bot.sundayBetDirection}
-Sunday start gmt timezone: ${this.bot.sundayStartGMTTimezone > 0 ? "+" : ""}${this.bot.sundayStartGMTTimezone}
-Sunday end gmt timezone: ${this.bot.sundayEndGMTTimezone > 0 ? "+" : ""}${this.bot.sundayEndGMTTimezone}
-
-=======DETAILS=======
+=== DETAILS ===
 ${await this._getFullUpdateDetailsMsg()}
 
-Time to next trend check: ${tradingMsg}
-
-=======BUDGET=======
+=== BUDGET ===
 Start Quote Balance (100%): ${startQuoteBalance} USDT
 Current Quote Balance (100%): ${currQuoteBalance} USDT
 
 Balance current and start diff: ${new BigNumber(currQuoteBalance).minus(startQuoteBalance).toFixed(3)} USDT
 Calculated actual profit: ${this.bot.totalActualCalculatedProfit} USDT
 
-=======ROI=======
+=== ROI ===
 Run time: ${runDurationDisplay}
 Total profit till now: ${totalProfit.isGreaterThanOrEqualTo(0) ? "🟩" : "🟥"} ${totalProfit} USDT (${totalProfit.div(startQuoteBalance).times(100)}%) / ${runDurationDisplay}
 Estimated yearly profit: ${stratEstimatedYearlyProfit.toFixed(2)} USDT (${stratEstimatedROI.toFixed(2)}%)
+
+=== SLIPPAGE ===
+Slippage accumulation: ${this.bot.slippageAccumulation} pip(s)
+Number of trades: ${this.bot.numberOfTrades}
+Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSlippage} pip(s)
 `;
 
       TelegramService.queueMsg(msg);

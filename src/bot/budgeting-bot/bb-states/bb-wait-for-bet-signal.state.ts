@@ -9,6 +9,8 @@ import { getPositionDetailMsg } from "@/utils/strings.util";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import { BigNumber } from "bignumber.js";
 
+const WAIT_INTERVAL_MS = 5000;
+
 class BBWaitForBetSignalState implements BBState {
   private aiTrendHookRemover?: () => void;
   constructor(private bot: BudgetingBot) { }
@@ -65,8 +67,12 @@ close price: ${aiTrend?.closePrice}
     console.log(msg);
     console.log(`Broadcasting: open-${posDir}`);
 
+    const latestPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+    const triggerTs = +new Date();
+
+
     this.bot.bbWSSignaling.broadcast(`open-${posDir}`, budget);
-    await new Promise(r => setTimeout(r, 7000));
+    await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
 
     let position: IPosition | undefined = undefined;
     for (let i = 0; i < 10; i++) {
@@ -86,13 +92,13 @@ close price: ${aiTrend?.closePrice}
           const budget = new BigNumber(this.bot.betSize).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
           this.bot.bbWSSignaling.broadcast(`open-${posDir}`, budget);
           console.log(`[Position Check] Position not found on attempt ${i + 1} reopening position and will check again after 15 seconds...`);
-          await new Promise(r => setTimeout(r, 7000));
+          await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
         }
       } catch (error) {
         console.error(`[Position Check] Error on attempt ${i + 1}:`, error);
         if (i < 9) {
-          console.log(`[Position Check] Waiting 15 seconds before retry...`);
-          await new Promise(r => setTimeout(r, 7000));
+          console.log(`[Position Check] Waiting 5 seconds before retry...`);
+          await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
         }
       }
     }
@@ -111,11 +117,28 @@ close price: ${aiTrend?.closePrice}
 
     this.bot.currActiveOpenedPositionId = position.id;
     this.bot.currPositionSide = posDir;
+    this.bot.numberOfTrades++;
+
+    const positionAvgPrice = position.avgPrice;
+    const positionTriggerTs = +new Date(position.createTime);
+    const timeDiffMs = triggerTs - positionTriggerTs;
+    const priceDiff = new BigNumber(latestPrice).minus(positionAvgPrice).toNumber();
+    
+    const icon = posDir === "long" ? priceDiff <= 0 ? "🟩" : "🟥" : 
+    priceDiff >= 0 ? "🟩" : "🟥";
+    if (icon === "🟥") {
+      this.bot.slippageAccumulation += Math.abs(priceDiff);
+    } else {
+      this.bot.slippageAccumulation -= Math.abs(priceDiff);
+    }
 
     console.log("Opened position: ", position);
     TelegramService.queueMsg(`
 🥳️️️️️️ New position opened
 ${getPositionDetailMsg(position)}
+-- Open Slippage: --
+Time Diff: ${timeDiffMs}ms
+Price Diff (pips): ${icon} ${priceDiff}
 `)
   }
 

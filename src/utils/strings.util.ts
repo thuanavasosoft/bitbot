@@ -25,7 +25,7 @@ Avg Price: ${position.avgPrice}
 Curr Mark Price: ${position.markPrice}
 
 Realized PnL: ${position.realizedPnl}
-Unrealized PnL: ~${position.unrealizedPnl}`
+Unrealized PnL: ${position.unrealizedPnl > 0 ? "🟩" : "🟥"} ${position.unrealizedPnl}`
 }
 
 export function getPlacedOrdersMsg(orderIds: string[], orderLinkIds: string[]) {

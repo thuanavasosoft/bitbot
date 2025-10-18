@@ -5,7 +5,7 @@ import BudgetingBot from "./budgeting-bot";
 import TelegramService from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 
-export const sundayDayName: TDayName = "Sunday"
+export const sundayDayName: string = "NON-EXISTENT-DAY" // TODO: Change this back if we want this feature properly again
 
 class BBUtil {
   constructor(private bot: BudgetingBot) { }
@@ -56,7 +56,7 @@ class BBUtil {
     return exchFreeUsdtBalance
   }
 
-  public async handlePnL(PnL: number) {
+  public async handlePnL(PnL: number, icon?: string, slippage?: number, timeDiffMs?: number) {
     console.log("Calculating expected profit...");
 
     const iterationPnL = new BigNumber(PnL);
@@ -74,6 +74,9 @@ Actual iteration pnl: ${isProfit ? "🟩" : "🟥"} ${iterationPnL.toFixed(3)} U
 
 This run quote balance: ${thisRunCurrQuoteBalance} USDT
 Next run quote baalnce: ${currExchFreeUsdtBalance} USDT
+${!!icon && !!slippage && !!timeDiffMs ? `-- Close Slippage: --
+Time Diff: ${timeDiffMs}ms
+Price Diff (pips): ${icon} ${slippage}` : ""}
 `;
 
     this.bot.totalActualCalculatedProfit = new BigNumber(this.bot.totalActualCalculatedProfit).plus(iterationPnL).toNumber();

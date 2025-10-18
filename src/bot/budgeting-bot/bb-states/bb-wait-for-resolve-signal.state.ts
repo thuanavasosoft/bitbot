@@ -118,6 +118,13 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
   }
 
   private async _closeCurrPosition() {
+
+    const latestPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+    const triggerTs = +new Date();
+
+    let slippage: number = 0;
+    let timeDiffMs: number = 0;
+
     const closedPosition = await (async () => {
       for (let i = 0; i < 10; i++) { // Try 10 times
         this.bot.bbWSSignaling.broadcast("close-position");
@@ -130,7 +137,9 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
         const closedPosition = latestClosedPositions?.find(p => p.id === this.bot.currActiveOpenedPositionId!)
         console.log("Found closed position: ", closedPosition);
 
-        if (!!closedPosition) return closedPosition;
+        if (!!closedPosition) {
+          return closedPosition;
+        }
 
         TelegramService.queueMsg(`No closed position found will try again after 5 seconds attempt (${i + 1}/20)`)
       }
@@ -141,10 +150,23 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
       process.exit(-100);
     }
 
+    const closedPositionAvgPrice = closedPosition.avgPrice;
+    const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
+    slippage = new BigNumber(latestPrice).minus(closedPositionAvgPrice).toNumber();
+    timeDiffMs = triggerTs - closedPositionTriggerTs;
+
     this.bot.currActiveOpenedPositionId = undefined;
     this.bot.currPositionSide = undefined;
+    this.bot.numberOfTrades++;
 
-    await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl)
+    const icon = this.bot.currPositionSide === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
+    if (icon === "🟥") {
+      this.bot.slippageAccumulation += Math.abs(slippage);
+    } else {
+      this.bot.slippageAccumulation -= Math.abs(slippage);
+    }
+
+    await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl, icon, slippage, timeDiffMs)
   }
 
   async onExit() {
