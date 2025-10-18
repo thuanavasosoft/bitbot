@@ -2,11 +2,11 @@
   "compilerOptions": {
     "outDir": "dist", 
     "sourceMap": true,
-    "lib": ["ES2023"],
-    "target": "es2023",
+    "lib": ["ES2020"],
+    "target": "es2020",
     "types": ["node"],
     "module": "esnext",
-    "moduleResolution": "bundler",
+    "moduleResolution": "node",
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true, 
@@ -21,11 +21,12 @@
     "incremental": true, 
     // faster subsequent builds 
     "noEmitOnError": true, 
-    // don’t emit JS on TS errors /* === Useful Debug Options === */ 
+    // don't emit JS on TS errors /* === Useful Debug Options === */ 
     "pretty": true, 
     "noUnusedLocals": true, 
     "noUnusedParameters": false, 
-    "noFallthroughCasesInSwitch": true, 
+    "noFallthroughCasesInSwitch": true,
+    "downlevelIteration": true,
 
     // Add paths mapping "baseUrl": ".", 
     "baseUrl": ".",
@@ -33,6 +34,9 @@
       "@/*": ["./src/*"] 
     }, 
   },
-
+  "include": [
+    "index.ts",
+    "src/**/*"
+  ],
   "exclude": ["node_modules", "dist"] 
 }
