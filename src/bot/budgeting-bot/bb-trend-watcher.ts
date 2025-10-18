@@ -5,6 +5,7 @@ import type { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import { generateImageOfCandles } from "@/utils/image-generator.util";
 import type { IAITrend } from "@/services/grok-ai.service";
 import { sundayDayName } from "./bb-util";
+import moment from "moment";
 
 class BBTrendWatcher {
 
@@ -38,15 +39,18 @@ class BBTrendWatcher {
         if (!isTodayMonday && !!this.bot.isEarlyMondayHandled) this.bot.isEarlyMondayHandled = false;
 
         if ((isTodaySunday && !this.bot.isEarlySundayHandled) || (isTodayMonday && !this.bot.isEarlyMondayHandled)) {
-          if (isTodayMonday) {
+          if (isTodaySunday) {
+            TelegramService.queueMsg(`💂🏻 !!! [INFO] Today is sunday - will use regular analyze trend`);
+            this.bot.isEarlySundayHandled = true;
+          }
+          else if (isTodayMonday) {
             this.bot.isEarlyMondayHandled = true;
-            TelegramService.queueMsg(`🤶 !!! [INFO] Sunday is over today is Monday - will use analyze trend with after`);
+            TelegramService.queueMsg(`🤶 !!! [INFO] Sunday is over today is Monday - will use analyze breakout trend`);
           }
 
-          if (!!sundayMondayTransitionCb) {
+
+          if (!!sundayMondayTransitionCb && !!this.bot.currActiveOpenedPositionId) {
             await sundayMondayTransitionCb();
-            if (isTodaySunday) this.bot.isEarlySundayHandled = true;
-            if (isTodayMonday) this.bot.isEarlyMondayHandled = true;
             return;
           }
         }
@@ -70,7 +74,7 @@ class BBTrendWatcher {
         TelegramService.queueMsg(imageData);
 
         const trend = await (isTodaySunday ? this.bot.grokAi.analyzeTrend(imageData) : this.bot.grokAi.analyzeBreakOutTrend(imageData));
-        TelegramService.queueMsg(`ℹ️ New ${this.bot.candlesRollWindowInHours}H ${isTodaySunday ? "regular trend" : "breakout trend"} check for ${watchFor} result: ${trend} - Price: ${lastCandle.closePrice}`);
+        TelegramService.queueMsg(`ℹ️ New ${this.bot.candlesRollWindowInHours}H ${isTodaySunday ? "regular trend" : "breakout trend"} (${moment(candleStartDate).format("YYYY-MM-DD HH:mm:ss")} - ${moment(candleEndDate).format("YYYY-MM-DD HH:mm:ss")}) check for ${watchFor} result: ${trend} - Price: ${lastCandle.closePrice}`);
 
         if (!isWatchingTrend) return;
 

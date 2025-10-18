@@ -78,6 +78,8 @@ Realized PnL: ${closedPos.realizedPnl}
   }
 
   private async _handleSundayAndMondayTransition() {
+    if (!this.bot.currActiveOpenedPositionId) return;
+
     const todayDayName = this.bot.bbUtil.getTodayDayName();
 
     const msg = `🕵️‍♀️ Found opened position (${this.bot.currActiveOpenedPositionId}) on early ${todayDayName}, force closing it...`;
