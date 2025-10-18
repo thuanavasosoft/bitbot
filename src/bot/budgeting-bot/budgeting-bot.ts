@@ -39,6 +39,7 @@ class BudgetingBot {
   commitedBetEntryTrend?: Omit<TAiCandleTrendDirection, "Kangaroo">;
   currActiveOpenedPositionId?: number;
   currPositionSide?: TPositionSide;
+  currPositionLiquidationPrice?: number;
   shouldResolvePositionTrends?: (TAiCandleTrendDirection)[] = [];
 
   isEarlySundayHandled = false;

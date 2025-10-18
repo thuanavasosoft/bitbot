@@ -33,47 +33,55 @@ class BBWaitForResolveSignalState implements BBState {
   }
 
   private async _watchForPositionLiquidation() {
-    const pos = await ExchangeService.getPosition(this.bot.symbol);
-    if (!pos) return;
-
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
       if (
-        (pos!.side === "long" && new BigNumber(pos!.liquidationPrice).lt(p))
-        || (pos!.side === "short" && new BigNumber(pos!.liquidationPrice).gt(p))
+        (this.bot.currPositionSide === "long" && new BigNumber(this.bot.currPositionLiquidationPrice!).lt(p))
+        || (this.bot.currPositionSide === "short" && new BigNumber(this.bot.currPositionLiquidationPrice!).gt(p))
       ) return;
 
-      const msg = `💣 Current price ${p} is not good, exceed liquidation price (${pos?.liquidationPrice}) for ${pos?.side}, handling it...`;
+      const msg = `💣 Current price ${p} is not good, exceeded liquidation price (${this.bot.currPositionLiquidationPrice}) for ${this.bot.currPositionSide}, checking it...`;
       console.log(msg);
       TelegramService.queueMsg(msg);
 
       this.priceListenerRemover && this.priceListenerRemover();
       this.aiTrendHookRemover && this.aiTrendHookRemover();
-      this.bot.sameTrendAsBetTrendCount = 0;
-      this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-      const posHistory = await ExchangeService.getPositionsHistory({ positionId: pos!.id });
-      const closedPos = posHistory[0];
-      if (
-        (closedPos.side === "long" && new BigNumber(closedPos.closePrice!).lte(closedPos.liquidationPrice)) ||
-        (closedPos.side === "short" && new BigNumber(closedPos.closePrice!).gte(closedPos.liquidationPrice))
-      ) {
-        this.aiTrendHookRemover && this.aiTrendHookRemover();
-        console.log("Liquidated position: ", closedPos);
-        TelegramService.queueMsg(`
+
+      let intervalId: NodeJS.Timeout;
+      intervalId = setInterval(async () => {
+        this.bot.sameTrendAsBetTrendCount = 0;
+        this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
+        const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActiveOpenedPositionId });
+        const closedPos = posHistory[0];
+
+        if (!closedPos) {
+          return;
+        }
+
+        const isPositionLiquidated = (
+          (closedPos.side === "long" && new BigNumber(closedPos.closePrice!).lte(closedPos.liquidationPrice)) ||
+          (closedPos.side === "short" && new BigNumber(closedPos.closePrice!).gte(closedPos.liquidationPrice))
+        )
+
+        if (isPositionLiquidated) {
+          this.aiTrendHookRemover && this.aiTrendHookRemover();
+          console.log("Liquidated position: ", closedPos);
+          TelegramService.queueMsg(`
 🤯 Position just got liquidated
 Pos ID: ${closedPos.id}
 Avg price: ${closedPos.avgPrice}
 Liquidation price: ${closedPos.liquidationPrice}
 Close price: ${closedPos.closePrice}
 
-Realized PnL: ${closedPos.realizedPnl}
+Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 `);
+          this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
+          this.bot.bbUtil.handlePnL(closedPos.realizedPnl);
+          clearInterval(intervalId);
+          eventBus.emit(EEventBusEventType.StateChange);
+        }
 
-        this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-        eventBus.emit(EEventBusEventType.StateChange);
-      } else {
-        // Re run this function
-        await this._watchForPositionLiquidation();
-      }
+      }, 5000);
+      return;
     });
   }
 
