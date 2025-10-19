@@ -162,15 +162,15 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     slippage = new BigNumber(latestPrice).minus(closedPositionAvgPrice).toNumber();
     timeDiffMs = closedPositionTriggerTs - triggerTs;
 
-    this.bot.currActivePosition = undefined;
-    this.bot.numberOfTrades++;
-
-    const icon = this.bot.currActivePosition!.side === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
+    const icon = this.bot.currActivePosition?.side === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
     if (icon === "🟥") {
       this.bot.slippageAccumulation += Math.abs(slippage);
     } else {
       this.bot.slippageAccumulation -= Math.abs(slippage);
     }
+
+    this.bot.currActivePosition = undefined;
+    this.bot.numberOfTrades++;
 
     await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl, icon, slippage, timeDiffMs)
   }

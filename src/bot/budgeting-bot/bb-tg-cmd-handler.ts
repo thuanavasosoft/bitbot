@@ -98,7 +98,7 @@ ${!!position && getPositionDetailMsg(position)}`
       const stratEstimatedYearlyProfit = totalProfit.times(stratDaysWindows);
       const stratEstimatedROI = startQuoteBalance.lte(0) ? 0 : stratEstimatedYearlyProfit.div(startQuoteBalance).times(100);
 
-      const avgSlippage = Math.round(this.bot.slippageAccumulation / this.bot.numberOfTrades).toFixed(5);
+      const avgSlippage = this.bot.numberOfTrades > 0 ? new BigNumber(this.bot.slippageAccumulation).div(this.bot.numberOfTrades) : "0";
 
       const msg = `
 === GENERAL ===
