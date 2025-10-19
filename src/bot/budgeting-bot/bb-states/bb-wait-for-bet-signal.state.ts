@@ -8,6 +8,7 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import { BigNumber } from "bignumber.js";
+import { calc_UnrealizedPnl } from "@/utils/maths.util";
 
 const WAIT_INTERVAL_MS = 5000;
 
@@ -29,6 +30,10 @@ class BBWaitForBetSignalState implements BBState {
   }
 
   private async _trendHandler(aiTrend?: IAITrend) {
+    const currMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+    const estimatedUnrealizedProfit = calc_UnrealizedPnl(this.bot.currActivePosition!, currMarkPrice);
+    TelegramService.queueMsg(`💭 Current estimated unrealized profit: ${estimatedUnrealizedProfit >= 0 ? "🟩️️️️️️" : "🟥"} ~${estimatedUnrealizedProfit}`)
+
     const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName;
     if (aiTrend?.trend === "Kangaroo") return;
 
@@ -81,7 +86,7 @@ close price: ${aiTrend?.closePrice}
         position = await ExchangeService.getPosition(this.bot.symbol);
         console.log("position: ", position);
 
-        const msg = `[Position Check] Attempt ${i + 1}: Position check result: ${position ? 'Found' : 'Not found. Reopening position...'}`;
+        const msg = `[Position Check] Attempt ${i + 1}: Position check result: ${position ? 'Found' : 'Not found. Reopening position...'} `;
         console.log(msg);
         TelegramService.queueMsg(msg);
 
@@ -95,7 +100,7 @@ close price: ${aiTrend?.closePrice}
           await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
         }
       } catch (error) {
-        console.error(`[Position Check] Error on attempt ${i + 1}:`, error);
+        console.error(`[Position Check] Error on attempt ${i + 1}: `, error);
         if (i < 9) {
           console.log(`[Position Check] Waiting 5 seconds before retry...`);
           await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
@@ -107,7 +112,7 @@ close price: ${aiTrend?.closePrice}
       // Debug: Check all open positions to see if the position exists but wasn't found by symbol
       console.log(`[Position Check] Position not found by symbol ${this.bot.symbol}, checking all open positions...`);
       const allPositions = await ExchangeService.getOpenedPositions();
-      console.log(`[Position Check] All open positions:`, allPositions);
+      console.log(`[Position Check] All open positions: `, allPositions);
 
       const msg = "❌ Position not opened even after 60 seconds after signaling to open please check..."
       TelegramService.queueMsg(msg);
@@ -115,17 +120,16 @@ close price: ${aiTrend?.closePrice}
       throw new Error(msg);
     };
 
-    this.bot.currActiveOpenedPositionId = position.id;
-    this.bot.currPositionSide = posDir;
+    this.bot.currActivePosition = position;
     this.bot.numberOfTrades++;
 
     const positionAvgPrice = position.avgPrice;
     const positionTriggerTs = +new Date(position.createTime);
     const timeDiffMs = triggerTs - positionTriggerTs;
     const priceDiff = new BigNumber(latestPrice).minus(positionAvgPrice).toNumber();
-    
-    const icon = posDir === "long" ? priceDiff <= 0 ? "🟩" : "🟥" : 
-    priceDiff >= 0 ? "🟩" : "🟥";
+
+    const icon = posDir === "long" ? priceDiff <= 0 ? "🟩" : "🟥" :
+      priceDiff >= 0 ? "🟩" : "🟥";
     if (icon === "🟥") {
       this.bot.slippageAccumulation += Math.abs(priceDiff);
     } else {
@@ -136,9 +140,9 @@ close price: ${aiTrend?.closePrice}
     TelegramService.queueMsg(`
 🥳️️️️️️ New position opened
 ${getPositionDetailMsg(position)}
--- Open Slippage: --
-Time Diff: ${timeDiffMs}ms
-Price Diff (pips): ${icon} ${priceDiff}
+--Open Slippage: --
+Time Diff: ${timeDiffMs} ms
+Price Diff(pips): ${icon} ${priceDiff}
 `)
   }
 

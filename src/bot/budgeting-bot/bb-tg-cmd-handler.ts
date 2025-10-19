@@ -42,7 +42,7 @@ Trends should be for entry: ${isTodaySunday ? "Up | Down" : "Already-Up | Alread
     if (this.bot.currentState === this.bot.waitForResolveSignalState) {
       let position = await ExchangeService.getPosition(this.bot.symbol);
       if (!position) {
-        const closedPositions = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActiveOpenedPositionId! });
+        const closedPositions = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition?.id! });
         if (closedPositions?.length > 1) position = closedPositions[0];
       }
       return `

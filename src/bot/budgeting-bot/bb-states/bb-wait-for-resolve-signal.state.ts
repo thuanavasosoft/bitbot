@@ -13,8 +13,8 @@ class BBWaitForResolveSignalState implements BBState {
   constructor(private bot: BudgetingBot) { }
 
   async onEnter() {
-    if (!this.bot.shouldResolvePositionTrends) {
-      const msg = `Something went wrong this.bot.shouldResolvePositionTrends is not yet defined and already entering wait for resolve signal that means, the flow not work correctly`;
+    if (!this.bot.shouldResolvePositionTrends?.length || !this.bot.currActivePosition) {
+      const msg = `Something went wrong either this.bot.shouldResolvePositionTrends: ${this.bot.shouldResolvePositionTrends} or this.bot.currActivePosition: ${this.bot.currActivePosition} is not yet defined and already entering wait for resolve signal that means, the flow not work correctly`;
       console.log(msg);
       throw new Error(msg);
     }
@@ -37,11 +37,11 @@ class BBWaitForResolveSignalState implements BBState {
   private async _watchForPositionLiquidation() {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
       if (
-        (this.bot.currPositionSide === "long" && new BigNumber(this.bot.currPositionLiquidationPrice!).lt(p))
-        || (this.bot.currPositionSide === "short" && new BigNumber(this.bot.currPositionLiquidationPrice!).gt(p))
+        (this.bot.currActivePosition!.side === "long" && new BigNumber(p).lt(this.bot.currActivePosition!.liquidationPrice!))
+        || (this.bot.currActivePosition!.side === "short" && new BigNumber(p).gt(this.bot.currActivePosition!.liquidationPrice!))
       ) return;
 
-      const msg = `💣 Current price ${p} is not good, exceeded liquidation price (${this.bot.currPositionLiquidationPrice}) for ${this.bot.currPositionSide}, checking it...`;
+      const msg = `💣 Current price ${p} is not good, exceeded liquidation price (${this.bot.currActivePosition!.liquidationPrice}) for ${this.bot.currActivePosition!.side}, checking it...`;
       console.log(msg);
       TelegramService.queueMsg(msg);
 
@@ -52,7 +52,7 @@ class BBWaitForResolveSignalState implements BBState {
       intervalId = setInterval(async () => {
         this.bot.sameTrendAsBetTrendCount = 0;
         this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-        const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActiveOpenedPositionId });
+        const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
         const closedPos = posHistory[0];
 
         if (!closedPos) {
@@ -91,6 +91,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
   //   if (!this.bot.currActiveOpenedPositionId) return;
 
   //   const todayDayName = this.bot.bbUtil.getTodayDayName();
+
 
   //   const msg = `🕵️‍♀️ Found opened position (${this.bot.currActiveOpenedPositionId}) on early ${todayDayName}, force closing it...`;
   //   console.log(msg);
@@ -132,11 +133,11 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
         this.bot.bbWSSignaling.broadcast("close-position");
         await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds before checking closed position again
 
-        console.log("Fetching position for this position id: ", this.bot.currActiveOpenedPositionId!);
+        console.log("Fetching position for this position id: ", this.bot.currActivePosition!.id!);
         const latestClosedPositions = await ExchangeService.getPositionsHistory({
-          positionId: this.bot.currActiveOpenedPositionId!
+          positionId: this.bot.currActivePosition!.id!
         });
-        const closedPosition = latestClosedPositions?.find(p => p.id === this.bot.currActiveOpenedPositionId!)
+        const closedPosition = latestClosedPositions?.find(p => p.id === this.bot.currActivePosition!.id!)
         console.log("Found closed position: ", closedPosition);
 
         if (!!closedPosition) {
@@ -157,11 +158,10 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     slippage = new BigNumber(latestPrice).minus(closedPositionAvgPrice).toNumber();
     timeDiffMs = triggerTs - closedPositionTriggerTs;
 
-    this.bot.currActiveOpenedPositionId = undefined;
-    this.bot.currPositionSide = undefined;
+    this.bot.currActivePosition = undefined;
     this.bot.numberOfTrades++;
 
-    const icon = this.bot.currPositionSide === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
+    const icon = this.bot.currActivePosition!.side === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
     if (icon === "🟥") {
       this.bot.slippageAccumulation += Math.abs(slippage);
     } else {

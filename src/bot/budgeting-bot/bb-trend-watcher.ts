@@ -49,7 +49,7 @@ class BBTrendWatcher {
           }
 
 
-          if (!!sundayMondayTransitionCb && !!this.bot.currActiveOpenedPositionId) {
+          if (!!sundayMondayTransitionCb && !!this.bot.currActivePosition?.id) {
             await sundayMondayTransitionCb();
             return;
           }
