@@ -36,6 +36,14 @@ class BBWaitForResolveSignalState implements BBState {
 
   private async _watchForPositionLiquidation() {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
+      if (!this.bot.currActivePosition) { 
+        this.priceListenerRemover && this.priceListenerRemover();
+        this.aiTrendHookRemover && this.aiTrendHookRemover();
+        console.log("No active position found, exiting price listener");
+        return;
+      }
+
+
       // Not liquidated yet
       if (
         (this.bot.currActivePosition!.side === "long" && new BigNumber(p).gt(this.bot.currActivePosition!.liquidationPrice!))
