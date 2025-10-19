@@ -8,7 +8,6 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import { BigNumber } from "bignumber.js";
-import { calc_UnrealizedPnl } from "@/utils/maths.util";
 
 const WAIT_INTERVAL_MS = 5000;
 
@@ -30,10 +29,6 @@ class BBWaitForBetSignalState implements BBState {
   }
 
   private async _trendHandler(aiTrend?: IAITrend) {
-    const currMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
-    const estimatedUnrealizedProfit = calc_UnrealizedPnl(this.bot.currActivePosition!, currMarkPrice);
-    TelegramService.queueMsg(`💭 Current estimated unrealized profit: ${estimatedUnrealizedProfit >= 0 ? "🟩️️️️️️" : "🟥"} ~${estimatedUnrealizedProfit}`)
-
     const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName;
     if (aiTrend?.trend === "Kangaroo") return;
 
@@ -125,7 +120,7 @@ close price: ${aiTrend?.closePrice}
 
     const positionAvgPrice = position.avgPrice;
     const positionTriggerTs = +new Date(position.createTime);
-    const timeDiffMs = triggerTs - positionTriggerTs;
+    const timeDiffMs = positionTriggerTs - triggerTs;
     const priceDiff = new BigNumber(latestPrice).minus(positionAvgPrice).toNumber();
 
     const icon = posDir === "long" ? priceDiff <= 0 ? "🟩" : "🟥" :

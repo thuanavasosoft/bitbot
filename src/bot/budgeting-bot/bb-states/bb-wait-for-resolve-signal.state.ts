@@ -3,7 +3,7 @@ import BudgetingBot, { type BBState } from "../budgeting-bot";
 import TelegramService from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
-import { parseDurationStringIntoMs } from "@/utils/maths.util";
+import { calc_UnrealizedPnl, parseDurationStringIntoMs } from "@/utils/maths.util";
 import { BigNumber } from "bignumber.js";
 
 class BBWaitForResolveSignalState implements BBState {
@@ -105,6 +105,9 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
   // }
 
   private async _trendHandler(aiTrend: IAITrend) {
+    const currMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+    const estimatedUnrealizedProfit = calc_UnrealizedPnl(this.bot.currActivePosition!, currMarkPrice);
+    TelegramService.queueMsg(`💭 Current estimated unrealized profit: ${estimatedUnrealizedProfit >= 0 ? "🟩️️️️️️" : "🟥"} ~${estimatedUnrealizedProfit}`)
     if (!this.bot.shouldResolvePositionTrends?.includes(aiTrend.trend)) {
       this.bot.sameTrendAsBetTrendCount++;
       TelegramService.queueMsg(`🙅‍♂️ ${aiTrend.trend} trend is not a resolve trigger trend (${this.bot.sameTrendAsBetTrendCount}) not doing anything`)
@@ -156,7 +159,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     const closedPositionAvgPrice = closedPosition.avgPrice;
     const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
     slippage = new BigNumber(latestPrice).minus(closedPositionAvgPrice).toNumber();
-    timeDiffMs = triggerTs - closedPositionTriggerTs;
+    timeDiffMs = closedPositionTriggerTs - triggerTs;
 
     this.bot.currActivePosition = undefined;
     this.bot.numberOfTrades++;

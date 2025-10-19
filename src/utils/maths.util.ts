@@ -1,5 +1,6 @@
 import { IPosition } from "@/services/exchange-service/exchange-type";
 import moment from "moment";
+import { BigNumber } from "bignumber.js";
 
 export function parseDurationStringIntoMs(input: string): number {
   const trimmed = input.trim();
