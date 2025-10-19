@@ -36,9 +36,10 @@ class BBWaitForResolveSignalState implements BBState {
 
   private async _watchForPositionLiquidation() {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
+      // Not liquidated yet
       if (
-        (this.bot.currActivePosition!.side === "long" && new BigNumber(p).lt(this.bot.currActivePosition!.liquidationPrice!))
-        || (this.bot.currActivePosition!.side === "short" && new BigNumber(p).gt(this.bot.currActivePosition!.liquidationPrice!))
+        (this.bot.currActivePosition!.side === "long" && new BigNumber(p).gt(this.bot.currActivePosition!.liquidationPrice!))
+        || (this.bot.currActivePosition!.side === "short" && new BigNumber(p).lt(this.bot.currActivePosition!.liquidationPrice!))
       ) return;
 
       const msg = `💣 Current price ${p} is not good, exceeded liquidation price (${this.bot.currActivePosition!.liquidationPrice}) for ${this.bot.currActivePosition!.side}, checking it...`;
