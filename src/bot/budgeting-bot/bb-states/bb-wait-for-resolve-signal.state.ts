@@ -87,21 +87,22 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     });
   }
 
-  private async _handleSundayAndMondayTransition() {
-    if (!this.bot.currActivePosition!.id) return;
+  // private async _handleSundayAndMondayTransition() {
+  //   if (!this.bot.currActiveOpenedPositionId) return;
 
-    const todayDayName = this.bot.bbUtil.getTodayDayName();
+  //   const todayDayName = this.bot.bbUtil.getTodayDayName();
 
-    const msg = `🕵️‍♀️ Found opened position (${this.bot.currActivePosition!.id}) on early ${todayDayName}, force closing it...`;
-    console.log(msg);
-    TelegramService.queueMsg(msg);
 
-    const { nextCheckTs } = this.bot.bbUtil.getWaitInMs();
-    this.bot.nextTrendCheckTs = nextCheckTs;
+  //   const msg = `🕵️‍♀️ Found opened position (${this.bot.currActiveOpenedPositionId}) on early ${todayDayName}, force closing it...`;
+  //   console.log(msg);
+  //   TelegramService.queueMsg(msg);
 
-    await this._closeCurrPosition();
-    eventBus.emit(EEventBusEventType.StateChange);
-  }
+  //   const { nextCheckTs } = this.bot.bbUtil.getWaitInMs();
+  //   this.bot.nextTrendCheckTs = nextCheckTs;
+
+  //   await this._closeCurrPosition();
+  //   eventBus.emit(EEventBusEventType.StateChange);
+  // }
 
   private async _trendHandler(aiTrend: IAITrend) {
     if (!this.bot.shouldResolvePositionTrends?.includes(aiTrend.trend)) {
