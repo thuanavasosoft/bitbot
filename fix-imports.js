@@ -11,7 +11,14 @@ function fixImportsInFile(filePath) {
   try {
     let content = fs.readFileSync(filePath, 'utf8');
     
-    // Fix relative imports that don't have .js extension
+    // Fix relative imports that don't have .js extension (both ./ and ../ patterns)
+    content = content.replace(
+      /from\s+['"](\.\/[^'"]*?)(?<!\.js)['"]/g,
+      (match, importPath) => {
+        return match.replace(importPath, importPath + '.js');
+      }
+    );
+    
     content = content.replace(
       /from\s+['"](\.\.\/[^'"]*?)(?<!\.js)['"]/g,
       (match, importPath) => {
@@ -20,6 +27,13 @@ function fixImportsInFile(filePath) {
     );
     
     // Fix relative imports in import statements
+    content = content.replace(
+      /import\s+[^'"]*?\s+from\s+['"](\.\/[^'"]*?)(?<!\.js)['"]/g,
+      (match, importPath) => {
+        return match.replace(importPath, importPath + '.js');
+      }
+    );
+    
     content = content.replace(
       /import\s+[^'"]*?\s+from\s+['"](\.\.\/[^'"]*?)(?<!\.js)['"]/g,
       (match, importPath) => {
