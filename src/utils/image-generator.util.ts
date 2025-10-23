@@ -32,6 +32,33 @@ export async function generateImageOfCandles(
   const redColor = "#800000";
 
   const avgPriceColor = currOpenedPos?.side === "long" ? greenColor : redColor;
+  const annotation = !!currOpenedPos ? {
+    annotations: {
+      avgPrice: {
+        type: 'line' as any,
+        yMin: currOpenedPos?.avgPrice!,
+        yMax: currOpenedPos?.avgPrice!,
+        borderColor: avgPriceColor,
+        borderWidth: 2,
+        borderDash: [6, 6],
+        label: {
+          display: true,
+          content: [currOpenedPos?.side.toUpperCase(), currOpenedPos?.avgPrice!],
+          position: "start",
+          backgroundColor: avgPriceColor,
+          color: "#FFFFFF",
+          xAdjust: -4,
+          font: {
+            size: 12,
+            weight: "bold",
+          },
+          padding: 5,
+          borderRadius: 4,
+          textAlign: "left",
+        },
+      },
+    }
+  } : {};
   const datasets = [{
     label: 'Price',
     data: candles.map((candle) => candle.closePrice),
@@ -56,35 +83,7 @@ export async function generateImageOfCandles(
         datasets,
       },
       options: {
-        plugins: {
-          annotation: {
-            annotations: {
-              avgPrice: {
-                type: 'line' as any,
-                yMin: currOpenedPos?.avgPrice!,
-                yMax: currOpenedPos?.avgPrice!,
-                borderColor: avgPriceColor,
-                borderWidth: 2,
-                borderDash: [6, 6],
-                label: {
-                  display: true,
-                  content: [currOpenedPos?.side.toUpperCase(), currOpenedPos?.avgPrice!],
-                  position: "start",
-                  backgroundColor: avgPriceColor,
-                  color: "#FFFFFF",
-                  xAdjust: -4,
-                  font: {
-                    size: 12,
-                    weight: "bold",
-                  },
-                  padding: 5,
-                  borderRadius: 4,
-                  textAlign: "left",
-                },
-              },
-            }
-          },
-        }
+        plugins: { annotation }
       },
     },
   );
