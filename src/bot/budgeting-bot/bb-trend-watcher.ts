@@ -70,7 +70,7 @@ class BBTrendWatcher {
         }
         candles.push(lastCandle);
 
-        const imageData = await generateImageOfCandles(this.bot.symbol, candles, false, candleEndDate);
+        const imageData = await generateImageOfCandles(this.bot.symbol, candles, false, candleEndDate, this.bot.currActivePosition);
         TelegramService.queueMsg(imageData);
 
         const trend = await (isTodaySunday ? this.bot.grokAi.analyzeTrend(imageData) : this.bot.grokAi.analyzeBreakOutTrend(imageData));
