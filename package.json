@@ -33,7 +33,7 @@
     "bignumber.js": "^9.3.1",
     "canvas": "^3.1.0",
     "chart.js": "^4.4.9",
-    "chartjs-node-canvas": "^5.0.0",
+    "chartjs-plugin-annotation": "^3.1.0",
     "dotenv": "^17.2.3",
     "drizzle-kit": "^0.31.5",
     "drizzle-orm": "^0.44.6",
