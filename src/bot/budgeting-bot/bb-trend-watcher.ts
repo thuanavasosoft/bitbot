@@ -70,10 +70,11 @@ class BBTrendWatcher {
         }
         candles.push(lastCandle);
 
-        const imageData = await generateImageOfCandles(this.bot.symbol, candles, false, candleEndDate, this.bot.currActivePosition);
-        TelegramService.queueMsg(imageData);
+        const tgImage = await generateImageOfCandles(this.bot.symbol, candles, false, candleEndDate, this.bot.currActivePosition);
+        TelegramService.queueMsg(tgImage);
 
-        const trend = await (isTodaySunday ? this.bot.grokAi.analyzeTrend(imageData) : this.bot.grokAi.analyzeBreakOutTrend(imageData));
+        const grokAiImageData = await generateImageOfCandles(this.bot.symbol, candles, false, candleEndDate);
+        const trend = await (isTodaySunday ? this.bot.grokAi.analyzeTrend(grokAiImageData) : this.bot.grokAi.analyzeBreakOutTrend(grokAiImageData));
         TelegramService.queueMsg(`ℹ️ New ${this.bot.candlesRollWindowInHours}H ${isTodaySunday ? "regular trend" : "breakout trend"} (${moment(candleStartDate).format("YYYY-MM-DD HH:mm:ss")} - ${moment(candleEndDate).format("YYYY-MM-DD HH:mm:ss")}) check for ${watchFor} result: ${trend} - Price: ${lastCandle.closePrice}`);
 
         if (!isWatchingTrend) return;
