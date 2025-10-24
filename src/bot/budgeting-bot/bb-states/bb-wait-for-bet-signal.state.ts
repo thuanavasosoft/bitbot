@@ -69,7 +69,10 @@ close price: ${aiTrend?.closePrice}
 
     const latestPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
     const triggerTs = +new Date();
-
+    this.bot.entryWsPrice = {
+      price: latestPrice,
+      time: new Date(triggerTs),
+    };
 
     this.bot.bbWSSignaling.broadcast(`open-${posDir}`, budget);
     await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));

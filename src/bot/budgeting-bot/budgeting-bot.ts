@@ -9,6 +9,7 @@ import BBTrendWatcher from "./bb-trend-watcher";
 import type { IPosition } from "@/services/exchange-service/exchange-type";
 import BBWSSignaling from "./bb-ws-signaling";
 import BBTgCmdHandler from "./bb-tg-cmd-handler";
+import { generateRunID } from "@/utils/strings.util";
 
 export interface BBState {
   onEnter: () => Promise<void>;
@@ -17,6 +18,7 @@ export interface BBState {
 
 class BudgetingBot {
   runStartTs: number = +new Date();
+  runId: string = generateRunID();
 
   symbol: string;
   leverage: number;
@@ -38,6 +40,8 @@ class BudgetingBot {
 
   commitedBetEntryTrend?: Omit<TAiCandleTrendDirection, "Kangaroo">;
   currActivePosition?: IPosition;
+  entryWsPrice?: { price: number, time: Date };
+  resolveWsPrice?: { price: number, time: Date };
   shouldResolvePositionTrends?: (TAiCandleTrendDirection)[] = [];
 
   isEarlySundayHandled = false;
