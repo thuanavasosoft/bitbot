@@ -18,6 +18,7 @@ export const bitBotCommit = mysqlTable("BitBotCommit", {
 	leverage: int().notNull(),
 	margin: double().notNull(),
 	posId: varchar({ length: 256 }).notNull(),
+	liquidationPrice: double().notNull(),
 },
 (table) => [
 	index("BitBotCommitIdx_entryTime").on(table.entryTime),

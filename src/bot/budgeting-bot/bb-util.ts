@@ -101,28 +101,69 @@ Price Diff (pips): ${icon} ${slippage}` : ""}
     return { nextCheckTs, waitInMs };
   }
 
-  async saveTradeInfo(pos: IPosition, entryWsPrice: { price: number, time: Date }, resolveWsPrice: { price: number, time: Date }) {
-    console.log("[BIT_BOT_DATABASE] Saving commit data to database: ", pos);
+  // DATABASE UTILITY
+  private bitbotCommitRows: typeof bitBotCommit.$inferInsert[] = [];
+  private commitWorkerRunning = false;
 
-    const resp = await DatabaseService.db.insert(bitBotCommit).values({
-      posId: pos.id + "",
-      runId: this.bot.runId,
-      tradeMode: this.bot.betDirection,
-      leverage: pos.leverage,
-      entryTime: new Date(pos.createTime) as any,
-      margin: pos.initialMargin,
-      positionSide: pos.side,
-      entryAvgPrice: pos.avgPrice,
-      realizedProfit: pos.realizedPnl,
-      resolveAvgPrice: pos.closePrice!,
-      resolveTime: new Date(pos.updateTime) as any,
-      wsPriceAtEntry: entryWsPrice?.price,
-      wsTimeAtEntry: new Date(entryWsPrice?.time) as any,
-      wsPriceAtResolve: resolveWsPrice?.price,
-      wsTimeAtResolve: new Date(resolveWsPrice?.time) as any,
+  private async processCommitBatch(batchSize = 10) {
+    let failedAttempt = 0;
+    while (this.bitbotCommitRows.length) {
+      await new Promise(r => setTimeout(r, 2000));
+      const batch = this.bitbotCommitRows.splice(0, batchSize);
+      try {
+        console.log(`[BIT_BOT_DATABASE] Saving commit batch (${batch.length})`);
+        const resp = await DatabaseService.db.insert(bitBotCommit).values(batch);
+        failedAttempt = 0;
+        console.log("[BIT_BOT_DATABASE] Commit batch saved:", resp);
+      } catch (err) {
+        failedAttempt++;
+        // Enqueue it back and wait for 5 minutes before saving it again
+        this.bitbotCommitRows.unshift(...batch);
+        console.error("[BIT_BOT_DATABASE] Error saving commit batch, will retry after 5 minutes. Error:", err, `failed attempt: ${failedAttempt}`);
+        await new Promise(r => setTimeout(r, 5 * 60000)); // 5 minutes
+      }
+    }
+  }
+
+  async startCommitDataSaveWorker() {
+    if (this.commitWorkerRunning) return;
+
+    this.commitWorkerRunning = true;
+    this.processCommitBatch().finally(() => {
+      this.commitWorkerRunning = false;
     });
+  }
 
-    console.log("[BIT_BOT_DATABASE] commit data saved: ", resp);
+  saveTradeInfo(
+    pos: IPosition,
+    entryWsPrice: { price: number, time: Date },
+    resolveWsPrice: { price: number, time: Date }
+  ) {
+    try {
+      const bitbotCommitRow: typeof bitBotCommit.$inferInsert = {
+        posId: String(pos.id),
+        runId: this.bot.runId,
+        tradeMode: this.bot.betDirection,
+        leverage: pos.leverage,
+        entryTime: new Date(pos.createTime) as any,
+        margin: pos.initialMargin,
+        positionSide: pos.side,
+        entryAvgPrice: pos.avgPrice,
+        realizedProfit: pos.realizedPnl,
+        resolveAvgPrice: pos.closePrice!,
+        liquidationPrice: pos.liquidationPrice,
+        resolveTime: new Date(pos.updateTime) as any,
+        wsPriceAtEntry: entryWsPrice?.price,
+        wsTimeAtEntry: entryWsPrice?.time ? new Date(entryWsPrice.time) as any : undefined,
+        wsPriceAtResolve: resolveWsPrice?.price,
+        wsTimeAtResolve: resolveWsPrice?.time ? new Date(resolveWsPrice.time) as any : undefined,
+      };
+      this.bitbotCommitRows.push(bitbotCommitRow);
+
+      this.startCommitDataSaveWorker();
+    } catch (e) {
+      console.error("Error on enqueing bitbotCommitRow");
+    }
   }
 }
 
