@@ -1,4 +1,4 @@
-import * as schema from "db/drizzle-schema"
+import * as schema from "db/drizzle/schema"
 
 import { MySql2Database, drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";

@@ -28,7 +28,6 @@ class BBTgCmdHandler {
   constructor(private bot: BudgetingBot) { }
 
   private async _getFullUpdateDetailsMsg() {
-    const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName;
     if (this.bot.currentState === this.bot.startingState) {
       return `Bot in starting state, preparing bot balances, symbols, leverage`
     }
@@ -36,7 +35,7 @@ class BBTgCmdHandler {
     if (this.bot.currentState === this.bot.waitForBetSignalState) {
       return `
 Bot are in wait for consecutive trend state, waiting for trends
-Trends should be for entry: ${isTodaySunday ? "Up | Down" : "Already-Up | Already-Down"}`;
+Trends should be for entry: Up | Down}`;
     }
 
     if (this.bot.currentState === this.bot.waitForResolveSignalState) {

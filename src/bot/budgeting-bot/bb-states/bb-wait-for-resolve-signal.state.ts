@@ -36,7 +36,7 @@ class BBWaitForResolveSignalState implements BBState {
 
   private async _watchForPositionLiquidation() {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
-      if (!this.bot.currActivePosition) { 
+      if (!this.bot.currActivePosition) {
         this.priceListenerRemover && this.priceListenerRemover();
         this.aiTrendHookRemover && this.aiTrendHookRemover();
         console.log("No active position found, exiting price listener");
@@ -136,6 +136,10 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 
     const latestPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
     const triggerTs = +new Date();
+    this.bot.resolveWsPrice = {
+      price: latestPrice,
+      time: new Date(triggerTs),
+    }
 
     let slippage: number = 0;
     let timeDiffMs: number = 0;
@@ -165,6 +169,8 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
       process.exit(-100);
     }
 
+    this.bot.bbUtil.saveTradeInfo(closedPosition, this.bot.entryWsPrice!, this.bot.resolveWsPrice!);
+
     const closedPositionAvgPrice = closedPosition.avgPrice;
     const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
     slippage = new BigNumber(latestPrice).minus(closedPositionAvgPrice).toNumber();
@@ -178,6 +184,8 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     }
 
     this.bot.currActivePosition = undefined;
+    this.bot.entryWsPrice = undefined;
+    this.bot.resolveWsPrice = undefined;
     this.bot.numberOfTrades++;
 
     await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl, icon, slippage, timeDiffMs)

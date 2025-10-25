@@ -1,0 +1,1357 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "prevId": "",
+  "version": "5",
+  "dialect": "mysql",
+  "tables": {
+    "AiBotTrend": {
+      "name": "AiBotTrend",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "AiBotTrend_id": {
+          "name": "AiBotTrend_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "AiBotTrend12": {
+      "name": "AiBotTrend12",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "AiBotTrend12_id": {
+          "name": "AiBotTrend12_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "AiBotTrend12_symbol": {
+          "name": "AiBotTrend12_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        },
+        "AiBotTrend12_startDate": {
+          "name": "AiBotTrend12_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "AiBotTrend12_endDate": {
+          "name": "AiBotTrend12_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "AiBotTrend24": {
+      "name": "AiBotTrend24",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "AiBotTrend24_id": {
+          "name": "AiBotTrend24_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "AiBotTrend24_symbol": {
+          "name": "AiBotTrend24_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        },
+        "AiBotTrend24_startDate": {
+          "name": "AiBotTrend24_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "AiBotTrend24_endDate": {
+          "name": "AiBotTrend24_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "BreakOutTrend": {
+      "name": "BreakOutTrend",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "BreakOutTrend_id": {
+          "name": "BreakOutTrend_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "breakOutTrend_endDate": {
+          "name": "breakOutTrend_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "breakOutTrend_RollWindowInHours": {
+          "name": "breakOutTrend_RollWindowInHours",
+          "columns": [
+            "rollWindowInHours"
+          ],
+          "isUnique": false
+        },
+        "breakOutTrend_startDate": {
+          "name": "breakOutTrend_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "breakOutTrend_symbol": {
+          "name": "breakOutTrend_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "BreakOutWithAfter": {
+      "name": "BreakOutWithAfter",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "Trend": {
+          "autoincrement": false,
+          "name": "Trend",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "BreakOutWithAfter_id": {
+          "name": "BreakOutWithAfter_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "BreakOutWithAfter_endDate": {
+          "name": "BreakOutWithAfter_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "BreakOutWithAfter_startDate": {
+          "name": "BreakOutWithAfter_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "BreakOutWithAfter_symbol": {
+          "name": "BreakOutWithAfter_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "CrossCheck": {
+      "name": "CrossCheck",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "marketState": {
+          "autoincrement": false,
+          "name": "marketState",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "compositePrimaryKeys": {
+        "CrossCheck_id": {
+          "name": "CrossCheck_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "crossCheck_endDate": {
+          "name": "crossCheck_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "crossCheck_RollWindowInHours": {
+          "name": "crossCheck_RollWindowInHours",
+          "columns": [
+            "rollWindowInHours"
+          ],
+          "isUnique": false
+        },
+        "crossCheck_startDate": {
+          "name": "crossCheck_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "crossCheck_symbol": {
+          "name": "crossCheck_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "GrokCandleTrend": {
+      "name": "GrokCandleTrend",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "marketState": {
+          "autoincrement": false,
+          "name": "marketState",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "compositePrimaryKeys": {
+        "GrokCandleTrend_id": {
+          "name": "GrokCandleTrend_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "grokCandleTrend_symbol": {
+          "name": "grokCandleTrend_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        },
+        "grokCandleTrend_startDate": {
+          "name": "grokCandleTrend_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "grokCandleTrend_endDate": {
+          "name": "grokCandleTrend_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "grokCandleTrend_RollWindowInHours": {
+          "name": "grokCandleTrend_RollWindowInHours",
+          "columns": [
+            "rollWindowInHours"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "GrokCopyWithMarketState": {
+      "name": "GrokCopyWithMarketState",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "marketState": {
+          "autoincrement": false,
+          "name": "marketState",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "compositePrimaryKeys": {
+        "GrokCopyWithMarketState_id": {
+          "name": "GrokCopyWithMarketState_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "grokCopyWithMarketState_endDate": {
+          "name": "grokCopyWithMarketState_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "grokCopyWithMarketState_RollWindowInHours": {
+          "name": "grokCopyWithMarketState_RollWindowInHours",
+          "columns": [
+            "rollWindowInHours"
+          ],
+          "isUnique": false
+        },
+        "grokCopyWithMarketState_startDate": {
+          "name": "grokCopyWithMarketState_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "grokCopyWithMarketState_symbol": {
+          "name": "grokCopyWithMarketState_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "GrokCopyWithoutMarketState": {
+      "name": "GrokCopyWithoutMarketState",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "marketState": {
+          "autoincrement": false,
+          "name": "marketState",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "compositePrimaryKeys": {
+        "GrokCopyWithoutMarketState_id": {
+          "name": "GrokCopyWithoutMarketState_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "grokCopyWithoutMarketState_endDate": {
+          "name": "grokCopyWithoutMarketState_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "grokCopyWithoutMarketState_RollWindowInHours": {
+          "name": "grokCopyWithoutMarketState_RollWindowInHours",
+          "columns": [
+            "rollWindowInHours"
+          ],
+          "isUnique": false
+        },
+        "grokCopyWithoutMarketState_startDate": {
+          "name": "grokCopyWithoutMarketState_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "grokCopyWithoutMarketState_symbol": {
+          "name": "grokCopyWithoutMarketState_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "GrokUpDownOnly": {
+      "name": "GrokUpDownOnly",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "GrokUpDownOnly_id": {
+          "name": "GrokUpDownOnly_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "grokUpDownOnly_endDate": {
+          "name": "grokUpDownOnly_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "grokUpDownOnly_RollWindowInHours": {
+          "name": "grokUpDownOnly_RollWindowInHours",
+          "columns": [
+            "rollWindowInHours"
+          ],
+          "isUnique": false
+        },
+        "grokUpDownOnly_startDate": {
+          "name": "grokUpDownOnly_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "grokUpDownOnly_symbol": {
+          "name": "grokUpDownOnly_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "NewPriceTicker": {
+      "name": "NewPriceTicker",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lastPrice": {
+          "autoincrement": false,
+          "name": "lastPrice",
+          "type": "double",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timestamp": {
+          "autoincrement": false,
+          "name": "timestamp",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "NewPriceTicker_id": {
+          "name": "NewPriceTicker_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "NewPriceTicker_symbol": {
+          "name": "NewPriceTicker_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        },
+        "NewPriceTicker_timestamp": {
+          "name": "NewPriceTicker_timestamp",
+          "columns": [
+            "timestamp"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "OrderBookTicker": {
+      "name": "OrderBookTicker",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "askPrice": {
+          "autoincrement": false,
+          "name": "askPrice",
+          "type": "double",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bidPrice": {
+          "autoincrement": false,
+          "name": "bidPrice",
+          "type": "double",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timestamp": {
+          "autoincrement": false,
+          "name": "timestamp",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "OrderBookTicker_id": {
+          "name": "OrderBookTicker_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "PriceTicker": {
+      "name": "PriceTicker",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lastPrice": {
+          "autoincrement": false,
+          "name": "lastPrice",
+          "type": "double",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "timestamp": {
+          "autoincrement": false,
+          "name": "timestamp",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "PriceTicker_id": {
+          "name": "PriceTicker_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "PriceTicker_symbol": {
+          "name": "PriceTicker_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        },
+        "PriceTicker_timestamp": {
+          "name": "PriceTicker_timestamp",
+          "columns": [
+            "timestamp"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "Speculation": {
+      "name": "Speculation",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "symbol": {
+          "autoincrement": false,
+          "name": "symbol",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trend": {
+          "autoincrement": false,
+          "name": "trend",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "startDate": {
+          "autoincrement": false,
+          "name": "startDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endDate": {
+          "autoincrement": false,
+          "name": "endDate",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closePrice": {
+          "autoincrement": false,
+          "name": "closePrice",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rollWindowInHours": {
+          "autoincrement": false,
+          "name": "rollWindowInHours",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "Speculation_id": {
+          "name": "Speculation_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "speculation_symbol": {
+          "name": "speculation_symbol",
+          "columns": [
+            "symbol"
+          ],
+          "isUnique": false
+        },
+        "speculation_startDate": {
+          "name": "speculation_startDate",
+          "columns": [
+            "startDate"
+          ],
+          "isUnique": false
+        },
+        "speculation_endDate": {
+          "name": "speculation_endDate",
+          "columns": [
+            "endDate"
+          ],
+          "isUnique": false
+        },
+        "speculation_RollWindowInHours": {
+          "name": "speculation_RollWindowInHours",
+          "columns": [
+            "rollWindowInHours"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "bitbot_entries": {
+      "name": "bitbot_entries",
+      "columns": {
+        "id": {
+          "autoincrement": true,
+          "name": "id",
+          "type": "bigint unsigned",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "runId": {
+          "autoincrement": false,
+          "name": "runId",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entryTime": {
+          "autoincrement": false,
+          "name": "entryTime",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entryAvgPrice": {
+          "autoincrement": false,
+          "name": "entryAvgPrice",
+          "type": "decimal(18,8)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wsPriceAtEntry": {
+          "autoincrement": false,
+          "name": "wsPriceAtEntry",
+          "type": "decimal(18,8)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wsTimeAtEntry": {
+          "autoincrement": false,
+          "name": "wsTimeAtEntry",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resolveTime": {
+          "autoincrement": false,
+          "name": "resolveTime",
+          "type": "datetime",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resolvePrice": {
+          "autoincrement": false,
+          "name": "resolvePrice",
+          "type": "decimal(18,8)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wsPriceAtResolve": {
+          "autoincrement": false,
+          "name": "wsPriceAtResolve",
+          "type": "decimal(18,8)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wsTimeAtResolve": {
+          "autoincrement": false,
+          "name": "wsTimeAtResolve",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "realizedProfit": {
+          "autoincrement": false,
+          "name": "realizedProfit",
+          "type": "decimal(18,8)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "positionSide": {
+          "autoincrement": false,
+          "name": "positionSide",
+          "type": "enum('long','short')",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tradeMode": {
+          "autoincrement": false,
+          "name": "tradeMode",
+          "type": "enum('against','follow')",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "leverage": {
+          "autoincrement": false,
+          "name": "leverage",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "margin": {
+          "autoincrement": false,
+          "name": "margin",
+          "type": "decimal(18,8)",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "compositePrimaryKeys": {
+        "bitbot_entries_id": {
+          "name": "bitbot_entries_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "indexes": {
+        "idx_runId": {
+          "name": "idx_runId",
+          "columns": [
+            "runId"
+          ],
+          "isUnique": false
+        },
+        "idx_entryTime": {
+          "name": "idx_entryTime",
+          "columns": [
+            "entryTime"
+          ],
+          "isUnique": false
+        },
+        "idx_resolveTime": {
+          "name": "idx_resolveTime",
+          "columns": [
+            "resolveTime"
+          ],
+          "isUnique": false
+        },
+        "idx_positionSide": {
+          "name": "idx_positionSide",
+          "columns": [
+            "positionSide"
+          ],
+          "isUnique": false
+        },
+        "idx_tradeMode": {
+          "name": "idx_tradeMode",
+          "columns": [
+            "tradeMode"
+          ],
+          "isUnique": false
+        },
+        "idx_realizedProfit": {
+          "name": "idx_realizedProfit",
+          "columns": [
+            "realizedProfit"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    }
+  },
+  "views": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "tables": {},
+    "indexes": {}
+  }
+}
