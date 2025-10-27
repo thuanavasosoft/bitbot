@@ -353,7 +353,6 @@ class MexcExchange implements IExchangeInstance {
       avgPrice: mexcPos.holdAvgPrice,
       realizedPnl: mexcPos.realised,
       unrealizedPnl: unrealizedPnl.toNumber(),
-      markPrice: currMarkPrice,
     }
 
     return position;
@@ -407,7 +406,6 @@ class MexcExchange implements IExchangeInstance {
         avgPrice: mexcPos.holdAvgPrice,
         realizedPnl: mexcPos.realised,
         unrealizedPnl: unrealizedPnl.toNumber(),
-        markPrice: currMarkPrice,
       }
 
       return position;
@@ -484,7 +482,6 @@ class MexcExchange implements IExchangeInstance {
         const maintenanceMargin = new BigNumber(0);
         const unrealizedPnl = priceDiff.times(size);
 
-        position.markPrice = currMarkPrice;
         position.unrealizedPnl = unrealizedPnl.toNumber();
         position.maintenanceMargin = maintenanceMargin.toNumber();
       } else {

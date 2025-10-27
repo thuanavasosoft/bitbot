@@ -1,4 +1,4 @@
-import { IPosition } from "@/services/exchange-service/exchange-type";
+import { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
 import moment from "moment";
 import { BigNumber } from "bignumber.js";
 
@@ -71,4 +71,45 @@ export function calc_UnrealizedPnl(pos: IPosition, p: number): number {
   }
 
   return pnl.toNumber();
+}
+
+export function generateRandomNumberOfLength(length: number): number {
+  if (length <= 0) throw new Error("Length must be positive integer");
+  if (length === 1) return Math.floor(Math.random() * 10);
+
+  const min = Math.pow(10, length - 1);
+  const max = Math.pow(10, length) - 1;
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/**
+ * Calculates the liquidation price for an isolated margin position.
+ * Formula (for simple perpetual contracts, not including fees):
+ * 
+ * For LONG:
+ *   liquidationPrice = (avgPrice * leverage) / (leverage + 1)
+ * 
+ * For SHORT:
+ *   liquidationPrice = (avgPrice * leverage) / (leverage - 1)
+ * 
+ * Assumptions:
+ * - pos is an object with `avgPrice` (number|string), `leverage` (number), and `side` ("long"|"short")
+ * - Leverage must be > 1 for "short" to avoid division by zero.
+ */
+export function calcLiquidationPrice(
+  side: TPositionSide,
+  avgPrice: number | string,
+  leverage: number
+): number {
+  const price = typeof avgPrice === "string" ? parseFloat(avgPrice) : avgPrice;
+  if (leverage <= 1) {
+    throw new Error("Leverage must be greater than 1 to calculate liquidation price");
+  }
+  if (side === "long") {
+    return (price * leverage) / (leverage + 1);
+  } else if (side === "short") {
+    return (price * leverage) / (leverage - 1);
+  } else {
+    throw new Error("Unknown side given to calcLiquidationPrice: " + side);
+  }
 }

@@ -95,10 +95,9 @@ export interface IPosition {
   side: TPositionSide;
   notional: number;
   leverage: number;
-  unrealizedPnl: number;
+  ˝unrealizedPnl: number;
   realizedPnl: number;
   avgPrice: number;
-  markPrice?: number;
   closePrice?: number;
   liquidationPrice: number;
   maintenanceMargin: number;
