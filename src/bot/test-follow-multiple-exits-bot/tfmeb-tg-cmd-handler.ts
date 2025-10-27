@@ -1,6 +1,5 @@
 import BigNumber from "bignumber.js";
 import TestFollowMultipleExits from "./test-follow-multiple-exits-bot";
-import { sundayDayName } from "./tfmeb-util";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";

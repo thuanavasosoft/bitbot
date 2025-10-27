@@ -22,7 +22,6 @@ Notional Value: ${position.notional}
 
 Liquidation Price: ${position.liquidationPrice}
 Avg Price: ${position.avgPrice}
-Curr Mark Price: ${position.markPrice}
 
 Realized PnL: ${position.realizedPnl}
 Unrealized PnL: ${position.unrealizedPnl > 0 ? "🟩" : "🟥"} ${position.unrealizedPnl}`
