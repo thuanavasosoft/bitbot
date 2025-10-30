@@ -22,7 +22,7 @@ export async function generateImageOfCandles(
   symbol: string,
   candles: ICandleInfo[],
   writeFile: boolean = false,
-  endDate: Date,
+  endDate?: Date,
   currOpenedPos?: { avgPrice: number, side: TPositionSide },
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
@@ -90,7 +90,7 @@ export async function generateImageOfCandles(
 
   const image = canvas.toBuffer('image/png');
   if (writeFile) {
-    const filePath = `./${symbol}_chart_${endDate.toISOString().split('T')[0]}_1m.png`;
+    const filePath = `./${symbol}_chart_${endDate?.toISOString().split('T')[0]}_1m.png`;
     fs.writeFileSync(filePath, image as any);
   }
 
