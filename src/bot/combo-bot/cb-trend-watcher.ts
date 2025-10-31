@@ -29,6 +29,10 @@ class CBTrendWatcher {
     let checkAttempt = -1;
 
     while (true) {
+      if (this.bot.isSleeping) {
+        await new Promise(r => setTimeout(r, 5000));
+        continue;
+      }
       if (this.bot.connectedClientsAmt === 0) {
         TelegramService.queueMsg("❗ No clients connected yet, waiting for client to be connected to continue...");
 
@@ -43,12 +47,12 @@ class CBTrendWatcher {
 
       checkAttempt = (checkAttempt + 1) % ((this.bot.bigAiTrendIntervalCheckInMinutes / this.bot.smallAiTrendIntervalCheckInMinutes));
 
-      const isNotNecessaryToCheckBig = !this._currBigCandlesData || checkAttempt === 0;
+      const isNecessaryToCheckBig = !this._currBigCandlesData || checkAttempt === 0;
       const isNotNecessaryToCheckSmall = (this.bot.bigCandlesRollWindowInHours === this.bot.smallCandlesRollWindowInHours && checkAttempt === 0);
 
       const candlesEndDate = new Date();
       let [bigCandlesData, smallCandlesData] = await Promise.all([
-        isNotNecessaryToCheckBig ? this._getCandlesData(candlesEndDate, this.bot.bigCandlesRollWindowInHours) : Promise.resolve(this._currBigCandlesData!),
+        isNecessaryToCheckBig ? this._getCandlesData(candlesEndDate, this.bot.bigCandlesRollWindowInHours) : Promise.resolve(this._currBigCandlesData!),
         isNotNecessaryToCheckSmall ? Promise.resolve(undefined as any as ICandlesData) : this._getCandlesData(candlesEndDate, this.bot.smallCandlesRollWindowInHours)
       ]);
 
@@ -64,6 +68,9 @@ class CBTrendWatcher {
         TelegramService.queueMsg(smallCandlesData.candlesImageData);
         TelegramService.queueMsg(`ℹ️ New Small ${this.bot.smallCandlesRollWindowInHours}H breakout trend check for result: ${smallCandlesData.candlesTrend} - price: ${smallCandlesData.closePrice}`);
       }
+
+      bigCandlesData.candlesTrend = "Down";
+      smallCandlesData.candlesTrend = "Down";
 
       TelegramService.queueMsg(`ℹ️ Bet rules for ${bigCandlesData.candlesTrend}-${smallCandlesData.candlesTrend}: ${this.bot.betRules[bigCandlesData.candlesTrend][smallCandlesData.candlesTrend].toLocaleUpperCase()}`);
       this._candlesTrendListener && this._candlesTrendListener(bigCandlesData, smallCandlesData);
@@ -87,10 +94,14 @@ class CBTrendWatcher {
   private async _getCandlesData(candlesEndDate: Date, rollWindowInHours: number): Promise<ICandlesData> {
     const candlesStartDate = new Date(candlesEndDate.getTime() - (rollWindowInHours * 60 * 60 * 1000));
     const candles = await ExchangeService.getCandles(this.bot.symbol, candlesStartDate, candlesEndDate, "1Min");
-    const candlesImageData = await generateImageOfCandles(this.bot.symbol, candles);
-    const candlesTrend = await this.bot.grokAi.analyzeBreakOutTrend(candlesImageData);
+    const grokCandlesImageData = await generateImageOfCandles(this.bot.symbol, candles);
 
-    return { candlesImageData, candlesTrend, closePrice: candles[candles.length - 1].closePrice };
+    const [candlesTrend, tgImageData] = await Promise.all([
+      this.bot.grokAi.analyzeBreakOutTrend(grokCandlesImageData),
+      generateImageOfCandles(this.bot.symbol, candles, false, undefined, this.bot.currActivePosition),
+    ]);
+
+    return { candlesImageData: tgImageData, candlesTrend, closePrice: candles[candles.length - 1].closePrice };
   }
 }
 

@@ -23,7 +23,7 @@ enum EBBotCommand {
   CLOSE_POSITION = "close_position",
 }
 
-class BBTgCmdHandler {
+class TFMEBTgCmdHandler {
   constructor(private bot: TestFollowMultipleExits) { }
 
   private async _getFullUpdateDetailsMsg() {
@@ -360,4 +360,4 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
   }
 }
 
-export default BBTgCmdHandler;
+export default TFMEBTgCmdHandler;

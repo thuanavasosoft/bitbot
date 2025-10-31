@@ -21,6 +21,60 @@ export type IBetRule = {
   }
 };
 
+export const comboBetRulesDefaultValue = {
+  Up: {
+    Up: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    },
+    Down: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    },
+    Kangaroo: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    }
+  },
+  Down: {
+    Up: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    },
+    Down: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    },
+    Kangaroo: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    }
+  },
+  Kangaroo: {
+    Up: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    },
+    Down: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    },
+    Kangaroo: {
+      entriesAmt: 0,
+      pnl: 0,
+      liquidatedCount: 0,
+    }
+  }
+};
+
 class ComboBot {
   runStartTs: Date = new Date();
 
@@ -45,51 +99,9 @@ class ComboBot {
   smallCandlesRollWindowInHours: number;
 
   currCommitedTrendCombo?: { big: TAiCandleTrendDirection, small: TAiCandleTrendDirection };
-  trendComboRecords: { [big in TAiCandleTrendDirection]: { [small in TAiCandleTrendDirection]: { entriesAmt: number, pnl: number } } } = {
-    Up: {
-      Up: {
-        entriesAmt: 0,
-        pnl: 0
-      },
-      Down: {
-        entriesAmt: 0,
-        pnl: 0
-      },
-      Kangaroo: {
-        entriesAmt: 0,
-        pnl: 0
-      }
-    },
-    Down: {
-      Up: {
-        entriesAmt: 0,
-        pnl: 0
-      },
-      Down: {
-        entriesAmt: 0,
-        pnl: 0
-      },
-      Kangaroo: {
-        entriesAmt: 0,
-        pnl: 0
-      }
-    },
-    Kangaroo: {
-      Up: {
-        entriesAmt: 0,
-        pnl: 0
-      },
-      Down: {
-        entriesAmt: 0,
-        pnl: 0
-      },
-      Kangaroo: {
-        entriesAmt: 0,
-        pnl: 0
-      }
-    }
-  };
+  trendComboRecords: { [big in TAiCandleTrendDirection]: { [small in TAiCandleTrendDirection]: { entriesAmt: number, pnl: number, liquidatedCount: number } } } = comboBetRulesDefaultValue;
 
+  isSleeping: boolean = false;
   betSize: number;
   betRules: IBetRule;
 

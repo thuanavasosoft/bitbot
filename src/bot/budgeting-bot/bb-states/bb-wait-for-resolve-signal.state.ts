@@ -88,6 +88,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
           this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
           this.bot.bbUtil.handlePnL(closedPos.realizedPnl);
           clearInterval(intervalId);
+          this.bot.currActivePosition = undefined;
           eventBus.emit(EEventBusEventType.StateChange);
         }
 

@@ -10,7 +10,7 @@ import { bitBotCommit } from "db/drizzle/schema";
 
 export const sundayDayName: string = "NON-EXISTENT-DAY" // TODO: Change this back if we want this feature properly again
 
-class BBUtil {
+class TFMEBUtil {
   constructor(private bot: TestFollowMultipleExits) { }
 
   public getTodayDayName(): TDayName {
@@ -167,4 +167,4 @@ Price Diff (pips): ${icon} ${slippage}` : ""}
   }
 }
 
-export default BBUtil;
+export default TFMEBUtil;

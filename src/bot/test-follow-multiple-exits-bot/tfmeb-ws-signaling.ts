@@ -28,7 +28,7 @@ interface IPingMsgFromClient {
 
 type IMsgFromClient = IPingMsgFromClient;
 
-class EBWSSignaling {
+class TFMEBWSSignaling {
   private clients = new Set<WebSocket>();
 
   constructor(private bot: TestFollowMultipleExits) { }
@@ -94,4 +94,4 @@ class EBWSSignaling {
   }
 }
 
-export default EBWSSignaling;
+export default TFMEBWSSignaling;
