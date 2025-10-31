@@ -69,9 +69,6 @@ class CBTrendWatcher {
         TelegramService.queueMsg(`ℹ️ New Small ${this.bot.smallCandlesRollWindowInHours}H breakout trend check for result: ${smallCandlesData.candlesTrend} - price: ${smallCandlesData.closePrice}`);
       }
 
-      bigCandlesData.candlesTrend = "Down";
-      smallCandlesData.candlesTrend = "Down";
-
       TelegramService.queueMsg(`ℹ️ Bet rules for ${bigCandlesData.candlesTrend}-${smallCandlesData.candlesTrend}: ${this.bot.betRules[bigCandlesData.candlesTrend][smallCandlesData.candlesTrend].toLocaleUpperCase()}`);
       this._candlesTrendListener && this._candlesTrendListener(bigCandlesData, smallCandlesData);
 
