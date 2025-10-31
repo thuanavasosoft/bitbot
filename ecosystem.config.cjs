@@ -39,6 +39,19 @@ module.exports = {
       out_file: './logs/vivek-out.log',
       log_file: './logs/vivek-combined.log',
       time: true
+    },
+    {
+      name: 'dubai-sub-1',
+      script: 'node dist/index.js',
+      instances: 1,
+      autorestart: false,
+      watch: false,
+      max_memory_restart: '3G',
+      env_file: './env-files/dubai-sub-1.env',
+      error_file: './logs/dubai-sub-1-err.log',
+      out_file: './logs/dubai-sub-1-out.log',
+      log_file: './logs/dubai-sub-1-combined.log',
+      time: true
     }
   ]
   // Other accounts can be added below here
