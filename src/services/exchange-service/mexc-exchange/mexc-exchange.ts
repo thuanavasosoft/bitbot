@@ -417,15 +417,11 @@ class MexcExchange implements IExchangeInstance {
   async getPositionsHistory(getParams: IGetPositionHistoryParams): Promise<IPosition[]> {
     const { page = 1, limit = 100, positionId } = getParams;
 
-    console.log(`Fetching positions history | page:${page} limit: ${limit} positionId: ${positionId}`);
-
     const endpoint = "api/v1/private/position/list/history_positions";
     const params = new URLSearchParams();
     if (!!page) params.append("page_num", page.toString());
     if (!!limit) params.append("page_size", limit.toString());
-    console.log("params: ", params);
     const url = this._formatUrl(endpoint, params);
-    console.log("url: ", url);
 
     const resp = await fetch(url, {
       headers: this._getPrivHeaders(params.toString())

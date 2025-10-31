@@ -1,35 +1,31 @@
-import type { IAITrend } from "@/services/grok-ai.service";
-import BudgetingBot, { type BBState } from "../budgeting-bot";
-import TelegramService from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
+import { ICandlesData } from "../cb-trend-watcher";
+import ComboBot, { CBState } from "../combo-bot";
 import { calc_UnrealizedPnl, parseDurationStringIntoMs } from "@/utils/maths.util";
-import { BigNumber } from "bignumber.js";
+import TelegramService from "@/services/telegram.service";
+import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
+import BigNumber from "bignumber.js";
 
-class BBWaitForResolveSignalState implements BBState {
-  private aiTrendHookRemover?: () => void;
+class CBWaitForResolveState implements CBState {
+  private trendListenerRemover?: () => void;
   private priceListenerRemover?: () => void;
 
-  constructor(private bot: BudgetingBot) { }
+  constructor(private bot: ComboBot) { }
 
   async onEnter() {
-    if (!this.bot.shouldResolvePositionTrends?.length || !this.bot.currActivePosition) {
-      const msg = `Something went wrong either this.bot.shouldResolvePositionTrends: ${this.bot.shouldResolvePositionTrends} or this.bot.currActivePosition: ${this.bot.currActivePosition} is not yet defined and already entering wait for resolve signal that means, the flow not work correctly`;
+    if (!this.bot.betRuleValsToResolvePosition?.length || !this.bot.currActivePosition) {
+      const msg = `Something went wrong either this.bot.betRuleValsToResolvePosition: ${this.bot.betRuleValsToResolvePosition} or this.bot.currActivePosition: ${this.bot.currActivePosition} is not yet defined and already entering wait for resolve signal that means, the flow not work correctly`;
       console.log(msg);
       throw new Error(msg);
     }
 
-    const msg = `🔁 Waiting for resolve signal ${(this.bot.shouldResolvePositionTrends || []).join(", ")} ...`
+    const msg = `🔁 Waiting for resolve signal ${(this.bot.betRuleValsToResolvePosition || []).join(", ")} ...`
     console.log(msg);
     TelegramService.queueMsg(msg);
 
-    const nowMs = +new Date();
-    if (!!this.bot.nextTrendCheckTs && nowMs < this.bot.nextTrendCheckTs) {
-      console.log(`Waiting for ${this.bot.nextTrendCheckTs - nowMs}ms before hook ai trends`);
-      await new Promise(r => setTimeout(r, this.bot.nextTrendCheckTs - nowMs))
-    }
-
-    this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this));
+    console.log("Hooking trend listener for resolve...");
+    this.trendListenerRemover = this.bot.cbTrendWatcher.hookCandlesTrendListener(this._handleTrend.bind(this))
+    console.log("Trend listener for resolve hooked");
 
     this._watchForPositionLiquidation();
   }
@@ -38,11 +34,9 @@ class BBWaitForResolveSignalState implements BBState {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
       if (!this.bot.currActivePosition) {
         this.priceListenerRemover && this.priceListenerRemover();
-        this.aiTrendHookRemover && this.aiTrendHookRemover();
-        console.log("No active position found, exiting price listener");
+        console.log("No active position found, exiting price liquidation listener");
         return;
       }
-
 
       // Not liquidated yet
       if (
@@ -55,26 +49,24 @@ class BBWaitForResolveSignalState implements BBState {
       TelegramService.queueMsg(msg);
 
       this.priceListenerRemover && this.priceListenerRemover();
-      this.aiTrendHookRemover && this.aiTrendHookRemover();
+      this.trendListenerRemover && this.trendListenerRemover();
 
       let intervalId: NodeJS.Timeout;
       intervalId = setInterval(async () => {
-        this.bot.sameTrendAsBetTrendCount = 0;
         this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-        const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
+        const posHistory = [this.bot.currActivePosition!] // await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
         const closedPos = posHistory[0];
 
         if (!closedPos) {
           return;
         }
 
-        const isPositionLiquidated = (
-          (closedPos.side === "long" && new BigNumber(closedPos.closePrice!).lte(closedPos.liquidationPrice)) ||
+        const isPositionLiquidated = (closedPos.side === "long" && new BigNumber(closedPos.closePrice!).lte(closedPos.liquidationPrice)) ||
           (closedPos.side === "short" && new BigNumber(closedPos.closePrice!).gte(closedPos.liquidationPrice))
-        )
+
 
         if (isPositionLiquidated) {
-          this.aiTrendHookRemover && this.aiTrendHookRemover();
+          this.trendListenerRemover && this.trendListenerRemover();
           console.log("Liquidated position: ", closedPos);
           TelegramService.queueMsg(`
 🤯 Position just got liquidated
@@ -86,7 +78,7 @@ Close price: ${closedPos.closePrice}
 Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 `);
           this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-          this.bot.bbUtil.handlePnL(closedPos.realizedPnl);
+          this.bot.cbUtil.handlePnL(closedPos.realizedPnl, true);
           clearInterval(intervalId);
           this.bot.currActivePosition = undefined;
           eventBus.emit(EEventBusEventType.StateChange);
@@ -97,48 +89,34 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     });
   }
 
-  // private async _handleSundayAndMondayTransition() {
-  //   if (!this.bot.currActiveOpenedPositionId) return;
-
-  //   const todayDayName = this.bot.bbUtil.getTodayDayName();
-
-
-  //   const msg = `🕵️‍♀️ Found opened position (${this.bot.currActiveOpenedPositionId}) on early ${todayDayName}, force closing it...`;
-  //   console.log(msg);
-  //   TelegramService.queueMsg(msg);
-
-  //   const { nextCheckTs } = this.bot.bbUtil.getWaitInMs();
-  //   this.bot.nextTrendCheckTs = nextCheckTs;
-
-  //   await this._closeCurrPosition();
-  //   eventBus.emit(EEventBusEventType.StateChange);
-  // }
-
-  private async _trendHandler(aiTrend: IAITrend) {
+  private async _handleTrend(bigCandlesData: ICandlesData, smallCandlesData: ICandlesData) {
+    const ruleValPosDir = this.bot.betRules[bigCandlesData.candlesTrend][smallCandlesData.candlesTrend];
     const currMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
     const estimatedUnrealizedProfit = calc_UnrealizedPnl(this.bot.currActivePosition!, currMarkPrice);
     TelegramService.queueMsg(`💭 Current estimated unrealized profit: ${estimatedUnrealizedProfit >= 0 ? "🟩️️️️️️" : "🟥"} ~${estimatedUnrealizedProfit}`)
-    if (!this.bot.shouldResolvePositionTrends?.includes(aiTrend.trend)) {
-      this.bot.sameTrendAsBetTrendCount++;
-      TelegramService.queueMsg(`🙅‍♂️ ${aiTrend.trend} trend is not a resolve trigger trend (${this.bot.sameTrendAsBetTrendCount}) not doing anything`)
-      return;
-    }
 
-    TelegramService.queueMsg(`🔚 Resolve trigger trend (${aiTrend.trend}) occured, closing position...`)
-    this.aiTrendHookRemover && this.aiTrendHookRemover();
+    if (!this.bot.betRuleValsToResolvePosition?.includes(ruleValPosDir)) return;
+    this.trendListenerRemover && this.trendListenerRemover();
+    this.priceListenerRemover && this.priceListenerRemover();
+
+    TelegramService.queueMsg(`🔚 Resolve trigger trend (${bigCandlesData.candlesTrend}-${smallCandlesData.candlesTrend}: ${ruleValPosDir}) occured, closing position...`)
     await this._closeCurrPosition();
 
-    this.bot.sameTrendAsBetTrendCount = 0;
-    this.bot.commitedBetEntryTrend = undefined;
+    if (ruleValPosDir !== "skip") {
+      this.bot.nextRunForceBetCandlesDatas = {
+        big: bigCandlesData,
+        small: smallCandlesData,
+      };
+    }
+
     eventBus.emit(EEventBusEventType.StateChange);
   }
 
   private async _closeCurrPosition() {
-
-    const latestPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+    const currLatestMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
     const triggerTs = +new Date();
     this.bot.resolveWsPrice = {
-      price: latestPrice,
+      price: currLatestMarkPrice,
       time: new Date(triggerTs),
     }
 
@@ -147,7 +125,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 
     const closedPosition = await (async () => {
       for (let i = 0; i < 10; i++) { // Try 10 times
-        this.bot.bbWSSignaling.broadcast("close-position");
+        this.bot.cbWsSignaling.broadcast("close-position");
         await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds before checking closed position again
 
         console.log("Fetching position for this position id: ", this.bot.currActivePosition!.id!);
@@ -170,11 +148,9 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
       process.exit(-100);
     }
 
-    this.bot.bbUtil.saveTradeInfo(closedPosition, this.bot.entryWsPrice!, this.bot.resolveWsPrice!);
-
     const closedPositionAvgPrice = closedPosition.avgPrice;
     const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
-    slippage = new BigNumber(latestPrice).minus(closedPositionAvgPrice).toNumber();
+    slippage = new BigNumber(currLatestMarkPrice).minus(closedPositionAvgPrice).toNumber();
     timeDiffMs = closedPositionTriggerTs - triggerTs;
 
     const icon = this.bot.currActivePosition?.side === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
@@ -189,12 +165,12 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     this.bot.resolveWsPrice = undefined;
     this.bot.numberOfTrades++;
 
-    await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl, icon, slippage, timeDiffMs)
+    await this.bot.cbUtil.handlePnL(closedPosition.realizedPnl, false, icon, slippage, timeDiffMs);
   }
 
   async onExit() {
-    console.log("Exiting wait for reesolve signal state...");
+    console.log("Exiting CB Wait For Resolve State");
   }
 }
 
-export default BBWaitForResolveSignalState;
+export default CBWaitForResolveState;

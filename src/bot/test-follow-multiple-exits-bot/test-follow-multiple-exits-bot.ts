@@ -4,11 +4,11 @@ import TFMEBWaitForBetSignalState from "./tfmeb-states/tfmeb-wait-for-bet-signal
 import TFMEBWaitForResolveSignalState from "./tfmeb-states/tfmeb-wait-for-resolve-signal.state";
 import TFMEBStartingState from "./tfmeb-states/tfmeb-starting.state";
 import GrokAiService, { type TAiCandleTrendDirection } from "@/services/grok-ai.service";
-import BBUtil from "./tfmeb-util";
-import BBTrendWatcher from "./tfmeb-trend-watcher";
+import TFMEBUtil from "./tfmeb-util";
+import TFMEBTrendWatcher from "./tfmeb-trend-watcher";
 import type { IPosition } from "@/services/exchange-service/exchange-type";
 import BBWSSignaling from "./tfmeb-ws-signaling";
-import BBTgCmdHandler from "./tfmeb-tg-cmd-handler";
+import TFMEBTgCmdHandler from "./tfmeb-tg-cmd-handler";
 import { generateRunID } from "@/utils/strings.util";
 
 export interface TFMEBState {
@@ -67,10 +67,10 @@ class TestFollowMultipleExits {
   currentState: TFMEBState;
 
   grokAi: GrokAiService;
-  bbUtil: BBUtil;
-  bbTrendWatcher: BBTrendWatcher;
+  bbUtil: TFMEBUtil;
+  bbTrendWatcher: TFMEBTrendWatcher;
   bbWSSignaling: BBWSSignaling;
-  bbTgCmdHandler: BBTgCmdHandler;
+  bbTgCmdHandler: TFMEBTgCmdHandler;
 
   constructor() {
     this._verifyEnvs();
@@ -99,10 +99,10 @@ class TestFollowMultipleExits {
     this.currentState = this.startingState;
 
     this.grokAi = new GrokAiService();
-    this.bbUtil = new BBUtil(this);
-    this.bbTrendWatcher = new BBTrendWatcher(this);
+    this.bbUtil = new TFMEBUtil(this);
+    this.bbTrendWatcher = new TFMEBTrendWatcher(this);
     this.bbWSSignaling = new BBWSSignaling(this);
-    this.bbTgCmdHandler = new BBTgCmdHandler(this);
+    this.bbTgCmdHandler = new TFMEBTgCmdHandler(this);
     this.bbTgCmdHandler.handleTgMsgs();
   }
 

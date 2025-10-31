@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import TelegramService from "@/services/telegram.service";
-import type TestFollowMultipleExits from "./test-follow-multiple-exits-bot";
+import type BudgetingBot from "./combo-bot";
 
 export type TSignalToClientType = "open-long" | "open-short" | "close-position" | "pong";
 
@@ -28,10 +28,10 @@ interface IPingMsgFromClient {
 
 type IMsgFromClient = IPingMsgFromClient;
 
-class TFMEBWSSignaling {
+class CBWSSignaling {
   private clients = new Set<WebSocket>();
 
-  constructor(private bot: TestFollowMultipleExits) { }
+  constructor(private bot: BudgetingBot) { }
 
   serveServer(port: number) {
     const wss = new WebSocketServer({ port });
@@ -94,4 +94,4 @@ class TFMEBWSSignaling {
   }
 }
 
-export default TFMEBWSSignaling;
+export default CBWSSignaling;

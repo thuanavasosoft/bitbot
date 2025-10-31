@@ -59,16 +59,11 @@ export function getMsDetailDuration(millis: number): { years: number, months: nu
 
 export function calc_UnrealizedPnl(pos: IPosition, p: number): number {
   const markPrice = new BigNumber(p);
-  const avgPrice = new BigNumber(pos.avgPrice);
-  const size = new BigNumber(pos.size);
+  const notionalGainedIfCloseNow = markPrice.times(pos.size).abs();
 
-  let pnl: BigNumber;
-
-  if (pos.side === "long") {
-    pnl = markPrice.minus(avgPrice).times(size);
-  } else {
-    pnl = avgPrice.minus(markPrice).times(size);
-  }
+  let pnl: BigNumber = pos.side === "long" ?
+    notionalGainedIfCloseNow.minus(pos.notional) :
+    new BigNumber(pos.notional).minus(notionalGainedIfCloseNow);
 
   return pnl.toNumber();
 }

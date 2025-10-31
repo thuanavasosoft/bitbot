@@ -3,6 +3,7 @@ import TelegramService from "@/services/telegram.service";
 import BudgetingBot from '@/bot/budgeting-bot/budgeting-bot';
 import ExchangeService from '@/services/exchange-service/exchange-service';
 import DatabaseService from '@/services/database.service';
+import ComboBot from '@/bot/combo-bot/combo-bot';
 
 async function runProgram() {
   try {
@@ -22,8 +23,17 @@ async function runProgram() {
       !!symbol ? [symbol] : symbols,
     );
 
-    const bot = new BudgetingBot();
-    await bot.startMakeMoney()
+    const botMode = process.env.BOT_MODE;
+    console.log("BOT MODE: ", botMode);
+
+
+    if (botMode === "combo_bot") {
+      const bot = new ComboBot();
+      await bot.startMakeMoney();
+    } else if (botMode === "budgeting_bot") {
+      const bot = new BudgetingBot();
+      await bot.startMakeMoney();
+    }
 
   } catch (error) {
     console.log("Program error: ", error);

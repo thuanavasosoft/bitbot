@@ -1,6 +1,5 @@
 import BigNumber from "bignumber.js";
 import BudgetingBot from "./budgeting-bot";
-import { sundayDayName } from "./bb-util";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
