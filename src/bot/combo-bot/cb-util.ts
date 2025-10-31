@@ -7,18 +7,28 @@ import { TAiCandleTrendDirection } from "@/services/grok-ai.service";
 class CBUtil {
   constructor(private bot: ComboBot) { }
 
-  public async handlePnL(PnL: number, icon?: string, slippage?: number, timeDiffMs?: number) {
+  private async updateBalance() {
+    const thisRunCurrQuoteBalance = this.bot.currQuoteBalance;
+    const currExchFreeUsdtBalance = await this.bot.cbUtil.getExchFreeUsdtBalance()
+    await this.bot.startingState.updateBotCurrentBalances();
+
+    return { thisRunCurrQuoteBalance, currExchFreeUsdtBalance };
+  }
+
+  public async handlePnL(PnL: number, isLiquidated: boolean, icon?: string, slippage?: number, timeDiffMs?: number) {
     console.log("Calculating expected profit...");
 
     const iterationPnL = new BigNumber(PnL);
     const isProfit = new BigNumber(iterationPnL).gt(0)
     console.log("this iteration Profit: ", iterationPnL);
 
-    const thisRunCurrQuoteBalance = this.bot.currQuoteBalance;
-    const currExchFreeUsdtBalance = await this.bot.cbUtil.getExchFreeUsdtBalance()
-    await this.bot.startingState.updateBotCurrentBalances();
+    const { thisRunCurrQuoteBalance, currExchFreeUsdtBalance } = await this.updateBalance();
 
     this.bot.totalActualCalculatedProfit = new BigNumber(this.bot.totalActualCalculatedProfit).plus(iterationPnL).toNumber();
+    const commitedTrendCombo = this.bot.currCommitedTrendCombo!;
+    this.bot.trendComboRecords[commitedTrendCombo.big][commitedTrendCombo.small].pnl = new BigNumber(this.bot.trendComboRecords[commitedTrendCombo.big][commitedTrendCombo.small].pnl).plus(PnL).toNumber();
+    if (isLiquidated) this.bot.trendComboRecords[commitedTrendCombo.big][commitedTrendCombo.small].liquidatedCount += 1;
+    this.bot.currCommitedTrendCombo = undefined;
 
     const msg = `
 🏁 PnL Information
@@ -49,7 +59,7 @@ Price Diff (pips): ${icon} ${slippage}` : ""}`;
   getBetRulesMsg() {
     const getBetRuleDetail = (bigTrend: TAiCandleTrendDirection, smallTrend: TAiCandleTrendDirection) => {
       const betRule = this.bot.betRules[bigTrend][smallTrend];
-      return `${betRule === "long" ? "🟢" : betRule === "short" ? "🔴" : "Skip"} (${this.bot.trendComboRecords[bigTrend][smallTrend].entriesAmt.toLocaleString()}). pnl: ${this.bot.trendComboRecords[bigTrend][smallTrend].pnl >= 0 ? "🟩" : "🟥"} ${this.bot.trendComboRecords[bigTrend][smallTrend].pnl.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })}`
+      return `${betRule === "long" ? "🟢" : betRule === "short" ? "🔴" : "Skip"} (${this.bot.trendComboRecords[bigTrend][smallTrend].entriesAmt.toLocaleString()}). pnl: ${this.bot.trendComboRecords[bigTrend][smallTrend].pnl >= 0 ? "🟩" : "🟥"} ${this.bot.trendComboRecords[bigTrend][smallTrend].pnl.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })} liquidated count: ${this.bot.trendComboRecords[bigTrend][smallTrend].liquidatedCount}`
     };
 
     const msg = `

@@ -1,5 +1,5 @@
 import BigNumber from "bignumber.js";
-import ComboBot, { IBetRule, TBetRuleVal } from "./combo-bot";
+import ComboBot, { comboBetRulesDefaultValue, IBetRule, TBetRuleVal } from "./combo-bot";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
@@ -333,6 +333,7 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
       this.bot.trendComboRecords[ruleBigKey][ruleSmallKey] = {
         entriesAmt: 0,
         pnl: 0,
+        liquidatedCount: 0,
       };
 
       const msg = `Successfully updated bet rules (${ruleBigKey}-${ruleSmallKey}) to ${ruleValue}
@@ -380,50 +381,7 @@ New bet rules: ${this.bot.cbUtil.getBetRulesMsg()}`;
       }
 
       this.bot.betRules = parsed!;
-      this.bot.trendComboRecords = {
-        Up: {
-          Up: {
-            entriesAmt: 0,
-            pnl: 0
-          },
-          Down: {
-            entriesAmt: 0,
-            pnl: 0
-          },
-          Kangaroo: {
-            entriesAmt: 0,
-            pnl: 0
-          }
-        },
-        Down: {
-          Up: {
-            entriesAmt: 0,
-            pnl: 0
-          },
-          Down: {
-            entriesAmt: 0,
-            pnl: 0
-          },
-          Kangaroo: {
-            entriesAmt: 0,
-            pnl: 0
-          }
-        },
-        Kangaroo: {
-          Up: {
-            entriesAmt: 0,
-            pnl: 0
-          },
-          Down: {
-            entriesAmt: 0,
-            pnl: 0
-          },
-          Kangaroo: {
-            entriesAmt: 0,
-            pnl: 0
-          }
-        }
-      };
+      this.bot.trendComboRecords = comboBetRulesDefaultValue;
 
       const msg = `
 Successfully updated bet rules
@@ -449,5 +407,7 @@ New bet rules: ${this.bot.cbUtil.getBetRulesMsg()}`;
     });
   }
 }
+
+
 
 export default CBTgCmdHandler;

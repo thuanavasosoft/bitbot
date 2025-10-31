@@ -54,17 +54,16 @@ class CBWaitForResolveState implements CBState {
       let intervalId: NodeJS.Timeout;
       intervalId = setInterval(async () => {
         this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-        const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
+        const posHistory = [this.bot.currActivePosition!] // await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
         const closedPos = posHistory[0];
 
         if (!closedPos) {
           return;
         }
 
-        const isPositionLiquidated = (
-          (closedPos.side === "long" && new BigNumber(closedPos.closePrice!).lte(closedPos.liquidationPrice)) ||
+        const isPositionLiquidated = (closedPos.side === "long" && new BigNumber(closedPos.closePrice!).lte(closedPos.liquidationPrice)) ||
           (closedPos.side === "short" && new BigNumber(closedPos.closePrice!).gte(closedPos.liquidationPrice))
-        )
+
 
         if (isPositionLiquidated) {
           this.trendListenerRemover && this.trendListenerRemover();
@@ -79,8 +78,9 @@ Close price: ${closedPos.closePrice}
 Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 `);
           this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-          this.bot.cbUtil.handlePnL(closedPos.realizedPnl);
+          this.bot.cbUtil.handlePnL(closedPos.realizedPnl, true);
           clearInterval(intervalId);
+          this.bot.currActivePosition = undefined;
           eventBus.emit(EEventBusEventType.StateChange);
         }
 
@@ -165,11 +165,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     this.bot.resolveWsPrice = undefined;
     this.bot.numberOfTrades++;
 
-    const commitedTrendCombo = this.bot.currCommitedTrendCombo!;
-    this.bot.trendComboRecords[commitedTrendCombo.big][commitedTrendCombo.small].pnl = new BigNumber(this.bot.trendComboRecords[commitedTrendCombo.big][commitedTrendCombo.small].pnl).plus(closedPosition.realizedPnl).toNumber();
-    this.bot.currCommitedTrendCombo = undefined;
-
-    await this.bot.cbUtil.handlePnL(closedPosition.realizedPnl, icon, slippage, timeDiffMs);
+    await this.bot.cbUtil.handlePnL(closedPosition.realizedPnl, false, icon, slippage, timeDiffMs);
   }
 
   async onExit() {

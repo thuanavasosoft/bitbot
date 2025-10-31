@@ -47,7 +47,9 @@ class CBStartingState implements CBState {
   async onEnter() {
     if (!!this.bot.liquidationSleepFinishTs) {
       TelegramService.queueMsg(`Position has just liquidated waiting for ${this.bot.sleepDurationAfterLiquidation} (finished at: ${moment(this.bot.liquidationSleepFinishTs).format("YYYY-MM-DD HH:mm:ss")})`)
+      this.bot.isSleeping = true;
       await new Promise(r => setTimeout(r, this.bot.liquidationSleepFinishTs! - +new Date()));
+      this.bot.isSleeping = false;
       this.bot.liquidationSleepFinishTs = undefined;
     }
 

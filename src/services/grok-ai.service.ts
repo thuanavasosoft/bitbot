@@ -129,6 +129,65 @@ Your job is NOT to speculate about the future, you only say what the image (the 
     }
   }
 
+  async analyzeBreakoutTrendV2(image: Buffer): Promise<"Up" | "Down" | "Kangaroo"> {
+    try {
+      console.log("Analyzing breakout trend v2");
+      const base64Image = image.toString('base64');
+
+      const data = {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`,
+                },
+              },
+              {
+                type: "text",
+                text: `
+Only reply "Up" or "Down" or "Kangaroo" to an image of a crypto coin, nothing more.
+
+If the price has broken clearly above resistance with momentum, answer 'Up'.
+If the price has broken clearly below support with momentum, answer 'Down'.
+Otherwise, answer 'Kangaroo'.
+Consider it “Up” or “Down” only if the breakout candle has closed beyond the resistance/support with clear distance and momentum.
+If unsure, choose "Kangaroo".
+
+Your job is NOT to speculate about the future, you only say what the image (the current presence) shows you. "Up" or "Down" or "Kangaroo" only.`,
+              },
+            ],
+          },
+        ],
+        model: "grok-2-vision-1212",
+        temperature: 0,
+      };
+
+      console.log("Fetching grok data response...");
+      const response = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+
+      const respData = await response.json() as any;
+      const trend = respData.choices[0].message.content.trim();
+
+      return trend
+    } catch (error) {
+      const errMsg = (error as Error)?.message || String(error);
+      console.error(`Error upon analyzing trend: ${errMsg}. Retrying in 5 seconds`);
+      TelegramService.queueMsg(`Error upon analyzing trend due to GrokAI API hiccup: ${errMsg}. Retrying in 5 seconds`);
+      await new Promise(r => setTimeout(r, 5000));
+      return this.analyzeBreakoutTrendV2(image);
+    }
+  }
+
   async analyzeBreakoutTrendWithAfter(image: Buffer): Promise<"Up" | "Down" | "Already-Up" | "Already-Down"> {
     try {
       console.log("Analyzing breakout trend with after");
