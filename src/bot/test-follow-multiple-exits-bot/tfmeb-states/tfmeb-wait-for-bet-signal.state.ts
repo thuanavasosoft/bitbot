@@ -1,8 +1,7 @@
-import type { IAITrend, TAiCandleTrendDirection } from "@/services/grok-ai.service";
+import type { IAITrend } from "@/services/grok-ai.service";
 import TestFollowMultipleExits, { type TFMEBState } from "../test-follow-multiple-exits-bot";
 import TelegramService from "@/services/telegram.service";
 import moment from "moment";
-import { sundayDayName } from "../tfmeb-util";
 import type { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
@@ -24,11 +23,10 @@ class TFMEBWaitForBetSignalState implements TFMEBState {
       await new Promise(r => setTimeout(r, this.bot.nextTrendCheckTs - nowMs))
     }
 
-    this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("betting", this._trendHandler.bind(this));
+    this.aiTrendHookRemover = this.bot.tfmebTrendWatcher.hookAiTrends("betting", this._trendHandler.bind(this));
   }
 
   private async _trendHandler(aiTrend?: IAITrend) {
-    const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName;
     if (aiTrend?.trend === "Kangaroo") return;
 
     console.log("Handle bet signal triggered ai trend: ", aiTrend);
@@ -42,18 +40,15 @@ close price: ${aiTrend?.closePrice}
 `);
 
     const trendIsUp = aiTrend?.trend.includes("Up") ?? false;
-    const betMode = isTodaySunday ? this.bot.sundayBetDirection : this.bot.betDirection;
+    const betMode = this.bot.betDirection;
     const followsTrend = betMode === "follow";
 
     const openPosDir: TPositionSide = (trendIsUp === followsTrend) ? "long" : "short";
 
-    const { nextCheckTs } = this.bot.bbUtil.getWaitInMs();
+    const { nextCheckTs } = this.bot.tfmebUtil.getWaitInMs();
     this.bot.nextTrendCheckTs = nextCheckTs;
 
     await this._openThenWaitAndGetOpenedPositionDetail(openPosDir);
-
-    this.bot.commitedBetEntryTrend = aiTrend?.trend as Omit<TAiCandleTrendDirection, "Kangaroo">;
-    this.bot.shouldResolvePositionTrends = ["Kangaroo", aiTrend?.trend === "Up" ? "Down" : "Up"]
 
     eventBus.emit(EEventBusEventType.StateChange);
   }
@@ -82,13 +77,13 @@ close price: ${aiTrend?.closePrice}
       notional: Number(budget),
       avgPrice: latestPrice,
       size: posSize.toNumber(),
-      liquidationPrice: calcLiquidationPrice(posDir, latestPrice, this.bot.leverage),
-      realizedPnl: 0,
-      unrealizedPnl: 0,
+      liquidationPrice: Number(calcLiquidationPrice(posDir, latestPrice, this.bot.leverage).toFixed(4)),
       marginMode: "isolated",
       maintenanceMargin: 0,
       createTime: +new Date(),
       updateTime: +new Date(),
+      realizedPnl: 0,
+      unrealizedPnl: 0,
     };
 
     this.bot.currActivePosition = position;

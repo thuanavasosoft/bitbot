@@ -77,20 +77,6 @@ export function generateRandomNumberOfLength(length: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-/**
- * Calculates the liquidation price for an isolated margin position.
- * Formula (for simple perpetual contracts, not including fees):
- * 
- * For LONG:
- *   liquidationPrice = (avgPrice * leverage) / (leverage + 1)
- * 
- * For SHORT:
- *   liquidationPrice = (avgPrice * leverage) / (leverage - 1)
- * 
- * Assumptions:
- * - pos is an object with `avgPrice` (number|string), `leverage` (number), and `side` ("long"|"short")
- * - Leverage must be > 1 for "short" to avoid division by zero.
- */
 export function calcLiquidationPrice(
   side: TPositionSide,
   avgPrice: number | string,

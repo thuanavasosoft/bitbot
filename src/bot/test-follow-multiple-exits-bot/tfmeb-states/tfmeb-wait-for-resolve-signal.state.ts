@@ -13,28 +13,6 @@ class TFMEBWaitForResolveSignalState implements TFMEBState {
 
   constructor(private bot: TestFollowMultipleExits) { }
 
-  async onEnter() {
-    if (!this.bot.shouldResolvePositionTrends?.length || !this.bot.currActivePosition) {
-      const msg = `Something went wrong either this.bot.shouldResolvePositionTrends: ${this.bot.shouldResolvePositionTrends} or this.bot.currActivePosition: ${this.bot.currActivePosition} is not yet defined and already entering wait for resolve signal that means, the flow not work correctly`;
-      console.log(msg);
-      throw new Error(msg);
-    }
-
-    const msg = `🔁 Waiting for resolve signal ${(this.bot.shouldResolvePositionTrends || []).join(", ")} ...`
-    console.log(msg);
-    TelegramService.queueMsg(msg);
-
-    const nowMs = +new Date();
-    if (!!this.bot.nextTrendCheckTs && nowMs < this.bot.nextTrendCheckTs) {
-      console.log(`Waiting for ${this.bot.nextTrendCheckTs - nowMs}ms before hook ai trends`);
-      await new Promise(r => setTimeout(r, this.bot.nextTrendCheckTs - nowMs))
-    }
-
-    this.aiTrendHookRemover = this.bot.bbTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this));
-
-    this._watchForPositionLiquidation();
-  }
-
   private async _watchForPositionLiquidation() {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
       if (!this.bot.currActivePosition) {
@@ -79,7 +57,8 @@ Close price: ${closedPos.closePrice}
 Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 `);
         this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-        this.bot.bbUtil.handlePnL(closedPos.realizedPnl);
+        this.bot.tfmebUtil.handlePnL(closedPos.realizedPnl);
+        this.bot.currActivePosition = undefined;
         clearInterval(intervalId);
         eventBus.emit(EEventBusEventType.StateChange);
 
@@ -88,13 +67,34 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     });
   }
 
-  private async _trendHandler(aiTrend: IAITrend) {
+  async onEnter() {
+    if (!this.bot.currActivePosition) {
+      const msg = `Something went wrong either this.bot.currActivePosition: ${this.bot.currActivePosition} is not yet defined and already entering wait for resolve signal that means, the flow not work correctly`;
+      console.log(msg);
+      throw new Error(msg);
+    }
+
+    const msg = `🔁 Waiting for resolve signal...`
+    console.log(msg);
+    TelegramService.queueMsg(msg);
+
+    const nowMs = +new Date();
+    if (!!this.bot.nextTrendCheckTs && nowMs < this.bot.nextTrendCheckTs) {
+      console.log(`Waiting for ${this.bot.nextTrendCheckTs - nowMs}ms before hook ai trends`);
+      await new Promise(r => setTimeout(r, this.bot.nextTrendCheckTs - nowMs))
+    }
+
+    this.aiTrendHookRemover = this.bot.tfmebTrendWatcher.hookAiTrends("resolving", this._trendHandler.bind(this) as any);
+    this._watchForPositionLiquidation();
+  }
+
+  private async _trendHandler(aiTrend: Omit<IAITrend, "trend"> & { trend: "Hold" | "Resolve" }) {
     const currMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
     const estimatedUnrealizedProfit = calc_UnrealizedPnl(this.bot.currActivePosition!, currMarkPrice);
-    TelegramService.queueMsg(`💭 Current estimated unrealized profit: ${estimatedUnrealizedProfit >= 0 ? "🟩️️️️️️" : "🟥"} ~${estimatedUnrealizedProfit}`)
-    if (!this.bot.shouldResolvePositionTrends?.includes(aiTrend.trend)) {
-      this.bot.sameTrendAsBetTrendCount++;
-      TelegramService.queueMsg(`🙅‍♂️ ${aiTrend.trend} trend is not a resolve trigger trend (${this.bot.sameTrendAsBetTrendCount}) not doing anything`)
+    TelegramService.queueMsg(`💭 Current estimated unrealized profit: ${estimatedUnrealizedProfit >= 0 ? "🟩️️️️️️" : "🟥"} ~${estimatedUnrealizedProfit.toFixed(4)}`)
+
+    if (aiTrend.trend === "Hold") {
+      TelegramService.queueMsg("Candles AI trend indicate for Hold, holding")
       return;
     }
 
@@ -142,7 +142,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     this.bot.resolveWsPrice = undefined;
     this.bot.numberOfTrades++;
 
-    await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl, icon, slippage, timeDiffMs)
+    await this.bot.tfmebUtil.handlePnL(closedPosition.realizedPnl, icon, slippage, timeDiffMs)
   }
 
   async onExit() {
