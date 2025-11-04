@@ -54,10 +54,12 @@ class CBWaitForResolveState implements CBState {
       let intervalId: NodeJS.Timeout;
       intervalId = setInterval(async () => {
         this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-        const posHistory = [this.bot.currActivePosition!] // await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
+        const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
         const closedPos = posHistory[0];
+        console.log("closedPos: ", closedPos);
 
         if (!closedPos) {
+          console.log("No closed position found, returning");
           return;
         }
 

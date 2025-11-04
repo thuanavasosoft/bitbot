@@ -3,7 +3,7 @@ import TestFollowMultipleExits from "./test-follow-multiple-exits-bot";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
-import { getRunDuration } from "@/utils/maths.util";
+import { calc_UnrealizedPnl, getRunDuration } from "@/utils/maths.util";
 import { TEntryDirectionToTrend } from "@/utils/types.util";
 
 enum EBBotCommand {
@@ -38,11 +38,10 @@ Trends should be for entry: Up | Down}`;
     }
 
     if (this.bot.currentState === this.bot.waitForResolveSignalState) {
-      let position = await ExchangeService.getPosition(this.bot.symbol);
-      if (!position) {
-        const closedPositions = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition?.id! });
-        if (closedPositions?.length > 1) position = closedPositions[0];
-      }
+      let position = this.bot.currActivePosition!;
+      const currMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+      const unrealizedPnl = calc_UnrealizedPnl(position, currMarkPrice);
+      position.unrealizedPnl = unrealizedPnl;
       return `
 Bot are in wait for close command
 
@@ -85,7 +84,6 @@ ${!!position && getPositionDetailMsg(position)}`
     });
 
     TelegramService.appendTgCmdHandler(ETGCommand.FullUpdate, async () => {
-      // const isTodaySunday = this.bot.bbUtil.getTodayDayName() === sundayDayName; // TODO: Uncomment this when sunday is implemented
       const startQuoteBalance = new BigNumber(this.bot.startQuoteBalance);
       const currQuoteBalance = new BigNumber(this.bot.currQuoteBalance);
 
@@ -121,7 +119,7 @@ Calculated actual profit: ${this.bot.totalActualCalculatedProfit} USDT
 
 === ROI ===
 Run time: ${runDurationDisplay}
-Total profit till now: ${totalProfit.isGreaterThanOrEqualTo(0) ? "🟩" : "🟥"} ${totalProfit} USDT (${totalProfit.div(startQuoteBalance).times(100)}%) / ${runDurationDisplay}
+Total profit till now: ${totalProfit.isGreaterThanOrEqualTo(0) ? "🟩" : "🟥"} ${totalProfit.toFixed(5)} USDT (${totalProfit.div(startQuoteBalance).times(100).toFixed(2)}%) / ${runDurationDisplay}
 Estimated yearly profit: ${stratEstimatedYearlyProfit.toFixed(2)} USDT (${stratEstimatedROI.toFixed(2)}%)
 
 === SLIPPAGE ===
@@ -251,111 +249,6 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
       const msg = `Successfully updated regular bet direction to ${value}`
       console.log(msg);
       TelegramService.queueMsg(msg);
-    });
-
-    TelegramService.appendTgCmdHandler(EBBotCommand.UPDATE_SUNDAY_AI_TREND_CHECK_INTERVAL_IN_MINUTES, (ctx) => {
-      const msg1 = `Updating sunday ai trend check interval in minutes...`
-      console.log(msg1);
-      TelegramService.queueMsg(msg1)
-
-      const splitted = ctx.text!.split(" ");
-      const value = splitted[1];
-
-      let errMsg: string | undefined = undefined
-      if (!value) {
-        errMsg = "No parameter specified, please specify parameter";
-      }
-
-      if (Number.isNaN(Number(value))) {
-        errMsg = `Invalid parameter specified, please specify a number`
-      }
-
-      if (!!errMsg) {
-        console.log(errMsg);
-        TelegramService.queueMsg(errMsg);
-        return
-      }
-
-      this.bot.sundayAiTrendIntervalCheckInMinutes = Number(value);
-
-      const msg = `Successfully updated sunday trend check interval to ${value} minutes`
-      console.log(msg);
-      TelegramService.queueMsg(msg);
-    });
-
-    TelegramService.appendTgCmdHandler(EBBotCommand.UPDATE_SUNDAY_CANDLES_ROLL_WINDOW_IN_HOURS, (ctx) => {
-      const msg1 = `Updating sunday candles roll window in hours...`
-      console.log(msg1);
-      TelegramService.queueMsg(msg1)
-
-      const splitted = ctx.text!.split(" ");
-      const value = splitted[1];
-
-      let errMsg: string | undefined = undefined
-      if (!value) {
-        errMsg = "No parameter specified, please specify parameter";
-      }
-
-      if (Number.isNaN(Number(value))) {
-        errMsg = `Invalid parameter specified, please specify a number`
-      }
-
-      if (!!errMsg) {
-        console.log(errMsg);
-        TelegramService.queueMsg(errMsg);
-        return
-      }
-
-      this.bot.sundayCandlesRollWindowInHours = Number(value);
-
-      const msg = `Successfully updated sunday candle roll window to ${value} hours`
-      console.log(msg);
-      TelegramService.queueMsg(msg);
-    });
-
-    TelegramService.appendTgCmdHandler(EBBotCommand.UPDATE_SUNDAY_BET_DIRECTION, (ctx) => {
-      const msg1 = `Updating sunday bet direction...`
-      console.log(msg1);
-      TelegramService.queueMsg(msg1)
-
-      const splitted = ctx.text!.split(" ");
-      const value = splitted[1];
-
-      let errMsg: string | undefined = undefined
-      if (!value) {
-        errMsg = "No parameter specified, please specify parameter";
-      }
-
-      if (!(["against", "follow"] as TEntryDirectionToTrend[]).includes(value as any)) {
-        errMsg = `Invalid parameter specified, either (against | follow)`
-      }
-
-      if (!!errMsg) {
-        console.log(errMsg);
-        TelegramService.queueMsg(errMsg);
-        return
-      }
-
-      this.bot.sundayBetDirection = value as TEntryDirectionToTrend;
-
-      const msg = `Successfully updated consecutive against trend amt to ${value}`
-      console.log(msg);
-      TelegramService.queueMsg(msg);
-    });
-
-    TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_LONG, () => {
-      console.log("Broadcasting open-long");
-      this.bot.bbWSSignaling.broadcast("open-long", "10");
-    });
-
-    TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_SHORT, () => {
-      console.log("Broadcasting open-short");
-      this.bot.bbWSSignaling.broadcast("open-short", "10");
-    });
-
-    TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, () => {
-      console.log("Broadcasting close-position");
-      this.bot.bbWSSignaling.broadcast("close-position");
     });
   }
 }

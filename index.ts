@@ -4,6 +4,7 @@ import BudgetingBot from '@/bot/budgeting-bot/budgeting-bot';
 import ExchangeService from '@/services/exchange-service/exchange-service';
 import DatabaseService from '@/services/database.service';
 import ComboBot from '@/bot/combo-bot/combo-bot';
+import TestFollowMultipleExits from '@/bot/test-follow-multiple-exits-bot/test-follow-multiple-exits-bot';
 
 async function runProgram() {
   try {
@@ -32,6 +33,9 @@ async function runProgram() {
       await bot.startMakeMoney();
     } else if (botMode === "budgeting_bot") {
       const bot = new BudgetingBot();
+      await bot.startMakeMoney();
+    } else if (botMode === "tfmeb") {
+      const bot = new TestFollowMultipleExits();
       await bot.startMakeMoney();
     }
 
