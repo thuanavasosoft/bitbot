@@ -32,6 +32,13 @@ class BBWaitForEntryState implements BBState {
         return;
       }
 
+      // IMPORTANT: Only allow entry if S/R has been updated AFTER the last exit
+      // This prevents spam entries immediately after exits
+      if (this.bot.lastExitTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastExitTime) {
+        // Still using old S/R levels, wait for next update
+        return;
+      }
+
       const priceNum = new BigNumber(price);
       let shouldEnter = false;
       let posDir: TPositionSide | null = null;

@@ -87,6 +87,7 @@ class BBTrendWatcher {
       this.bot.currentSignal = signalResult.signal;
       this.bot.currentSupport = signalResult.support;
       this.bot.currentResistance = signalResult.resistance;
+      this.bot.lastSRUpdateTime = Date.now(); // Track when S/R was updated
 
       await this._waitForNextCheck(this.bot.checkIntervalMinutes);
     }

@@ -81,6 +81,7 @@ Bet size: ${this.bot.betSize} USDT
 Sleep duration after liquidation: ${this.bot.sleepDurationAfterLiquidation}
 
 Signal check interval: ${this.bot.checkIntervalMinutes} minutes
+Take Profit: ${this.bot.takeProfitPercentage}%
 
 Signal Parameters:
 N: ${this.bot.signalParams.N}
