@@ -125,7 +125,7 @@ export function calculateBreakoutSignal(candles: ICandleInfo[], params: SignalPa
   const roc_min = params.roc_min !== undefined ? params.roc_min : 0.001;
   const ema_period = params.ema_period || 10;
   const need_two_closes = params.need_two_closes || false;
-  // const vol_mult = params.vol_mult !== undefined ? params.vol_mult : 1.3;
+  const vol_mult = params.vol_mult !== undefined ? params.vol_mult : 1.3;
 
   // Need enough candles for calculations
   const minRequired = Math.max(N + 1, atr_len, K, ema_period);
@@ -168,7 +168,7 @@ export function calculateBreakoutSignal(candles: ICandleInfo[], params: SignalPa
   const currentIdx = candles.length - 1;
   const prevIdx = currentIdx - 1;
   const currentClose = candles[currentIdx].closePrice;
-  // const prevClose = candles.length > 1 ? candles[prevIdx].closePrice : currentClose;
+  const prevClose = candles.length > 1 ? candles[prevIdx].closePrice : currentClose;
 
   // Calculate ROC (Rate of Change)
   const rocStartIdx = Math.max(0, currentIdx - K);

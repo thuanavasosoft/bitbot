@@ -1,6 +1,6 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BreakoutBot, { BBState } from "../breakout-bot";
-import { parseDurationStringIntoMs } from "@/utils/maths.util";
+import { calc_UnrealizedPnl, parseDurationStringIntoMs } from "@/utils/maths.util";
 import TelegramService from "@/services/telegram.service";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import BigNumber from "bignumber.js";
