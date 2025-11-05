@@ -80,7 +80,7 @@ Leverage: X${this.bot.leverage}
 Bet size: ${this.bot.betSize} USDT
 Sleep duration after liquidation: ${this.bot.sleepDurationAfterLiquidation}
 
-Signal check interval: ${this.bot.checkIntervalMinutes} minutes
+Signal check interval: ${this.bot.checkIntervalMinutes} minute(s)
 
 Signal Parameters:
 N: ${this.bot.signalParams.N}
