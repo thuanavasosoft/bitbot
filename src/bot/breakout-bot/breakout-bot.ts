@@ -46,6 +46,11 @@ class BreakoutBot {
   currentSignal: "Up" | "Down" | "Kangaroo" = "Kangaroo";
   currentSupport: number | null = null;
   currentResistance: number | null = null;
+  lastSRUpdateTime: number = 0; // Timestamp of last support/resistance update
+  lastExitTime: number = 0; // Timestamp of last position exit
+
+  // Take profit
+  takeProfitPercentage: number;
 
   bbUtil: BBUtil;
   bbWsSignaling: BBWSSignaling;
@@ -67,6 +72,7 @@ class BreakoutBot {
     this.sleepDurationAfterLiquidation = process.env.BREAKOUT_BOT_SLEEP_DURATION_AFTER_LIQUIDATION!;
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
+    this.takeProfitPercentage = Number(process.env.BREAKOUT_BOT_TAKE_PROFIT_PERCENTAGE!);
 
     // Signal parameters with defaults from backtest
     this.signalParams = {
@@ -104,6 +110,7 @@ class BreakoutBot {
       "BREAKOUT_BOT_BET_SIZE",
       "BREAKOUT_BOT_CHECK_INTERVAL_MINUTES",
       "BREAKOUT_BOT_SERVER_PORT",
+      "BREAKOUT_BOT_TAKE_PROFIT_PERCENTAGE",
     ];
 
     for (const envKey of necessaryEnvKeys) {
