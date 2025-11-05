@@ -11,16 +11,9 @@ export interface ISignalData {
 }
 
 class BBTrendWatcher {
-  private _signalListener?: (signalData: ISignalData) => void;
   isTrendWatcherStarted: boolean = false;
 
   constructor(private bot: BreakoutBot) { }
-
-  hookSignalListener(cb: (signalData: ISignalData) => void) {
-    this._signalListener = cb;
-
-    return () => this._signalListener = undefined;
-  }
 
   async startWatchBreakoutSignals() {
     if (this.isTrendWatcherStarted) return;
@@ -94,9 +87,6 @@ class BBTrendWatcher {
       this.bot.currentSignal = signalResult.signal;
       this.bot.currentSupport = signalResult.support;
       this.bot.currentResistance = signalResult.resistance;
-
-      // Notify listener
-      this._signalListener && this._signalListener(signalData);
 
       await this._waitForNextCheck(this.bot.checkIntervalMinutes);
     }

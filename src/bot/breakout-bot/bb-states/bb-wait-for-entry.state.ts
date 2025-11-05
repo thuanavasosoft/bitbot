@@ -2,7 +2,6 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { TPositionSide, IPosition } from "@/services/exchange-service/exchange-type";
 import TelegramService from "@/services/telegram.service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
-import { ISignalData } from "../bb-trend-watcher";
 import BreakoutBot, { BBState } from "../breakout-bot";
 import BigNumber from "bignumber.js";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
@@ -10,51 +9,52 @@ import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 const WAIT_INTERVAL_MS = 5000;
 
 class BBWaitForEntryState implements BBState {
-  private signalListenerRemover?: () => void;
+  private priceListenerRemover?: () => void;
 
   constructor(private bot: BreakoutBot) { }
 
   async onEnter() {
-    TelegramService.queueMsg(`🔜 Waiting for entry signal (Up/Down)...`);
-    console.log("Hooking signal listener for entry...");
-    this.signalListenerRemover = this.bot.bbTrendWatcher.hookSignalListener(this._handleSignal.bind(this))
-    console.log("Signal listener for entry hooked");
+    TelegramService.queueMsg(`🔜 Waiting for entry signal - monitoring price for breakout...`);
+    console.log("Hooking price listener for entry...");
+    this._watchForBreakout();
+    console.log("Price listener for entry hooked");
   }
 
-  private async _handleSignal(signalData: ISignalData) {
-    const signal = signalData.signalResult.signal;
-
-    // Only enter on Up or Down signals
-    if (signal === "Kangaroo") {
-      console.log("Kangaroo signal - skipping entry");
-      return;
-    }
-
-    // Determine position side based on signal
-    const posDir: TPositionSide = signal === "Up" ? "long" : "short";
-    
-    // Only enter if we don't already have a position, or if we have opposite position
-    if (this.bot.currActivePosition) {
-      if (this.bot.currActivePosition.side === posDir) {
-        console.log(`Already have ${posDir} position, skipping entry`);
-        return;
-      } else {
-        // Close opposite position first
-        TelegramService.queueMsg(`Signal changed from ${this.bot.currActivePosition.side} to ${posDir}, closing current position...`);
-        this.signalListenerRemover && this.signalListenerRemover();
-        await this._closeCurrentPosition();
-        // Wait a bit for position to be fully closed
-        await new Promise(r => setTimeout(r, 2000));
-        // Now enter new position
-        await this._openPosition(posDir);
-        eventBus.emit(EEventBusEventType.StateChange);
+  private async _watchForBreakout() {
+    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (price) => {
+      // Wait for support/resistance levels to be calculated
+      if (!this.bot.currentSupport || !this.bot.currentResistance) {
         return;
       }
-    }
 
-    this.signalListenerRemover && this.signalListenerRemover();
-    await this._openPosition(posDir);
-    eventBus.emit(EEventBusEventType.StateChange);
+      // Skip if already have a position
+      if (this.bot.currActivePosition) {
+        return;
+      }
+
+      const priceNum = new BigNumber(price);
+      let shouldEnter = false;
+      let posDir: TPositionSide | null = null;
+
+      // Check for breakout above resistance (enter long)
+      if (priceNum.gte(this.bot.currentResistance)) {
+        shouldEnter = true;
+        posDir = "long";
+        TelegramService.queueMsg(`📈 Breakout above resistance detected: Price ${price} >= Resistance ${this.bot.currentResistance}`);
+      }
+      // Check for breakdown below support (enter short)
+      else if (priceNum.lte(this.bot.currentSupport)) {
+        shouldEnter = true;
+        posDir = "short";
+        TelegramService.queueMsg(`📉 Breakdown below support detected: Price ${price} <= Support ${this.bot.currentSupport}`);
+      }
+
+      if (shouldEnter && posDir) {
+        this.priceListenerRemover && this.priceListenerRemover();
+        await this._openPosition(posDir);
+        eventBus.emit(EEventBusEventType.StateChange);
+      }
+    });
   }
 
   private async _closeCurrentPosition() {
@@ -177,6 +177,7 @@ Price Diff(pips): ${icon} ${priceDiff}
 
   async onExit() {
     console.log("Exiting BB Wait For Entry State");
+    this.priceListenerRemover && this.priceListenerRemover();
   }
 }
 
