@@ -52,6 +52,19 @@ module.exports = {
       out_file: './logs/dubai-sub-1-out.log',
       log_file: './logs/dubai-sub-1-combined.log',
       time: true
+    },
+    {
+      name: 'thuan4work',
+      script: 'node dist/index.js',
+      instances: 1,
+      autorestart: false,
+      watch: false,
+      max_memory_restart: '3G',
+      env_file: './env-files/thuan4work.env',
+      error_file: './logs/thuan4work-err.log',
+      out_file: './logs/thuan4work-out.log',
+      log_file: './logs/thuan4work-combined.log',
+      time: true
     }
   ]
   // Other accounts can be added below here
