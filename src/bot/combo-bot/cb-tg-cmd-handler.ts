@@ -393,17 +393,17 @@ New bet rules: ${this.bot.cbUtil.getBetRulesMsg()}`;
 
     TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_LONG, () => {
       console.log("Broadcasting open-long");
-      this.bot.cbWsSignaling.broadcast("open-long", "10");
+      this.bot.cbWsServer.broadcast("open-long", "10");
     });
 
     TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_SHORT, () => {
       console.log("Broadcasting open-short");
-      this.bot.cbWsSignaling.broadcast("open-short", "10");
+      this.bot.cbWsServer.broadcast("open-short", "10");
     });
 
     TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, () => {
       console.log("Broadcasting close-position");
-      this.bot.cbWsSignaling.broadcast("close-position");
+      this.bot.cbWsServer.broadcast("close-position");
     });
   }
 }

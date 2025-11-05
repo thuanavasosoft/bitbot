@@ -127,7 +127,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 
     const closedPosition = await (async () => {
       for (let i = 0; i < 10; i++) { // Try 10 times
-        this.bot.cbWsSignaling.broadcast("close-position");
+        this.bot.cbWsServer.broadcast("close-position");
         await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds before checking closed position again
 
         console.log("Fetching position for this position id: ", this.bot.currActivePosition!.id!);

@@ -84,6 +84,7 @@ Current Quote Balance (100%): ${this.bot.currQuoteBalance} USDT
     console.log(msg);
     TelegramService.queueMsg(msg);
 
+    if (!this.bot.cbWsClient.isConnected) await this.bot.cbWsClient.connect()
     if (!this.bot.cbTrendWatcher.isTrendWatcherStarted) this.bot.cbTrendWatcher.startWatchCandlesTrend()
 
     eventBus.emit(EEventBusEventType.StateChange);

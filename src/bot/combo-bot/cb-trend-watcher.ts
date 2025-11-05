@@ -5,13 +5,32 @@ import { generateImageOfCandles } from "@/utils/image-generator.util";
 import TelegramService from "@/services/telegram.service";
 
 export interface ICandlesData {
-  candlesImageData: any,
+  candlesImage: any,
   candlesTrend: TAiCandleTrendDirection,
   closePrice: number,
 }
 
+interface IAITrendUpdateMsgData {
+  identifier: string;
+  candlesTrend: TAiCandleTrendDirection;
+  closePrice: number;
+  candlesImage: string;
+  rollWindowInHours: number;
+  symbol: string;
+}
+
+interface IAITrendUpdateMsg {
+  type: "ai-trend-update"
+  data: IAITrendUpdateMsgData;
+}
+
+type ITMWsMsg = IAITrendUpdateMsg
+
 class CBTrendWatcher {
-  private _currBigCandlesData?: ICandlesData;
+  private currBigCandlesData!: ICandlesData;
+  private currBigCandlesVer: number = 0;
+  private currSmallCandlesData!: ICandlesData;
+  private currSmallCandlesVer: number = 0;
   private _candlesTrendListener?: (bigCandlesData: ICandlesData, smallCandlesData: ICandlesData) => void;
   isTrendWatcherStarted: boolean = false;
 
@@ -23,82 +42,76 @@ class CBTrendWatcher {
     return () => this._candlesTrendListener = undefined;
   }
 
+  private _checkCandlesCombo() {
+    TelegramService.queueMsg(`ℹ️ Bet rules for ${this.currBigCandlesData.candlesTrend}-${this.currSmallCandlesData.candlesTrend}: ${this.bot.betRules[this.currBigCandlesData.candlesTrend][this.currSmallCandlesData.candlesTrend].toLocaleUpperCase()}`);
+    this._candlesTrendListener && this._candlesTrendListener(this.currBigCandlesData, this.currSmallCandlesData);
+
+  }
+
   async startWatchCandlesTrend() {
     if (this.isTrendWatcherStarted) return;
     this.isTrendWatcherStarted = true;
+
     let checkAttempt = -1;
+    const isNotNecessaryToCheckSmallOnCheckBig = this.bot.bigCandlesRollWindowInHours === this.bot.smallCandlesRollWindowInHours;
 
-    while (true) {
-      if (this.bot.isSleeping) {
-        await new Promise(r => setTimeout(r, 5000));
-        continue;
-      }
-      if (this.bot.connectedClientsAmt === 0) {
-        TelegramService.queueMsg("❗ No clients connected yet, waiting for client to be connected to continue...");
+    this.bot.cbWsClient.client.addEventListener("message", async (rawMsg) => {
+      const msg = JSON.parse(rawMsg.data) as ITMWsMsg;
 
-        while (true) {
-          if (this.bot.connectedClientsAmt > 0) {
-            TelegramService.queueMsg("✅ Client connected, continuing to wait for signal...");
-            break;
+      if (msg.type === "ai-trend-update") {
+        const data = msg.data;
+        console.log("data.identifier: ", data.identifier);
+
+        if (data.identifier.includes("for-big")) {
+          await new Promise(r => setTimeout(r, 1000))
+
+          this.currBigCandlesData = data;
+          console.log("Updating big candles version");
+          this.currBigCandlesVer++;
+
+          TelegramService.queueMsg(Buffer.from(data.candlesImage, 'base64'));
+          TelegramService.queueMsg(`ℹ️ New ${isNotNecessaryToCheckSmallOnCheckBig ? "Big and Small" : "Big"} ${this.bot.bigCandlesRollWindowInHours}H trend check for result: ${data.candlesTrend} - price: ${data.closePrice}`);
+
+          if (isNotNecessaryToCheckSmallOnCheckBig && checkAttempt === 0) {
+            this.currSmallCandlesData = data;
+            this._checkCandlesCombo();
           }
-          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second before checking again
+        }
+
+        if (data.identifier.includes("for-small")) {
+          const divisible = Math.floor(this.bot.bigAiTrendIntervalCheckInMinutes / this.bot.smallAiTrendIntervalCheckInMinutes);
+          checkAttempt = (checkAttempt + 1) % (divisible);
+
+          if (!isNotNecessaryToCheckSmallOnCheckBig || (isNotNecessaryToCheckSmallOnCheckBig && checkAttempt !== 0)) {
+            this.currSmallCandlesData = data;
+            this.currSmallCandlesVer = (this.currSmallCandlesVer + 1) % divisible
+
+            if (this.currSmallCandlesVer % divisible === 0) this.currBigCandlesVer = 0;
+            if (this.currSmallCandlesVer === 1) while (this.currBigCandlesVer < 1) await new Promise(r => setTimeout(r, 100))
+
+            TelegramService.queueMsg(Buffer.from(data.candlesImage, 'base64'));
+            TelegramService.queueMsg(`ℹ️ New Small ${data.rollWindowInHours}H trend check for result: ${data.candlesTrend} - price: ${data.closePrice}`);
+          }
+
+          this._checkCandlesCombo()
         }
       }
+    });
 
-      checkAttempt = (checkAttempt + 1) % ((this.bot.bigAiTrendIntervalCheckInMinutes / this.bot.smallAiTrendIntervalCheckInMinutes));
-
-      const isNecessaryToCheckBig = !this._currBigCandlesData || checkAttempt === 0;
-      const isNotNecessaryToCheckSmall = (this.bot.bigCandlesRollWindowInHours === this.bot.smallCandlesRollWindowInHours && checkAttempt === 0);
-
-      const candlesEndDate = new Date();
-      let [bigCandlesData, smallCandlesData] = await Promise.all([
-        isNecessaryToCheckBig ? this._getCandlesData(candlesEndDate, this.bot.bigCandlesRollWindowInHours) : Promise.resolve(this._currBigCandlesData!),
-        isNotNecessaryToCheckSmall ? Promise.resolve(undefined as any as ICandlesData) : this._getCandlesData(candlesEndDate, this.bot.smallCandlesRollWindowInHours)
-      ]);
-
-      if (isNotNecessaryToCheckSmall) smallCandlesData = bigCandlesData
-      this._currBigCandlesData = bigCandlesData;
-
-      if (checkAttempt === 0) {
-        TelegramService.queueMsg(bigCandlesData.candlesImageData);
-        TelegramService.queueMsg(`ℹ️ New ${isNotNecessaryToCheckSmall ? "Big and Small" : "Big"} ${this.bot.bigCandlesRollWindowInHours}H breakout trend check for result: ${bigCandlesData.candlesTrend} - price: ${bigCandlesData.closePrice}`);
-      }
-
-      if (!isNotNecessaryToCheckSmall) {
-        TelegramService.queueMsg(smallCandlesData.candlesImageData);
-        TelegramService.queueMsg(`ℹ️ New Small ${this.bot.smallCandlesRollWindowInHours}H breakout trend check for result: ${smallCandlesData.candlesTrend} - price: ${smallCandlesData.closePrice}`);
-      }
-
-      TelegramService.queueMsg(`ℹ️ Bet rules for ${bigCandlesData.candlesTrend}-${smallCandlesData.candlesTrend}: ${this.bot.betRules[bigCandlesData.candlesTrend][smallCandlesData.candlesTrend].toLocaleUpperCase()}`);
-      this._candlesTrendListener && this._candlesTrendListener(bigCandlesData, smallCandlesData);
-
-      await this._waitForNextCheck(this.bot.smallAiTrendIntervalCheckInMinutes);
-    }
+    this.subscribeToTrendManager(this.bot.runId + "-for-big", this.bot.symbol, this.bot.bigCandlesRollWindowInHours, this.bot.bigAiTrendIntervalCheckInMinutes);
+    this.subscribeToTrendManager(this.bot.runId + "-for-small", this.bot.symbol, this.bot.smallCandlesRollWindowInHours, this.bot.smallAiTrendIntervalCheckInMinutes);
   }
 
-  private async _waitForNextCheck(delayInMin: number) {
-    const now = new Date();
-
-    const nextIntervalCheckMinutes = new Date(now.getTime());
-    nextIntervalCheckMinutes.setSeconds(0, 0);
-
-    if (now.getSeconds() > 0 || now.getMilliseconds() > 0) nextIntervalCheckMinutes.setMinutes(now.getMinutes() + delayInMin);
-    const waitInMs = nextIntervalCheckMinutes.getTime() - now.getTime();
-
-    await new Promise(r => setTimeout(r, waitInMs));
-  }
-
-  private async _getCandlesData(candlesEndDate: Date, rollWindowInHours: number): Promise<ICandlesData> {
-    const candlesStartDate = new Date(candlesEndDate.getTime() - (rollWindowInHours * 60 * 60 * 1000));
-    const candles = await ExchangeService.getCandles(this.bot.symbol, candlesStartDate, candlesEndDate, "1Min");
-    const grokCandlesImageData = await generateImageOfCandles(this.bot.symbol, candles);
-
-    const [candlesTrend, tgImageData] = await Promise.all([
-      this.bot.grokAi.analyzeBreakOutTrend(grokCandlesImageData),
-      generateImageOfCandles(this.bot.symbol, candles, false, undefined, this.bot.currActivePosition),
-    ]);
-
-    return { candlesImageData: tgImageData, candlesTrend, closePrice: candles[candles.length - 1].closePrice };
+  subscribeToTrendManager(identifier: string, symbol: string, candlesRollWindowInHours: number, trendCheckIntervalInMinutes: number) {
+    this.bot.cbWsClient.sendMsg(JSON.stringify({
+      "type": "subscribe-trend",
+      "data": {
+        "identifier": identifier,
+        "symbol": symbol,
+        "rollWindowInHours": candlesRollWindowInHours,
+        "checkIntervalInMinutes": trendCheckIntervalInMinutes,
+      }
+    }), true);
   }
 }
 
