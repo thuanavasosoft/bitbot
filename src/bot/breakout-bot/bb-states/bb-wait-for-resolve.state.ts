@@ -42,32 +42,35 @@ class BBWaitForResolveState implements BBState {
       let shouldExit = false;
       let exitReason = "";
 
-      // Check take profit first (using BigNumber for precision)
+      // Check stop loss first (using BigNumber for precision)
       const entryPrice = new BigNumber(position.avgPrice);
-      const takeProfitMultiplier = new BigNumber(this.bot.takeProfitPercentage).div(100);
+      const stopLossMultiplier = new BigNumber(this.bot.stopLossPercentage).div(100);
       
-      const takeProfitPrice = position.side === "long" 
-        ? entryPrice.times(new BigNumber(1).plus(takeProfitMultiplier))
-        : entryPrice.times(new BigNumber(1).minus(takeProfitMultiplier));
+      const stopLossPrice = position.side === "long" 
+        ? entryPrice.times(new BigNumber(1).minus(stopLossMultiplier))
+        : entryPrice.times(new BigNumber(1).plus(stopLossMultiplier));
 
-      if (position.side === "long" && new BigNumber(price).gte(takeProfitPrice)) {
+      if (position.side === "long" && new BigNumber(price).lte(stopLossPrice)) {
         shouldExit = true;
-        exitReason = "take_profit";
-        TelegramService.queueMsg(`💰 Take profit triggered (${this.bot.takeProfitPercentage}%): Long position - Price ${price} >= TP ${takeProfitPrice.toFixed(4)}`);
-      } else if (position.side === "short" && new BigNumber(price).lte(takeProfitPrice)) {
+        exitReason = "stop_loss";
+        TelegramService.queueMsg(`🛑 Stop loss triggered (${this.bot.stopLossPercentage}%): Long position - Price ${price} <= SL ${stopLossPrice.toFixed(4)}`);
+      } else if (position.side === "short" && new BigNumber(price).gte(stopLossPrice)) {
         shouldExit = true;
-        exitReason = "take_profit";
-        TelegramService.queueMsg(`💰 Take profit triggered (${this.bot.takeProfitPercentage}%): Short position - Price ${price} <= TP ${takeProfitPrice.toFixed(4)}`);
+        exitReason = "stop_loss";
+        TelegramService.queueMsg(`🛑 Stop loss triggered (${this.bot.stopLossPercentage}%): Short position - Price ${price} >= SL ${stopLossPrice.toFixed(4)}`);
       }
-      // Check support/resistance exits
-      else if (position.side === "long" && new BigNumber(price).lte(this.bot.currentSupport)) {
-        shouldExit = true;
-        exitReason = "support_resistance";
-        TelegramService.queueMsg(`📉 Long position exit trigger: Price ${price} <= Support ${this.bot.currentSupport}`);
-      } else if (position.side === "short" && new BigNumber(price).gte(this.bot.currentResistance)) {
-        shouldExit = true;
-        exitReason = "support_resistance";
-        TelegramService.queueMsg(`📈 Short position exit trigger: Price ${price} >= Resistance ${this.bot.currentResistance}`);
+      
+      // Check support/resistance exits (independent check)
+      if (!shouldExit && this.bot.currentSupport !== null && this.bot.currentResistance !== null) {
+        if (position.side === "long" && new BigNumber(price).gte(this.bot.currentResistance)) {
+          shouldExit = true;
+          exitReason = "support_resistance";
+          TelegramService.queueMsg(`📈 Long position exit trigger: Price ${price} >= Resistance ${this.bot.currentResistance}`);
+        } else if (position.side === "short" && new BigNumber(price).lte(this.bot.currentSupport)) {
+          shouldExit = true;
+          exitReason = "support_resistance";
+          TelegramService.queueMsg(`📉 Short position exit trigger: Price ${price} <= Support ${this.bot.currentSupport}`);
+        }
       }
 
       if (shouldExit) {
