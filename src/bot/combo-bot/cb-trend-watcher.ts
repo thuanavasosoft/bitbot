@@ -63,8 +63,6 @@ class CBTrendWatcher {
         console.log("data.identifier: ", data.identifier);
 
         if (data.identifier.includes("for-big")) {
-          await new Promise(r => setTimeout(r, 1000))
-
           this.currBigCandlesData = data;
           console.log("Updating big candles version");
           this.currBigCandlesVer++;
