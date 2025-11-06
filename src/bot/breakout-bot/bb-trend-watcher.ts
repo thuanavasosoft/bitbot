@@ -3,6 +3,7 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { generateImageOfCandlesWithSupportResistance } from "@/utils/image-generator.util";
 import TelegramService from "@/services/telegram.service";
 import { calculateBreakoutSignal, SignalResult } from "./breakout-helpers";
+import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 
 export interface ISignalData {
   signalImageData: Buffer;
@@ -10,14 +11,31 @@ export interface ISignalData {
   closePrice: number;
 }
 
+interface IPriceTick {
+  price: number;
+  timestamp: number;
+}
+
 class BBTrendWatcher {
   isTrendWatcherStarted: boolean = false;
+  private websocketTicks: IPriceTick[] = [];
+  // private priceListenerRemover?: () => void;
+  private readonly CLEANUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(private bot: BreakoutBot) { }
 
   async startWatchBreakoutSignals() {
     if (this.isTrendWatcherStarted) return;
     this.isTrendWatcherStarted = true;
+
+    // Subscribe to websocket price updates with timestamps
+    ExchangeService.hookPriceListenerWithTimestamp(
+      this.bot.symbol,
+      (price: number, timestamp: number) => {
+        this.websocketTicks.push({ price, timestamp });
+        this._cleanupOldTicks();
+      }
+    );
 
     while (true) {
       if (this.bot.isSleeping) {
@@ -56,12 +74,15 @@ class BBTrendWatcher {
         continue;
       }
 
-      const signalResult = calculateBreakoutSignal(candles, this.bot.signalParams);
+      // Build synthetic candle from websocket ticks and append to candles
+      const candlesWithSynthetic = this._buildCandlesWithSynthetic(candles);
+
+      const signalResult = calculateBreakoutSignal(candlesWithSynthetic, this.bot.signalParams);
       
       // Generate chart with support/resistance lines
       const signalImageData = await generateImageOfCandlesWithSupportResistance(
         this.bot.symbol,
-        candles,
+        candlesWithSynthetic,
         signalResult.support,
         signalResult.resistance,
         false,
@@ -72,7 +93,7 @@ class BBTrendWatcher {
       const signalData: ISignalData = {
         signalImageData,
         signalResult,
-        closePrice: candles[candles.length - 1].closePrice,
+        closePrice: candlesWithSynthetic[candlesWithSynthetic.length - 1].closePrice,
       };
 
       // Send visualization to Telegram
@@ -104,6 +125,62 @@ class BBTrendWatcher {
     const waitInMs = nextIntervalCheckMinutes.getTime() - now.getTime();
 
     await new Promise(r => setTimeout(r, waitInMs));
+  }
+
+  /**
+   * Build synthetic candle from websocket ticks and append to queried candles
+   * Synthetic candle represents the current incomplete minute
+   */
+  private _buildCandlesWithSynthetic(candles: ICandleInfo[]): ICandleInfo[] {
+    if (candles.length === 0) return candles;
+
+    const latestCandle = candles[candles.length - 1];
+    // For 1Min candles, closeTime is timestamp + 60000ms (1 minute)
+    const latestCandleCloseTime = latestCandle.timestamp + 60000;
+
+    // Filter ticks that occurred after the latest candle's closeTime
+    const relevantTicks = this.websocketTicks.filter(tick => tick.timestamp >= latestCandleCloseTime);
+
+    // If no relevant ticks, return original candles
+    if (relevantTicks.length === 0) {
+      return candles;
+    }
+
+    // Build synthetic candle
+    const prices = relevantTicks.map(tick => tick.price);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const latestTick = relevantTicks[relevantTicks.length - 1];
+
+    const syntheticCandle: ICandleInfo = {
+      timestamp: latestCandleCloseTime,
+      openPrice: latestCandle.closePrice,
+      lowPrice: minPrice,
+      highPrice: maxPrice,
+      closePrice: latestTick.price,
+    };
+
+    // Clean up ticks that are older than the latest candle's closeTime
+    this._cleanupTicksBefore(latestCandleCloseTime);
+
+    return [...candles, syntheticCandle];
+  }
+
+  /**
+   * Clean up ticks older than the specified timestamp
+   */
+  private _cleanupTicksBefore(timestamp: number): void {
+    this.websocketTicks = this.websocketTicks.filter(tick => tick.timestamp >= timestamp);
+  }
+
+  /**
+   * Clean up old ticks to prevent memory growth
+   * Removes ticks older than CLEANUP_WINDOW_MS
+   */
+  private _cleanupOldTicks(): void {
+    const now = Date.now();
+    const cutoffTime = now - this.CLEANUP_WINDOW_MS;
+    this.websocketTicks = this.websocketTicks.filter(tick => tick.timestamp >= cutoffTime);
   }
 }
 

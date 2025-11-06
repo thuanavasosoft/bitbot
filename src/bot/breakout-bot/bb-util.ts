@@ -33,8 +33,8 @@ class BBUtil {
       totalPnL: this.bot.totalActualCalculatedProfit,
     });
 
-    // Generate and send graph if we have at least 10 resolves
-    if (this.bot.pnlHistory.length >= 10) {
+    // Generate and send graph if we have at least 2 resolves
+    if (this.bot.pnlHistory.length >= 2) {
       try {
         const pnlChartImage = await generatePnLProgressionChart(this.bot.pnlHistory);
         TelegramService.queueMsg(pnlChartImage);
