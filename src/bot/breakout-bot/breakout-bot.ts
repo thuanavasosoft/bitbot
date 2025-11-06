@@ -41,6 +41,7 @@ class BreakoutBot {
 
   slippageAccumulation: number = 0;
   numberOfTrades: number = 0;
+  pnlHistory: Array<{ timestamp: number; totalPnL: number }> = [];
 
   // Current signal state
   currentSignal: "Up" | "Down" | "Kangaroo" = "Kangaroo";

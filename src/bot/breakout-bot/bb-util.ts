@@ -2,6 +2,7 @@ import TelegramService from "@/services/telegram.service";
 import BreakoutBot from "./breakout-bot";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
+import { generatePnLProgressionChart } from "@/utils/image-generator.util";
 
 class BBUtil {
   constructor(private bot: BreakoutBot) { }
@@ -24,6 +25,29 @@ class BBUtil {
     const { thisRunCurrQuoteBalance, currExchFreeUsdtBalance } = await this.updateBalance();
 
     this.bot.totalActualCalculatedProfit = new BigNumber(this.bot.totalActualCalculatedProfit).plus(iterationPnL).toNumber();
+
+    // Record PnL history
+    const currentTimestamp = Date.now();
+    this.bot.pnlHistory.push({
+      timestamp: currentTimestamp,
+      totalPnL: this.bot.totalActualCalculatedProfit,
+    });
+
+    // Generate and send graph if we have at least 10 resolves
+    if (this.bot.pnlHistory.length >= 10) {
+      try {
+        const pnlChartImage = await generatePnLProgressionChart(this.bot.pnlHistory);
+        TelegramService.queueMsg(pnlChartImage);
+        TelegramService.queueMsg(
+          `📊 PnL Progression Chart\n` +
+          `Total resolves: ${this.bot.pnlHistory.length}\n` +
+          `Current PnL: ${this.bot.totalActualCalculatedProfit >= 0 ? "🟩" : "🟥"} ${this.bot.totalActualCalculatedProfit.toFixed(4)} USDT`
+        );
+      } catch (error) {
+        console.error("Error generating PnL chart:", error);
+        TelegramService.queueMsg(`⚠️ Failed to generate PnL progression chart: ${error}`);
+      }
+    }
 
     const msg = `
 🏁 PnL Information

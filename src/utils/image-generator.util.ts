@@ -234,3 +234,104 @@ export async function generateImageOfCandlesWithSupportResistance(
   chart.destroy();
   return image;
 }
+
+export async function generatePnLProgressionChart(
+  pnlHistory: Array<{ timestamp: number; totalPnL: number }>,
+): Promise<Buffer> {
+  const canvas = createCanvas(1000, 1000);
+  const ctx = canvas.getContext('2d');
+
+  const greenColor = "#008000";
+  const redColor = "#800000";
+
+  // Format timestamps to ISO format for x-axis labels
+  const labels = pnlHistory.map((entry) => {
+    const date = new Date(entry.timestamp);
+    return date.toISOString();
+  });
+
+  // Determine line color based on latest PnL value
+  const latestPnL = pnlHistory.length > 0 ? pnlHistory[pnlHistory.length - 1].totalPnL : 0;
+  const lineColor = latestPnL >= 0 ? greenColor : redColor;
+
+  const datasets = [{
+    label: 'Total PnL (USDT)',
+    data: pnlHistory.map((entry) => entry.totalPnL),
+    fill: false,
+    borderColor: lineColor,
+    backgroundColor: lineColor,
+    tension: 0.1,
+    pointRadius: 3,
+    pointHoverRadius: 5,
+  }];
+
+  const chart = new Chart(
+    ctx,
+    {
+      type: 'line',
+      data: {
+        labels,
+        datasets,
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          title: {
+            display: true,
+            text: 'PnL Progression',
+            font: {
+              size: 16,
+              weight: 'bold',
+            },
+          },
+          legend: {
+            display: true,
+            position: 'top',
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                return `PnL: ${context.parsed?.y?.toFixed(4) ?? 0.0000} USDT`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            title: {
+              display: true,
+              text: 'Time (ISO Format)',
+            },
+            ticks: {
+              maxRotation: 45,
+              minRotation: 45,
+              callback: function(value, index) {
+                // Show every nth label to avoid overcrowding
+                const step = Math.max(1, Math.floor(labels.length / 10));
+                if (index % step === 0 || index === labels.length - 1) {
+                  return labels[index];
+                }
+                return '';
+              },
+            },
+          },
+          y: {
+            title: {
+              display: true,
+              text: 'Total PnL (USDT)',
+            },
+            ticks: {
+              callback: function(value) {
+                return Number(value).toFixed(2);
+              },
+            },
+          },
+        },
+      },
+    },
+  );
+
+  const image = canvas.toBuffer('image/png');
+  chart.destroy();
+  return image;
+}
