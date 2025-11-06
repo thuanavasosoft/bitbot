@@ -38,6 +38,13 @@ class BBWaitForResolveState implements BBState {
         return;
       }
 
+      // IMPORTANT: Only allow exit if S/R has been updated AFTER the last entry
+      // This prevents exits in the same minute as entry
+      if (this.bot.lastEntryTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastEntryTime) {
+        // Still using old S/R levels from entry minute, wait for next update
+        return;
+      }
+
       const position = this.bot.currActivePosition;
       let shouldExit = false;
       let exitReason = "";

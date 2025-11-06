@@ -118,6 +118,7 @@ class BBWaitForEntryState implements BBState {
 
     this.bot.currActivePosition = position;
     this.bot.numberOfTrades++;
+    this.bot.lastEntryTime = Date.now(); // Track when we entered
 
     const positionAvgPrice = position.avgPrice;
     const positionTriggerTs = +new Date(position.createTime);

@@ -48,6 +48,7 @@ class BreakoutBot {
   currentResistance: number | null = null;
   lastSRUpdateTime: number = 0; // Timestamp of last support/resistance update
   lastExitTime: number = 0; // Timestamp of last position exit
+  lastEntryTime: number = 0; // Timestamp of last position entry
 
   bbUtil: BBUtil;
   bbWsSignaling: BBWSSignaling;

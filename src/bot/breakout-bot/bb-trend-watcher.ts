@@ -93,13 +93,14 @@ class BBTrendWatcher {
     }
   }
 
+  private readonly SAFETY_BUFFER_MS = 10;
   private async _waitForNextCheck(delayInMin: number) {
     const now = new Date();
 
     const nextIntervalCheckMinutes = new Date(now.getTime());
-    nextIntervalCheckMinutes.setSeconds(0, 0);
+    nextIntervalCheckMinutes.setSeconds(0, this.SAFETY_BUFFER_MS);
 
-    if (now.getSeconds() > 0 || now.getMilliseconds() > 0) nextIntervalCheckMinutes.setMinutes(now.getMinutes() + delayInMin);
+    if (now.getSeconds() > 0 || now.getMilliseconds() > this.SAFETY_BUFFER_MS) nextIntervalCheckMinutes.setMinutes(now.getMinutes() + delayInMin);
     const waitInMs = nextIntervalCheckMinutes.getTime() - now.getTime();
 
     await new Promise(r => setTimeout(r, waitInMs));
