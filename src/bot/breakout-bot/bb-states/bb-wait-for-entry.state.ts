@@ -43,16 +43,16 @@ class BBWaitForEntryState implements BBState {
       let shouldEnter = false;
       let posDir: TPositionSide | null = null;
 
-      // Check for breakout above resistance (enter short)
+      // Check for breakout above resistance (enter long)
       if (priceNum.gte(this.bot.currentResistance)) {
         shouldEnter = true;
-        posDir = "short";
+        posDir = "long";
         TelegramService.queueMsg(`📈 Breakout above resistance detected: Price ${price} >= Resistance ${this.bot.currentResistance}`);
       }
-      // Check for breakdown below support (enter long)
+      // Check for breakdown below support (enter short)
       else if (priceNum.lte(this.bot.currentSupport)) {
         shouldEnter = true;
-        posDir = "long";
+        posDir = "short";
         TelegramService.queueMsg(`📉 Breakdown below support detected: Price ${price} <= Support ${this.bot.currentSupport}`);
       }
 
