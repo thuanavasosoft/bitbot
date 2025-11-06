@@ -1,7 +1,5 @@
 import { TAiCandleTrendDirection } from "@/services/grok-ai.service";
 import ComboBot from "./combo-bot";
-import ExchangeService from "@/services/exchange-service/exchange-service";
-import { generateImageOfCandles } from "@/utils/image-generator.util";
 import TelegramService from "@/services/telegram.service";
 
 export interface ICandlesData {
@@ -53,7 +51,7 @@ class CBTrendWatcher {
     this.isTrendWatcherStarted = true;
 
     let checkAttempt = -1;
-    const isNotNecessaryToCheckSmallOnCheckBig = this.bot.bigCandlesRollWindowInHours === this.bot.smallCandlesRollWindowInHours;
+    const isSameBigSmallRollWindow = this.bot.bigCandlesRollWindowInHours === this.bot.smallCandlesRollWindowInHours;
 
     this.bot.cbWsClient.client.addEventListener("message", async (rawMsg) => {
       const msg = JSON.parse(rawMsg.data) as ITMWsMsg;
@@ -68,9 +66,9 @@ class CBTrendWatcher {
           this.currBigCandlesVer++;
 
           TelegramService.queueMsg(Buffer.from(data.candlesImage, 'base64'));
-          TelegramService.queueMsg(`ℹ️ New ${isNotNecessaryToCheckSmallOnCheckBig ? "Big and Small" : "Big"} ${this.bot.bigCandlesRollWindowInHours}H trend check for result: ${data.candlesTrend} - price: ${data.closePrice}`);
+          TelegramService.queueMsg(`ℹ️ New ${isSameBigSmallRollWindow ? "Big and Small" : "Big"} ${this.bot.bigCandlesRollWindowInHours}H trend check for result: ${data.candlesTrend} - price: ${data.closePrice}`);
 
-          if (isNotNecessaryToCheckSmallOnCheckBig && checkAttempt === 0) {
+          if (isSameBigSmallRollWindow) {
             this.currSmallCandlesData = data;
             this._checkCandlesCombo();
           }
@@ -80,7 +78,7 @@ class CBTrendWatcher {
           const divisible = Math.floor(this.bot.bigAiTrendIntervalCheckInMinutes / this.bot.smallAiTrendIntervalCheckInMinutes);
           checkAttempt = (checkAttempt + 1) % (divisible);
 
-          if (!isNotNecessaryToCheckSmallOnCheckBig || (isNotNecessaryToCheckSmallOnCheckBig && checkAttempt !== 0)) {
+          if (!isSameBigSmallRollWindow || (isSameBigSmallRollWindow && checkAttempt !== 0)) {
             this.currSmallCandlesData = data;
             this.currSmallCandlesVer = (this.currSmallCandlesVer + 1) % divisible
 
@@ -89,9 +87,9 @@ class CBTrendWatcher {
 
             TelegramService.queueMsg(Buffer.from(data.candlesImage, 'base64'));
             TelegramService.queueMsg(`ℹ️ New Small ${data.rollWindowInHours}H trend check for result: ${data.candlesTrend} - price: ${data.closePrice}`);
-          }
 
-          this._checkCandlesCombo()
+            this._checkCandlesCombo()
+          }
         }
       }
     });
