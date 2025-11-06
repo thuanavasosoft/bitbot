@@ -64,46 +64,6 @@ class BBWaitForEntryState implements BBState {
     });
   }
 
-  // private async _closeCurrentPosition() {
-  //   const currLatestMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
-  //   const triggerTs = +new Date();
-
-  //   for (let i = 0; i < 10; i++) {
-  //     try {
-  //       this.bot.bbWsSignaling.broadcast("close-position");
-  //       await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
-  //       const position = await ExchangeService.getPosition(this.bot.symbol);
-  //       if (!position) {
-  //         console.log(`[Position Check] Position closed on attempt ${i + 1}`);
-  //         // Get closed position from history to update PnL
-  //         if (this.bot.currActivePosition) {
-  //           const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition.id });
-  //           const closedPos = posHistory[0];
-  //           if (closedPos) {
-  //             const slippage = new BigNumber(currLatestMarkPrice).minus(closedPos.avgPrice).toNumber();
-  //             const timeDiffMs = +new Date(closedPos.updateTime) - triggerTs;
-  //             const icon = this.bot.currActivePosition.side === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
-  //             if (icon === "🟥") {
-  //               this.bot.slippageAccumulation += Math.abs(slippage);
-  //             } else {
-  //               this.bot.slippageAccumulation -= Math.abs(slippage);
-  //             }
-  //             this.bot.numberOfTrades++;
-  //             await this.bot.bbUtil.handlePnL(closedPos.realizedPnl, false, icon, slippage, timeDiffMs);
-  //           }
-  //         }
-  //         this.bot.currActivePosition = undefined;
-  //         break;
-  //       }
-  //     } catch (error) {
-  //       console.error(`[Position Check] Error on attempt ${i + 1}: `, error);
-  //       if (i < 9) {
-  //         await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
-  //       }
-  //     }
-  //   }
-  // }
-
   private async _openPosition(posDir: TPositionSide) {
     const budget = new BigNumber(this.bot.betSize).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
 
