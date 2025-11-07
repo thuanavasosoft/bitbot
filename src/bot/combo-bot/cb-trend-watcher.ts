@@ -58,9 +58,10 @@ class CBTrendWatcher {
 
       if (msg.type === "ai-trend-update") {
         const data = msg.data;
+        const dataFor = this.bot.cbUtil.determineCandlesListenerIdentifierFor(data.identifier);
         console.log("data.identifier: ", data.identifier);
 
-        if (data.identifier.includes("for-big")) {
+        if (dataFor === "big") {
           this.currBigCandlesData = data;
           console.log("Updating big candles version");
           this.currBigCandlesVer++;
@@ -74,7 +75,7 @@ class CBTrendWatcher {
           }
         }
 
-        if (data.identifier.includes("for-small")) {
+        if (dataFor === "small") {
           const divisible = Math.floor(this.bot.bigAiTrendIntervalCheckInMinutes / this.bot.smallAiTrendIntervalCheckInMinutes);
           checkAttempt = (checkAttempt + 1) % (divisible);
 
@@ -94,13 +95,13 @@ class CBTrendWatcher {
       }
     });
 
-    this.subscribeToTrendManager(this.bot.runId + "-for-big", this.bot.symbol, this.bot.bigCandlesRollWindowInHours, this.bot.bigAiTrendIntervalCheckInMinutes);
-    this.subscribeToTrendManager(this.bot.runId + "-for-small", this.bot.symbol, this.bot.smallCandlesRollWindowInHours, this.bot.smallAiTrendIntervalCheckInMinutes);
+    this.subscribeToTrendManager(this.bot.cbUtil.getCandlesListenerIdentifier("big"), this.bot.symbol, this.bot.bigCandlesRollWindowInHours, this.bot.bigAiTrendIntervalCheckInMinutes);
+    this.subscribeToTrendManager(this.bot.cbUtil.getCandlesListenerIdentifier("small"), this.bot.symbol, this.bot.smallCandlesRollWindowInHours, this.bot.smallAiTrendIntervalCheckInMinutes);
   }
 
-  subscribeToTrendManager(identifier: string, symbol: string, candlesRollWindowInHours: number, trendCheckIntervalInMinutes: number) {
+  private subscribeToTrendManager(identifier: string, symbol: string, candlesRollWindowInHours: number, trendCheckIntervalInMinutes: number) {
     this.bot.cbWsClient.sendMsg(JSON.stringify({
-      "type": "subscribe-trend",
+      "type": "add-subscriber",
       "data": {
         "identifier": identifier,
         "symbol": symbol,

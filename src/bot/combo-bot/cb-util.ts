@@ -4,6 +4,8 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import { TAiCandleTrendDirection } from "@/services/grok-ai.service";
 
+type TCandlesListenerFor = "big" | "small"
+
 class CBUtil {
   constructor(private bot: ComboBot) { }
 
@@ -43,6 +45,24 @@ Price Diff (pips): ${icon} ${slippage}` : ""}`;
 
     console.log(msg);
     TelegramService.queueMsg(msg);
+  }
+
+  public getCandlesListenerIdentifier(usedFor: TCandlesListenerFor) {
+    return `${this.bot.runId}-${usedFor}`;
+  }
+
+  public determineCandlesListenerIdentifierFor(identifier: string): TCandlesListenerFor {
+    // The identifier is in the format `${this.bot.runId}-${usedFor}`,
+    // where `usedFor` is either "big" or "small".
+    // This function extracts "big" or "small" from the identifier.
+    if (identifier.endsWith("-big")) {
+      return "big";
+    }
+    if (identifier.endsWith("-small")) {
+      return "small";
+    }
+
+    throw new Error(`Invalid identifier: ${identifier}. Expected to end with '-big' or '-small'.`);
   }
 
   public async getExchFreeUsdtBalance(): Promise<BigNumber> {

@@ -194,6 +194,11 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
         return
       }
 
+      this.updateCandlesSubscriber(
+        this.bot.cbUtil.getCandlesListenerIdentifier("big"),
+        this.bot.symbol, this.bot.bigCandlesRollWindowInHours,
+        Number(value),
+      );
       this.bot.bigAiTrendIntervalCheckInMinutes = Number(value);
 
       const msg = `Successfully updated big candles ai trend check interval to ${value} minutes`
@@ -228,6 +233,11 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
         return
       }
 
+      this.updateCandlesSubscriber(
+        this.bot.cbUtil.getCandlesListenerIdentifier("small"),
+        this.bot.symbol, this.bot.smallCandlesRollWindowInHours,
+        Number(value),
+      );
       this.bot.smallAiTrendIntervalCheckInMinutes = Number(value);
 
       const msg = `Successfully updated small candles ai trend check interval to ${value} minutes`
@@ -258,6 +268,13 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
         return
       }
 
+      this.updateCandlesSubscriber(
+        this.bot.cbUtil.getCandlesListenerIdentifier("big"),
+        this.bot.symbol, this.bot.bigCandlesRollWindowInHours,
+        this.bot.bigAiTrendIntervalCheckInMinutes,
+        this.bot.symbol,
+        Number(value)
+      );
       this.bot.bigCandlesRollWindowInHours = Number(value);
 
       const msg = `Successfully big candles roll window to ${value} hours`
@@ -288,6 +305,13 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
         return
       }
 
+      this.updateCandlesSubscriber(
+        this.bot.cbUtil.getCandlesListenerIdentifier("small"),
+        this.bot.symbol, this.bot.smallCandlesRollWindowInHours,
+        this.bot.smallAiTrendIntervalCheckInMinutes,
+        this.bot.symbol,
+        Number(value)
+      );
       this.bot.smallCandlesRollWindowInHours = Number(value);
 
       const msg = `Successfully small candles roll window to ${value} hours`
@@ -405,6 +429,20 @@ New bet rules: ${this.bot.cbUtil.getBetRulesMsg()}`;
       console.log("Broadcasting close-position");
       this.bot.cbWsServer.broadcast("close-position");
     });
+  }
+
+  private updateCandlesSubscriber(identifier: string, symbol: string, candlesRollWindowInHours: number, trendCheckIntervalInMinutes: number, newSymbol?: string, newRollWindowInHours?: number) {
+    this.bot.cbWsClient.sendMsg(JSON.stringify({
+      "type": "update-subscriber",
+      "data": {
+        "identifier": identifier,
+        "symbol": symbol,
+        "rollWindowInHours": candlesRollWindowInHours,
+        "checkIntervalInMinutes": trendCheckIntervalInMinutes,
+        "newSymbol": newSymbol,
+        "newRollWindowInHours": newRollWindowInHours,
+      }
+    }), true);
   }
 }
 
