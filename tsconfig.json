@@ -23,7 +23,7 @@
     "noEmitOnError": true, 
     // don't emit JS on TS errors /* === Useful Debug Options === */ 
     "pretty": true, 
-    "noUnusedLocals": true, 
+    // "noUnusedLocals": true, 
     "noUnusedParameters": false, 
     "noFallthroughCasesInSwitch": true,
     "downlevelIteration": true,
