@@ -51,6 +51,10 @@ class BreakoutBot {
   lastExitTime: number = 0; // Timestamp of last position exit
   lastEntryTime: number = 0; // Timestamp of last position entry
 
+  tradingMode: "against" | "follow" = "against"; // Trading mode: "against" enters opposite direction, "follow" enters same direction
+  lastFlipTime: number = Date.now(); // Timestamp of last mode flip
+  tradePnLHistory: Array<{ timestamp: number; pnl: number }> = []; // Individual trade PnL history
+
   bbUtil: BBUtil;
   bbWsSignaling: BBWSSignaling;
   bbTrendWatcher: BBTrendWatcher;

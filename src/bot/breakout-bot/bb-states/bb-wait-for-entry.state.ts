@@ -43,17 +43,23 @@ class BBWaitForEntryState implements BBState {
       let shouldEnter = false;
       let posDir: TPositionSide | null = null;
 
-      // Check for breakout above resistance (enter long)
+      // Determine entry direction based on trading mode
       if (priceNum.gte(this.bot.currentResistance)) {
         shouldEnter = true;
-        posDir = "long";
-        TelegramService.queueMsg(`📈 Breakout above resistance detected: Price ${price} >= Resistance ${this.bot.currentResistance}`);
+        // "against" mode: enter SHORT when price >= resistance
+        // "follow" mode: enter LONG when price >= resistance
+        posDir = this.bot.tradingMode === "against" ? "short" : "long";
+        const modeDesc = this.bot.tradingMode === "against" ? "SHORT (against)" : "LONG (follow)";
+        TelegramService.queueMsg(`📈 Breakout above resistance detected: Price ${price} >= Resistance ${this.bot.currentResistance} - Entering ${modeDesc}`);
       }
-      // Check for breakdown below support (enter short)
+      // Check for breakdown below support
       else if (priceNum.lte(this.bot.currentSupport)) {
         shouldEnter = true;
-        posDir = "short";
-        TelegramService.queueMsg(`📉 Breakdown below support detected: Price ${price} <= Support ${this.bot.currentSupport}`);
+        // "against" mode: enter LONG when price <= support
+        // "follow" mode: enter SHORT when price <= support
+        posDir = this.bot.tradingMode === "against" ? "long" : "short";
+        const modeDesc = this.bot.tradingMode === "against" ? "LONG (against)" : "SHORT (follow)";
+        TelegramService.queueMsg(`📉 Breakdown below support detected: Price ${price} <= Support ${this.bot.currentSupport} - Entering ${modeDesc}`);
       }
 
       if (shouldEnter && posDir) {

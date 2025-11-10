@@ -117,6 +117,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 `);
           this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
           this.bot.bbUtil.handlePnL(closedPos.realizedPnl, true);
+          
           clearInterval(intervalId);
           this.bot.currActivePosition = undefined;
           this.bot.lastExitTime = Date.now(); // Track when we exited (liquidation)

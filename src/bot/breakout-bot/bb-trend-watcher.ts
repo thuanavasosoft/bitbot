@@ -4,6 +4,7 @@ import { generateImageOfCandlesWithSupportResistance } from "@/utils/image-gener
 import TelegramService from "@/services/telegram.service";
 import { calculateBreakoutSignal, SignalResult } from "./breakout-helpers";
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
+import BigNumber from "bignumber.js";
 
 export interface ISignalData {
   signalImageData: Buffer;
@@ -79,12 +80,29 @@ class BBTrendWatcher {
 
       const signalResult = calculateBreakoutSignal(candlesWithSynthetic, this.bot.signalParams);
       
-      // Generate chart with support/resistance lines
+      // Halve support/resistance distance from current price
+      const currentPrice = candlesWithSynthetic[candlesWithSynthetic.length - 1].closePrice;
+      let adjustedSupport = signalResult.support;
+      let adjustedResistance = signalResult.resistance;
+      
+      if (signalResult.resistance !== null) {
+        // New resistance = currentPrice + (originalResistance - currentPrice) / 2
+        const distance = new BigNumber(signalResult.resistance).minus(currentPrice).div(2);
+        adjustedResistance = new BigNumber(currentPrice).plus(distance).toNumber();
+      }
+      
+      if (signalResult.support !== null) {
+        // New support = currentPrice - (currentPrice - originalSupport) / 2
+        const distance = new BigNumber(currentPrice).minus(signalResult.support).div(2);
+        adjustedSupport = new BigNumber(currentPrice).minus(distance).toNumber();
+      }
+      
+      // Generate chart with adjusted support/resistance lines
       const signalImageData = await generateImageOfCandlesWithSupportResistance(
         this.bot.symbol,
         candlesWithSynthetic,
-        signalResult.support,
-        signalResult.resistance,
+        adjustedSupport,
+        adjustedResistance,
         false,
         candlesEndDate,
         this.bot.currActivePosition
@@ -93,21 +111,21 @@ class BBTrendWatcher {
       const signalData: ISignalData = {
         signalImageData,
         signalResult,
-        closePrice: candlesWithSynthetic[candlesWithSynthetic.length - 1].closePrice,
+        closePrice: currentPrice,
       };
 
       // Send visualization to Telegram
       TelegramService.queueMsg(signalImageData);
       TelegramService.queueMsg(
         `ℹ️ Breakout signal check result: ${signalResult.signal} - Price: ${signalData.closePrice.toFixed(4)}\n` +
-        `Support: ${signalResult.support !== null ? signalResult.support.toFixed(4) : 'N/A'}\n` +
-        `Resistance: ${signalResult.resistance !== null ? signalResult.resistance.toFixed(4) : 'N/A'}`
+        `Support: ${adjustedSupport !== null ? adjustedSupport.toFixed(4) : 'N/A'}\n` +
+        `Resistance: ${adjustedResistance !== null ? adjustedResistance.toFixed(4) : 'N/A'}`
       );
 
-      // Update bot's current signal levels
+      // Update bot's current signal levels with adjusted values
       this.bot.currentSignal = signalResult.signal;
-      this.bot.currentSupport = signalResult.support;
-      this.bot.currentResistance = signalResult.resistance;
+      this.bot.currentSupport = adjustedSupport;
+      this.bot.currentResistance = adjustedResistance;
       this.bot.lastSRUpdateTime = Date.now(); // Track when S/R was updated
 
       await this._waitForNextCheck(this.bot.checkIntervalMinutes);
