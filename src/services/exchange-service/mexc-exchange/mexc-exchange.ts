@@ -19,6 +19,7 @@ class MexcExchange implements IExchangeInstance {
   private _pingerTimer?: NodeJS.Timeout;
 
   private _priceListenerCallbacks: { [symbol: string]: { [id: string]: (price: number) => void } } = {};
+  private _priceTimestampListenerCallbacks: { [symbol: string]: { [id: string]: (price: number, timestamp: number) => void } } = {};
 
   constructor(apiKey: string, secretKey: string, symbols: string[]) {
     this._apiKey = apiKey;
@@ -79,10 +80,19 @@ class MexcExchange implements IExchangeInstance {
 
       if (data.channel === "push.ticker" && !!data.data.lastPrice) {
         this._prices[data.data.symbol] = data.data.lastPrice;
+        const timestamp = data.data.timestamp || data.ts || Date.now();
+        
         if (!!this._priceListenerCallbacks[data.data.symbol]) {
           for (const id in this._priceListenerCallbacks[data.data.symbol]) {
             const callback = this._priceListenerCallbacks[data.data.symbol][id];
             callback(data.data.lastPrice);
+          }
+        }
+        
+        if (!!this._priceTimestampListenerCallbacks[data.data.symbol]) {
+          for (const id in this._priceTimestampListenerCallbacks[data.data.symbol]) {
+            const callback = this._priceTimestampListenerCallbacks[data.data.symbol][id];
+            callback(data.data.lastPrice, timestamp);
           }
         }
       }
@@ -508,6 +518,21 @@ class MexcExchange implements IExchangeInstance {
       console.log(`[MEXC]: Finished hook price listener ${symbol} ${id}`);
       delete this._priceListenerCallbacks[symbol][id]
       console.log(`[MEXC]: Callbacks for ${symbol}: ${Object.keys(this._priceListenerCallbacks[symbol])}`);
+    }
+  }
+
+  hookPriceListenerWithTimestamp(symbol: string, callback: (price: number, timestamp: number) => void): () => void {
+    const id = generateRandomString(4);
+    console.log(`[MEXC]: Hook price listener with timestamp ${symbol} ${id}`);
+
+    if (!this._priceTimestampListenerCallbacks[symbol]) this._priceTimestampListenerCallbacks[symbol] = {};
+    this._priceTimestampListenerCallbacks[symbol][id] = callback;
+    console.log(`[MEXC]: Price+timestamp callbacks for ${symbol}: ${Object.keys(this._priceTimestampListenerCallbacks[symbol])}`);
+
+    return () => {
+      console.log(`[MEXC]: Finished hook price listener with timestamp ${symbol} ${id}`);
+      delete this._priceTimestampListenerCallbacks[symbol][id]
+      console.log(`[MEXC]: Price+timestamp callbacks for ${symbol}: ${Object.keys(this._priceTimestampListenerCallbacks[symbol])}`);
     }
   }
 

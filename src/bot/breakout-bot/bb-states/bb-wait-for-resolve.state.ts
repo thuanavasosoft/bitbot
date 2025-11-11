@@ -1,6 +1,6 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BreakoutBot, { BBState } from "../breakout-bot";
-import { calc_UnrealizedPnl, parseDurationStringIntoMs } from "@/utils/maths.util";
+import { parseDurationStringIntoMs } from "@/utils/maths.util";
 import TelegramService from "@/services/telegram.service";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import BigNumber from "bignumber.js";
@@ -38,23 +38,31 @@ class BBWaitForResolveState implements BBState {
         return;
       }
 
+      // IMPORTANT: Only allow exit if S/R has been updated AFTER the last entry
+      // This prevents exits in the same minute as entry
+      if (this.bot.lastEntryTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastEntryTime) {
+        // Still using old S/R levels from entry minute, wait for next update
+        return;
+      }
+
       const position = this.bot.currActivePosition;
       let shouldExit = false;
+      let exitReason = "";
 
-      // Long position exits at support
+      // Check support/resistance exits
       if (position.side === "long" && new BigNumber(price).lte(this.bot.currentSupport)) {
         shouldExit = true;
+        exitReason = "support_resistance";
         TelegramService.queueMsg(`📉 Long position exit trigger: Price ${price} <= Support ${this.bot.currentSupport}`);
-      }
-      // Short position exits at resistance
-      else if (position.side === "short" && new BigNumber(price).gte(this.bot.currentResistance)) {
+      } else if (position.side === "short" && new BigNumber(price).gte(this.bot.currentResistance)) {
         shouldExit = true;
+        exitReason = "support_resistance";
         TelegramService.queueMsg(`📈 Short position exit trigger: Price ${price} >= Resistance ${this.bot.currentResistance}`);
       }
 
       if (shouldExit) {
         this.priceListenerRemover && this.priceListenerRemover();
-        await this._closeCurrPosition("support_resistance");
+        await this._closeCurrPosition(exitReason);
       }
     });
   }
@@ -109,8 +117,10 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 `);
           this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
           this.bot.bbUtil.handlePnL(closedPos.realizedPnl, true);
+          
           clearInterval(intervalId);
           this.bot.currActivePosition = undefined;
+          this.bot.lastExitTime = Date.now(); // Track when we exited (liquidation)
           eventBus.emit(EEventBusEventType.StateChange);
         }
 
@@ -171,6 +181,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     this.bot.entryWsPrice = undefined;
     this.bot.resolveWsPrice = undefined;
     this.bot.numberOfTrades++;
+    this.bot.lastExitTime = Date.now(); // Track when we exited
 
     await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl, false, icon, slippage, timeDiffMs);
     

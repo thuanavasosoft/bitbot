@@ -41,11 +41,19 @@ class BreakoutBot {
 
   slippageAccumulation: number = 0;
   numberOfTrades: number = 0;
+  pnlHistory: Array<{ timestamp: number; totalPnL: number }> = [];
 
   // Current signal state
   currentSignal: "Up" | "Down" | "Kangaroo" = "Kangaroo";
   currentSupport: number | null = null;
   currentResistance: number | null = null;
+  lastSRUpdateTime: number = 0; // Timestamp of last support/resistance update
+  lastExitTime: number = 0; // Timestamp of last position exit
+  lastEntryTime: number = 0; // Timestamp of last position entry
+
+  tradingMode: "against" | "follow" = "against"; // Trading mode: "against" enters opposite direction, "follow" enters same direction
+  lastFlipTime: number = Date.now(); // Timestamp of last mode flip
+  tradePnLHistory: Array<{ timestamp: number; pnl: number }> = []; // Individual trade PnL history
 
   bbUtil: BBUtil;
   bbWsSignaling: BBWSSignaling;

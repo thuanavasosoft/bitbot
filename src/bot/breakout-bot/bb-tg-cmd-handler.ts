@@ -10,6 +10,7 @@ enum EBBotCommand {
   OPEN_LONG = "open_long",
   OPEN_SHORT = "open_short",
   CLOSE_POSITION = "close_position",
+  FLIP = "flip",
 }
 
 class BBTgCmdHandler {
@@ -44,10 +45,12 @@ ${!!position && getPositionDetailMsg(position)}`
         | ETGCommand.FullUpdate
         | ETGCommand.Help
         | EBBotCommand.UPDATE_BET_SIZE
+        | EBBotCommand.FLIP
       > = {
         [ETGCommand.FullUpdate]: "To get full updated bot information",
         [ETGCommand.Help]: "To get command list information",
         [EBBotCommand.UPDATE_BET_SIZE]: `To update the bet size /${EBBotCommand.UPDATE_BET_SIZE} 1000`,
+        [EBBotCommand.FLIP]: "To manually flip trading mode (against ↔ follow)",
       }
 
       let msg = ``;
@@ -160,6 +163,10 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
     TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, () => {
       console.log("Broadcasting close-position");
       this.bot.bbWsSignaling.broadcast("close-position");
+    });
+
+    TelegramService.appendTgCmdHandler(EBBotCommand.FLIP, () => {
+      this.bot.bbUtil.flipTradingMode();
     });
   }
 }

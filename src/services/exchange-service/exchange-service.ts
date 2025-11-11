@@ -19,6 +19,7 @@ export interface IExchangeInstance {
   getOrderDetail: (symbol: string, clientOrderId: string) => Promise<IOrder | undefined>;
   cancelOrder(symbol: string, clientOrderId: string): Promise<ICancelOrderResponse>;
   hookPriceListener: (symbol: string, callback: (price: number) => void) => () => void;
+  hookPriceListenerWithTimestamp: (symbol: string, callback: (price: number, timestamp: number) => void) => () => void;
   hookOrderListener: (callback: (order: IWSOrderUpdate) => void) => () => void;
 }
 
@@ -90,6 +91,10 @@ class ExchangeService {
 
   static hookPriceListener(symbol: string, callback: (price: number) => void): () => void {
     return this.exchangeInstance.hookPriceListener(symbol, callback);
+  }
+
+  static hookPriceListenerWithTimestamp(symbol: string, callback: (price: number, timestamp: number) => void): () => void {
+    return this.exchangeInstance.hookPriceListenerWithTimestamp(symbol, callback);
   }
 
   static hookOrderListener(callback: (item: IWSOrderUpdate) => void): () => void {

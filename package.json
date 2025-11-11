@@ -7,7 +7,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "npm run build && npm run start:prod",
-    "build": "npx tsc && npx tsc-alias -p tsconfig.json && node fix-imports.js",
+    "build": "rm -rf dist && npx tsc && npx tsc-alias -p tsconfig.json && node fix-imports.js",
     "start:prod": "node dist/index.js",
     "drizzle-db-pull": "drizzle-kit introspect"
   },
