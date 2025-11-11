@@ -1,13 +1,15 @@
 import { IPosition } from "@/services/exchange-service/exchange-type";
 import GrokAiService, { TAiCandleTrendDirection } from "@/services/grok-ai.service";
 import CBUtil from "./cb-util";
-import CBWSSignaling from "./cb-ws-signaling";
+import CBWSServer from "./cb-ws-signaling";
 import CBStartingState from "./cb-states/cb-starting.state";
 import CBWaitForEntryState from "./cb-states/cb-wait-for-entry.state";
 import CBWaitForResolveState from "./cb-states/cb-wait-for-resolve.state";
 import CBTrendWatcher, { ICandlesData } from "./cb-trend-watcher";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import CBTgCmdHandler from "./cb-tg-cmd-handler";
+import { generateRunID } from "@/utils/strings.util";
+import WsClient from "./cb-tm-ws-client";
 
 export interface CBState {
   onEnter: () => Promise<void>;
@@ -76,6 +78,7 @@ export const comboBetRulesDefaultValue = {
 };
 
 class ComboBot {
+  runId: string = generateRunID();
   runStartTs: Date = new Date();
 
   symbol: string;
@@ -117,7 +120,8 @@ class ComboBot {
   grokAi: GrokAiService;
 
   cbUtil: CBUtil;
-  cbWsSignaling: CBWSSignaling;
+  cbWsServer: CBWSServer;
+  cbWsClient: WsClient;
   cbTrendWatcher: CBTrendWatcher;
   cbTgCmdHandler: CBTgCmdHandler;
 
@@ -156,8 +160,10 @@ class ComboBot {
     this.cbTgCmdHandler = new CBTgCmdHandler(this);
     this.cbTgCmdHandler.handleTgMsgs();
 
-    this.cbWsSignaling = new CBWSSignaling(this);
-    this.cbWsSignaling.serveServer(Number(process.env.COMBO_BOT_SERVER_PORT!))
+    this.cbWsServer = new CBWSServer(this);
+    this.cbWsServer.serveServer(Number(process.env.COMBO_BOT_SERVER_PORT!))
+
+    this.cbWsClient = new WsClient(process.env.TREND_MANAGER_WS_URL!);
 
     this.startingState = new CBStartingState(this);
     this.waitForEntryState = new CBWaitForEntryState(this);
@@ -195,8 +201,6 @@ class ComboBot {
 
       if (envKey === "COMBO_BOT_BET_RULES") {
         const keys: TAiCandleTrendDirection[] = ["Down", "Up", "Kangaroo"];
-        console.log("process.env.COMBO_BOT_BET_RULES!: ", process.env.COMBO_BOT_BET_RULES!);
-
         try {
           const parsed = JSON.parse(process.env.COMBO_BOT_BET_RULES!) as IBetRule;
           for (const key of keys) {

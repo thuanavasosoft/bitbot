@@ -28,7 +28,7 @@ interface IPingMsgFromClient {
 
 type IMsgFromClient = IPingMsgFromClient;
 
-class CBWSSignaling {
+class CBWSServer {
   private clients = new Set<WebSocket>();
 
   constructor(private bot: BudgetingBot) { }
@@ -94,4 +94,4 @@ class CBWSSignaling {
   }
 }
 
-export default CBWSSignaling;
+export default CBWSServer;

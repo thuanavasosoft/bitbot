@@ -30,7 +30,6 @@ class CBWaitForEntryState implements CBState {
 
   private async _handleTrend(bigCandlesData: ICandlesData, smallCandlesData: ICandlesData) {
     const ruleValPosDir = this.bot.betRules[bigCandlesData!.candlesTrend][smallCandlesData!.candlesTrend];
-
     if (ruleValPosDir === "skip") return;
 
     this.trendListenerRemover && this.trendListenerRemover()
@@ -61,7 +60,7 @@ class CBWaitForEntryState implements CBState {
     let position: IPosition | undefined = undefined;
     for (let i = 0; i < 10; i++) {
       try {
-        this.bot.cbWsSignaling.broadcast(`open-${posDir}`, budget);
+        this.bot.cbWsServer.broadcast(`open-${posDir}`, budget);
         await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
         position = await ExchangeService.getPosition(this.bot.symbol);
         console.log("position: ", position);
