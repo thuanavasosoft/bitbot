@@ -78,10 +78,9 @@ class WsClient {
   }
 
   private scheduleReconnect() {
-    if (this.reconnectInterval) return; // Avoid multiple timers
+    if (this.reconnectInterval) return;
 
     this.reconnectInterval = setInterval(() => {
-      console.log(`Reconnecting ${this.client?.readyState}`);
       if (this.client?.readyState !== WebSocket.OPEN) this.connect(true);
     }, 5000);
   }
