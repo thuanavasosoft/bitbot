@@ -59,11 +59,9 @@ class CBTrendWatcher {
       if (msg.type === "ai-trend-update") {
         const data = msg.data;
         const dataFor = this.bot.cbUtil.determineCandlesListenerIdentifierFor(data.identifier);
-        console.log("data.identifier: ", data.identifier);
 
         if (dataFor === "big") {
           this.currBigCandlesData = data;
-          console.log("Updating big candles version");
           this.currBigCandlesVer++;
 
           TelegramService.queueMsg(Buffer.from(data.candlesImage, 'base64'));
@@ -76,10 +74,15 @@ class CBTrendWatcher {
         }
 
         if (dataFor === "small") {
+          const now = new Date();
+
+          const minute = now.getMinutes();
+          const bigMod = minute % this.bot.bigAiTrendIntervalCheckInMinutes;
+
           const divisible = Math.floor(this.bot.bigAiTrendIntervalCheckInMinutes / this.bot.smallAiTrendIntervalCheckInMinutes);
           checkAttempt = (checkAttempt + 1) % (divisible);
 
-          if (!isSameBigSmallRollWindow || (isSameBigSmallRollWindow && checkAttempt !== 0)) {
+          if (!isSameBigSmallRollWindow || (isSameBigSmallRollWindow && checkAttempt !== 0 && bigMod !== 0)) {
             this.currSmallCandlesData = data;
             this.currSmallCandlesVer = (this.currSmallCandlesVer + 1) % divisible
 
@@ -90,6 +93,10 @@ class CBTrendWatcher {
             TelegramService.queueMsg(`ℹ️ New Small ${data.rollWindowInHours}H trend check for result: ${data.candlesTrend} - price: ${data.closePrice}`);
 
             this._checkCandlesCombo()
+          } else if (isSameBigSmallRollWindow && bigMod === 0) {
+            this.currSmallCandlesVer = 0;
+            this.currBigCandlesVer = 0;
+            checkAttempt = 0;
           }
         }
       }
