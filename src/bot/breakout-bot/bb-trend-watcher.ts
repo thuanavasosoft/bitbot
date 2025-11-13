@@ -3,7 +3,6 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { generateImageOfCandlesWithSupportResistance } from "@/utils/image-generator.util";
 import TelegramService from "@/services/telegram.service";
 import { calculateBreakoutSignal, SignalResult } from "./breakout-helpers";
-import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 
 export interface ISignalData {
@@ -12,31 +11,17 @@ export interface ISignalData {
   closePrice: number;
 }
 
-interface IPriceTick {
-  price: number;
-  timestamp: number;
-}
-
 class BBTrendWatcher {
   isTrendWatcherStarted: boolean = false;
-  private websocketTicks: IPriceTick[] = [];
-  // private priceListenerRemover?: () => void;
-  private readonly CLEANUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly intervalDelaySeconds: number;
 
-  constructor(private bot: BreakoutBot) { }
+  constructor(private bot: BreakoutBot) {
+    this.intervalDelaySeconds = Number(process.env.BREAKOUT_BOT_INTERVAL_DELAY_SECONDS || 1);
+  }
 
   async startWatchBreakoutSignals() {
     if (this.isTrendWatcherStarted) return;
     this.isTrendWatcherStarted = true;
-
-    // Subscribe to websocket price updates with timestamps
-    ExchangeService.hookPriceListenerWithTimestamp(
-      this.bot.symbol,
-      (price: number, timestamp: number) => {
-        this.websocketTicks.push({ price, timestamp });
-        this._cleanupOldTicks();
-      }
-    );
 
     while (true) {
       if (this.bot.isSleeping) {
@@ -69,43 +54,69 @@ class BBTrendWatcher {
 
       const candles = await ExchangeService.getCandles(this.bot.symbol, candlesStartDate, candlesEndDate, "1Min");
       
-      if (candles.length < minRequired) {
-        TelegramService.queueMsg(`⚠️ Not enough candles (${candles.length}) for signal calculation. Need at least ${minRequired}. Waiting...`);
+      // Filter out unfinished candles (timestamp is startTime, so if latest candle started within last minute, exclude it)
+      const now = Date.now();
+      const oneMinuteAgo = now - 60 * 1000;
+      const finishedCandles = candles.filter(candle => candle.timestamp < oneMinuteAgo);
+      
+      if (finishedCandles.length < minRequired) {
+        TelegramService.queueMsg(`⚠️ Not enough finished candles (${finishedCandles.length}) for signal calculation. Need at least ${minRequired}. Waiting...`);
         await this._waitForNextCheck(this.bot.checkIntervalMinutes);
         continue;
       }
 
-      // Build synthetic candle from websocket ticks and append to candles
-      const candlesWithSynthetic = this._buildCandlesWithSynthetic(candles);
-
-      const signalResult = calculateBreakoutSignal(candlesWithSynthetic, this.bot.signalParams);
+      const signalResult = calculateBreakoutSignal(finishedCandles, this.bot.signalParams);
       
-      // Halve support/resistance distance from current price
-      const currentPrice = candlesWithSynthetic[candlesWithSynthetic.length - 1].closePrice;
-      let adjustedSupport = signalResult.support;
-      let adjustedResistance = signalResult.resistance;
+      const currentPrice = finishedCandles[finishedCandles.length - 1].closePrice;
       
-      if (signalResult.resistance !== null) {
-        // New resistance = currentPrice + (originalResistance - currentPrice) / 2
-        const distance = new BigNumber(signalResult.resistance).minus(currentPrice).div(2);
-        adjustedResistance = new BigNumber(currentPrice).plus(distance).toNumber();
+      // Use raw support/resistance (no halving)
+      const rawSupport = signalResult.support;
+      const rawResistance = signalResult.resistance;
+      
+      // Calculate trigger prices with buffer percentage
+      let longTrigger: number | null = null;
+      let shortTrigger: number | null = null;
+      
+      // Helper function to get price precision (decimal places)
+      const getPricePrecision = (price: number): number => {
+        const priceStr = price.toString();
+        if (priceStr.includes('.')) {
+          return priceStr.split('.')[1].length;
+        }
+        return 0;
+      };
+      
+      if (rawResistance !== null) {
+        // Long trigger: resistance * (1 - buffer_percentage), rounded UP
+        const bufferMultiplier = new BigNumber(1).minus(this.bot.bufferPercentage);
+        const longTriggerRaw = new BigNumber(rawResistance).times(bufferMultiplier);
+        const precision = getPricePrecision(rawResistance);
+        // Round up: add a small epsilon and then round down, or use ceil with precision
+        const multiplier = Math.pow(10, precision);
+        longTrigger = Math.ceil(longTriggerRaw.times(multiplier).toNumber()) / multiplier;
       }
       
-      if (signalResult.support !== null) {
-        // New support = currentPrice - (currentPrice - originalSupport) / 2
-        const distance = new BigNumber(currentPrice).minus(signalResult.support).div(2);
-        adjustedSupport = new BigNumber(currentPrice).minus(distance).toNumber();
+      if (rawSupport !== null) {
+        // Short trigger: support * (1 + buffer_percentage), rounded DOWN
+        const bufferMultiplier = new BigNumber(1).plus(this.bot.bufferPercentage);
+        const shortTriggerRaw = new BigNumber(rawSupport).times(bufferMultiplier);
+        const precision = getPricePrecision(rawSupport);
+        // Round down: use floor with precision
+        const multiplier = Math.pow(10, precision);
+        shortTrigger = Math.floor(shortTriggerRaw.times(multiplier).toNumber()) / multiplier;
       }
       
-      // Generate chart with adjusted support/resistance lines
+      // Generate chart with support/resistance and trigger lines
       const signalImageData = await generateImageOfCandlesWithSupportResistance(
         this.bot.symbol,
-        candlesWithSynthetic,
-        adjustedSupport,
-        adjustedResistance,
+        finishedCandles,
+        rawSupport,
+        rawResistance,
         false,
         candlesEndDate,
-        this.bot.currActivePosition
+        this.bot.currActivePosition,
+        longTrigger,
+        shortTrigger
       );
 
       const signalData: ISignalData = {
@@ -116,90 +127,44 @@ class BBTrendWatcher {
 
       // Send visualization to Telegram
       TelegramService.queueMsg(signalImageData);
+      const triggerMsg = longTrigger !== null || shortTrigger !== null
+        ? `\nLong Trigger: ${longTrigger !== null ? longTrigger.toFixed(4) : 'N/A'}\nShort Trigger: ${shortTrigger !== null ? shortTrigger.toFixed(4) : 'N/A'}`
+        : '';
       TelegramService.queueMsg(
         `ℹ️ Breakout signal check result: ${signalResult.signal} - Price: ${signalData.closePrice.toFixed(4)}\n` +
-        `Support: ${adjustedSupport !== null ? adjustedSupport.toFixed(4) : 'N/A'}\n` +
-        `Resistance: ${adjustedResistance !== null ? adjustedResistance.toFixed(4) : 'N/A'}`
+        `Support: ${rawSupport !== null ? rawSupport.toFixed(4) : 'N/A'}\n` +
+        `Resistance: ${rawResistance !== null ? rawResistance.toFixed(4) : 'N/A'}${triggerMsg}`
       );
 
-      // Update bot's current signal levels with adjusted values
+      // Update bot's current signal levels with raw values and triggers
       this.bot.currentSignal = signalResult.signal;
-      this.bot.currentSupport = adjustedSupport;
-      this.bot.currentResistance = adjustedResistance;
+      this.bot.currentSupport = rawSupport;
+      this.bot.currentResistance = rawResistance;
+      this.bot.longTrigger = longTrigger;
+      this.bot.shortTrigger = shortTrigger;
       this.bot.lastSRUpdateTime = Date.now(); // Track when S/R was updated
 
       await this._waitForNextCheck(this.bot.checkIntervalMinutes);
     }
   }
 
-  private readonly SAFETY_BUFFER_MS = 10;
   private async _waitForNextCheck(delayInMin: number) {
     const now = new Date();
 
     const nextIntervalCheckMinutes = new Date(now.getTime());
-    nextIntervalCheckMinutes.setSeconds(0, this.SAFETY_BUFFER_MS);
+    // Set to the next minute mark with the configured delay in seconds
+    nextIntervalCheckMinutes.setSeconds(this.intervalDelaySeconds, 0);
 
-    if (now.getSeconds() > 0 || now.getMilliseconds() > this.SAFETY_BUFFER_MS) nextIntervalCheckMinutes.setMinutes(now.getMinutes() + delayInMin);
+    // If we've already passed the delay second mark in the current minute, move to next minute
+    if (now.getSeconds() >= this.intervalDelaySeconds) {
+      nextIntervalCheckMinutes.setMinutes(now.getMinutes() + delayInMin);
+    }
+    
     const waitInMs = nextIntervalCheckMinutes.getTime() - now.getTime();
 
     await new Promise(r => setTimeout(r, waitInMs));
   }
 
-  /**
-   * Build synthetic candle from websocket ticks and append to queried candles
-   * Synthetic candle represents the current incomplete minute
-   */
-  private _buildCandlesWithSynthetic(candles: ICandleInfo[]): ICandleInfo[] {
-    if (candles.length === 0) return candles;
-
-    const latestCandle = candles[candles.length - 1];
-    // For 1Min candles, closeTime is timestamp + 60000ms (1 minute)
-    const latestCandleCloseTime = latestCandle.timestamp + 60000;
-
-    // Filter ticks that occurred after the latest candle's closeTime
-    const relevantTicks = this.websocketTicks.filter(tick => tick.timestamp >= latestCandleCloseTime);
-
-    // If no relevant ticks, return original candles
-    if (relevantTicks.length === 0) {
-      return candles;
-    }
-
-    // Build synthetic candle
-    const prices = relevantTicks.map(tick => tick.price);
-    const minPrice = Math.min(...prices);
-    const maxPrice = Math.max(...prices);
-    const latestTick = relevantTicks[relevantTicks.length - 1];
-
-    const syntheticCandle: ICandleInfo = {
-      timestamp: latestCandleCloseTime,
-      openPrice: latestCandle.closePrice,
-      lowPrice: minPrice,
-      highPrice: maxPrice,
-      closePrice: latestTick.price,
-    };
-
-    // Clean up ticks that are older than the latest candle's closeTime
-    this._cleanupTicksBefore(latestCandleCloseTime);
-
-    return [...candles, syntheticCandle];
-  }
-
-  /**
-   * Clean up ticks older than the specified timestamp
-   */
-  private _cleanupTicksBefore(timestamp: number): void {
-    this.websocketTicks = this.websocketTicks.filter(tick => tick.timestamp >= timestamp);
-  }
-
-  /**
-   * Clean up old ticks to prevent memory growth
-   * Removes ticks older than CLEANUP_WINDOW_MS
-   */
-  private _cleanupOldTicks(): void {
-    const now = Date.now();
-    const cutoffTime = now - this.CLEANUP_WINDOW_MS;
-    this.websocketTicks = this.websocketTicks.filter(tick => tick.timestamp >= cutoffTime);
-  }
 }
 
 export default BBTrendWatcher;

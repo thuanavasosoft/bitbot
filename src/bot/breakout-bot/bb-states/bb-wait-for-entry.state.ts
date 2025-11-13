@@ -22,8 +22,8 @@ class BBWaitForEntryState implements BBState {
 
   private async _watchForBreakout() {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (price) => {
-      // Wait for support/resistance levels to be calculated
-      if (!this.bot.currentSupport || !this.bot.currentResistance) {
+      // Wait for trigger levels to be calculated
+      if (this.bot.longTrigger === null && this.bot.shortTrigger === null) {
         return;
       }
 
@@ -43,23 +43,17 @@ class BBWaitForEntryState implements BBState {
       let shouldEnter = false;
       let posDir: TPositionSide | null = null;
 
-      // Determine entry direction based on trading mode
-      if (priceNum.gte(this.bot.currentResistance)) {
+      // Enter long when price >= long trigger (resistance adjusted down by buffer)
+      if (this.bot.longTrigger !== null && priceNum.gte(this.bot.longTrigger)) {
         shouldEnter = true;
-        // "against" mode: enter SHORT when price >= resistance
-        // "follow" mode: enter LONG when price >= resistance
-        posDir = this.bot.tradingMode === "against" ? "short" : "long";
-        const modeDesc = this.bot.tradingMode === "against" ? "SHORT (against)" : "LONG (follow)";
-        TelegramService.queueMsg(`📈 Breakout above resistance detected: Price ${price} >= Resistance ${this.bot.currentResistance} - Entering ${modeDesc}`);
+        posDir = "long";
+        TelegramService.queueMsg(`📈 Long entry trigger: Price ${price} >= Long Trigger ${this.bot.longTrigger}`);
       }
-      // Check for breakdown below support
-      else if (priceNum.lte(this.bot.currentSupport)) {
+      // Enter short when price <= short trigger (support adjusted up by buffer)
+      else if (this.bot.shortTrigger !== null && priceNum.lte(this.bot.shortTrigger)) {
         shouldEnter = true;
-        // "against" mode: enter LONG when price <= support
-        // "follow" mode: enter SHORT when price <= support
-        posDir = this.bot.tradingMode === "against" ? "long" : "short";
-        const modeDesc = this.bot.tradingMode === "against" ? "LONG (against)" : "SHORT (follow)";
-        TelegramService.queueMsg(`📉 Breakdown below support detected: Price ${price} <= Support ${this.bot.currentSupport} - Entering ${modeDesc}`);
+        posDir = "short";
+        TelegramService.queueMsg(`📉 Short entry trigger: Price ${price} <= Short Trigger ${this.bot.shortTrigger}`);
       }
 
       if (shouldEnter && posDir) {
@@ -129,10 +123,30 @@ class BBWaitForEntryState implements BBState {
     const positionAvgPrice = position.avgPrice;
     const positionTriggerTs = +new Date(position.createTime);
     const timeDiffMs = positionTriggerTs - triggerTs;
-    const priceDiff = new BigNumber(currLatestMarkPrice).minus(positionAvgPrice).toNumber();
+    
+    // Calculate slippage based on support/resistance levels
+    // For long: compare avgPrice with resistance (lower avgPrice = better = negative slippage)
+    // For short: compare avgPrice with support (lower avgPrice = better = negative slippage)
+    let srLevel: number | null = null;
+    if (posDir === "long") {
+      srLevel = this.bot.currentResistance;
+    } else {
+      srLevel = this.bot.currentSupport;
+    }
+    
+    if (srLevel === null) {
+      console.warn(`⚠️ Cannot calculate slippage: ${posDir === "long" ? "resistance" : "support"} level is null`);
+      TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${posDir === "long" ? "resistance" : "support"} level not available`);
+    }
+    
+    const priceDiff = srLevel !== null 
+      ? posDir === "short"
+        ? new BigNumber(srLevel).minus(positionAvgPrice).toNumber()  // Flipped for short
+        : new BigNumber(positionAvgPrice).minus(srLevel).toNumber()  // Keep as is for long
+      : 0;
 
-    const icon = posDir === "long" ? priceDiff <= 0 ? "🟩" : "🟥" :
-      priceDiff >= 0 ? "🟩" : "🟥";
+    // Negative slippage is good (better price than SR level), positive slippage is bad
+    const icon = priceDiff <= 0 ? "🟩" : "🟥";
     if (icon === "🟥") {
       this.bot.slippageAccumulation += Math.abs(priceDiff);
     } else {

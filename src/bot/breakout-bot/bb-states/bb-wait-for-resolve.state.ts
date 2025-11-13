@@ -7,6 +7,7 @@ import BigNumber from "bignumber.js";
 
 class BBWaitForResolveState implements BBState {
   private priceListenerRemover?: () => void;
+  private doublingListenerRemover?: () => void;
 
   constructor(private bot: BreakoutBot) { }
 
@@ -23,6 +24,7 @@ class BBWaitForResolveState implements BBState {
 
     this._watchForPositionExit();
     this._watchForPositionLiquidation();
+    this._watchForDoubling();
   }
 
   private async _watchForPositionExit() {
@@ -62,6 +64,7 @@ class BBWaitForResolveState implements BBState {
 
       if (shouldExit) {
         this.priceListenerRemover && this.priceListenerRemover();
+        this.doublingListenerRemover && this.doublingListenerRemover();
         await this._closeCurrPosition(exitReason);
       }
     });
@@ -86,6 +89,7 @@ class BBWaitForResolveState implements BBState {
       TelegramService.queueMsg(msg);
 
       this.priceListenerRemover && this.priceListenerRemover();
+      this.doublingListenerRemover && this.doublingListenerRemover();
       liquidationListenerRemover && liquidationListenerRemover();
 
       let intervalId: NodeJS.Timeout;
@@ -129,6 +133,44 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     });
   }
 
+  private async _watchForDoubling() {
+    this.doublingListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (price) => {
+      if (!this.bot.currActivePosition) {
+        this.doublingListenerRemover && this.doublingListenerRemover();
+        console.log("No active position found, exiting doubling listener");
+        return;
+      }
+
+      const position = this.bot.currActivePosition;
+      const avgPrice = new BigNumber(position.avgPrice);
+      const liquidationPrice = new BigNumber(position.liquidationPrice);
+      
+      // Calculate doubling target: same distance from entry as liquidation, but in opposite direction
+      // Formula: doublingTarget = 2 * avgPrice - liquidationPrice
+      const doublingTarget = avgPrice.times(2).minus(liquidationPrice);
+      const currentPrice = new BigNumber(price);
+
+      let hasDoubled = false;
+
+      // Check if price has reached doubling target
+      if (position.side === "long" && currentPrice.gte(doublingTarget)) {
+        hasDoubled = true;
+      } else if (position.side === "short" && currentPrice.lte(doublingTarget)) {
+        hasDoubled = true;
+      }
+
+      if (hasDoubled) {
+        const msg = `🎯 Doubling target reached! Price ${price} ${position.side === "long" ? ">=" : "<="} Doubling Target ${doublingTarget.toFixed()}`;
+        console.log(msg);
+        TelegramService.queueMsg(msg);
+
+        this.priceListenerRemover && this.priceListenerRemover();
+        this.doublingListenerRemover && this.doublingListenerRemover();
+        await this._closeCurrPosition("double_profit");
+      }
+    });
+  }
+
   private async _closeCurrPosition(reason: string = "support_resistance") {
     const currLatestMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
     const triggerTs = +new Date();
@@ -167,10 +209,32 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 
     const closedPositionAvgPrice = closedPosition.avgPrice;
     const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
-    slippage = new BigNumber(currLatestMarkPrice).minus(closedPositionAvgPrice).toNumber();
+    
+    // Calculate slippage based on support/resistance levels
+    // For long exit (sell): compare avgPrice with support (higher avgPrice relative to support = better = negative slippage)
+    // For short exit (buy): compare avgPrice with resistance (lower avgPrice relative to resistance = better = negative slippage)
+    const positionSide = this.bot.currActivePosition?.side;
+    let srLevel: number | null = null;
+    if (positionSide === "long") {
+      srLevel = this.bot.currentSupport;
+    } else if (positionSide === "short") {
+      srLevel = this.bot.currentResistance;
+    }
+    
+    if (srLevel === null) {
+      console.warn(`⚠️ Cannot calculate slippage: ${positionSide === "long" ? "support" : "resistance"} level is null`);
+      TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`);
+    }
+    
+    slippage = srLevel !== null
+      ? positionSide === "short"
+        ? new BigNumber(closedPositionAvgPrice).minus(srLevel).toNumber()
+        : new BigNumber(srLevel).minus(closedPositionAvgPrice).toNumber()
+      : 0;
     timeDiffMs = closedPositionTriggerTs - triggerTs;
 
-    const icon = this.bot.currActivePosition?.side === "long" ? slippage >= 0 ? "🟩" : "🟥" : slippage <= 0 ? "🟩" : "🟥";
+    // Negative slippage is good (better price than SR level), positive slippage is bad
+    const icon = slippage <= 0 ? "🟩" : "🟥";
     if (icon === "🟥") {
       this.bot.slippageAccumulation += Math.abs(slippage);
     } else {
@@ -191,6 +255,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
   async onExit() {
     console.log("Exiting BB Wait For Resolve State");
     this.priceListenerRemover && this.priceListenerRemover();
+    this.doublingListenerRemover && this.doublingListenerRemover();
   }
 }
 

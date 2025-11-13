@@ -47,13 +47,12 @@ class BreakoutBot {
   currentSignal: "Up" | "Down" | "Kangaroo" = "Kangaroo";
   currentSupport: number | null = null;
   currentResistance: number | null = null;
+  longTrigger: number | null = null; // Trigger price for long entry (resistance adjusted down by buffer)
+  shortTrigger: number | null = null; // Trigger price for short entry (support adjusted up by buffer)
+  bufferPercentage: number; // Buffer percentage for trigger adjustments
   lastSRUpdateTime: number = 0; // Timestamp of last support/resistance update
   lastExitTime: number = 0; // Timestamp of last position exit
   lastEntryTime: number = 0; // Timestamp of last position entry
-
-  tradingMode: "against" | "follow" = "against"; // Trading mode: "against" enters opposite direction, "follow" enters same direction
-  lastFlipTime: number = Date.now(); // Timestamp of last mode flip
-  tradePnLHistory: Array<{ timestamp: number; pnl: number }> = []; // Individual trade PnL history
 
   bbUtil: BBUtil;
   bbWsSignaling: BBWSSignaling;
@@ -75,6 +74,7 @@ class BreakoutBot {
     this.sleepDurationAfterLiquidation = process.env.BREAKOUT_BOT_SLEEP_DURATION_AFTER_LIQUIDATION!;
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
+    this.bufferPercentage = Number(process.env.BREAKOUT_BOT_BUFFER_PERCENTAGE || 0) / 100; // Convert percentage to decimal
 
     // Signal parameters with defaults from backtest
     this.signalParams = {

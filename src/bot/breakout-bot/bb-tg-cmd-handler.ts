@@ -4,13 +4,14 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
 import { getRunDuration } from "@/utils/maths.util";
+import { generatePnLProgressionChart } from "@/utils/image-generator.util";
 
 enum EBBotCommand {
   UPDATE_BET_SIZE = "update_bet_size",
   OPEN_LONG = "open_long",
   OPEN_SHORT = "open_short",
   CLOSE_POSITION = "close_position",
-  FLIP = "flip",
+  SHOW_PNL_GRAPH = "pnl_graph",
 }
 
 class BBTgCmdHandler {
@@ -45,12 +46,12 @@ ${!!position && getPositionDetailMsg(position)}`
         | ETGCommand.FullUpdate
         | ETGCommand.Help
         | EBBotCommand.UPDATE_BET_SIZE
-        | EBBotCommand.FLIP
+        | EBBotCommand.SHOW_PNL_GRAPH
       > = {
         [ETGCommand.FullUpdate]: "To get full updated bot information",
         [ETGCommand.Help]: "To get command list information",
         [EBBotCommand.UPDATE_BET_SIZE]: `To update the bet size /${EBBotCommand.UPDATE_BET_SIZE} 1000`,
-        [EBBotCommand.FLIP]: "To manually flip trading mode (against ↔ follow)",
+        [EBBotCommand.SHOW_PNL_GRAPH]: `To render the full PnL progression chart. Optional: "/${EBBotCommand.SHOW_PNL_GRAPH} dilute 10" to thin data`,
       }
 
       let msg = ``;
@@ -74,7 +75,9 @@ ${!!position && getPositionDetailMsg(position)}`
       const stratEstimatedYearlyProfit = totalProfit.times(stratDaysWindows);
       const stratEstimatedROI = startQuoteBalance.lte(0) ? new BigNumber(0) : stratEstimatedYearlyProfit.div(startQuoteBalance).times(100);
 
-      const avgSlippage = this.bot.numberOfTrades > 0 ? new BigNumber(this.bot.slippageAccumulation).div(this.bot.numberOfTrades) : "0";
+      const avgSlippage = this.bot.numberOfTrades > 0 
+        ? new BigNumber(this.bot.slippageAccumulation).div(this.bot.numberOfTrades).toFixed(5)
+        : "0";
 
       const msg = `
 === GENERAL ===
@@ -114,7 +117,7 @@ Estimated yearly profit: ${stratEstimatedYearlyProfit.toNumber().toLocaleString(
 === SLIPPAGE ===
 Slippage accumulation: ${this.bot.slippageAccumulation} pip(s)
 Number of trades: ${this.bot.numberOfTrades}
-Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSlippage} pip(s)
+Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSlippage} pip(s)
 `;
 
       TelegramService.queueMsg(msg);
@@ -150,6 +153,70 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
       TelegramService.queueMsg(msg);
     });
 
+    TelegramService.appendTgCmdHandler(EBBotCommand.SHOW_PNL_GRAPH, async (ctx) => {
+      if (this.bot.pnlHistory.length === 0) {
+        const msg = `No PnL history recorded yet.`;
+        console.log(msg);
+        TelegramService.queueMsg(msg);
+        return;
+      }
+
+      const rawText = ctx.text || "";
+      const argsText = rawText.replace(/^\/\S+\s*/, "").trim();
+      const args = argsText.length > 0 ? argsText.split(/\s+/) : [];
+
+      let dilute = 1;
+      let errorMsg: string | undefined;
+
+      if (args.length > 0) {
+        const diluteIdx = args.findIndex(arg => arg.toLowerCase() === "dilute");
+        if (diluteIdx !== -1) {
+          const value = args[diluteIdx + 1];
+          if (!value) {
+            errorMsg = `Please provide a positive number after "dilute".`;
+          } else {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed) || parsed <= 0) {
+              errorMsg = `"${value}" is not a valid positive number for dilute.`;
+            } else {
+              dilute = Math.max(1, Math.floor(parsed));
+            }
+          }
+        } else {
+          const maybeNumber = Number(args[0]);
+          if (Number.isFinite(maybeNumber) && maybeNumber > 0) {
+            dilute = Math.max(1, Math.floor(maybeNumber));
+          } else {
+            errorMsg = `Unsupported parameter(s). Use "/${EBBotCommand.SHOW_PNL_GRAPH} dilute <positive_number>".`;
+          }
+        }
+      }
+
+      if (!!errorMsg) {
+        console.log(errorMsg);
+        TelegramService.queueMsg(errorMsg);
+        return;
+      }
+
+      const history = this.bot.pnlHistory;
+      const filteredHistory = history.filter((_, idx) => {
+        if (history.length <= 2) return true;
+        if (idx === 0 || idx === history.length - 1) return true;
+        return idx % dilute === 0;
+      });
+
+      try {
+        const pnlChartImage = await generatePnLProgressionChart(filteredHistory);
+        TelegramService.queueMsg(pnlChartImage);
+        TelegramService.queueMsg(
+          `📈 Full PnL chart sent. Points used: ${filteredHistory.length}/${history.length}. Dilute factor: ${dilute}.`
+        );
+      } catch (error) {
+        console.error("Error generating full PnL chart:", error);
+        TelegramService.queueMsg(`⚠️ Failed to generate full PnL chart: ${error}`);
+      }
+    });
+
     TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_LONG, () => {
       console.log("Broadcasting open-long");
       this.bot.bbWsSignaling.broadcast("open-long", "10");
@@ -163,10 +230,6 @@ Average slippage: ${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSli
     TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, () => {
       console.log("Broadcasting close-position");
       this.bot.bbWsSignaling.broadcast("close-position");
-    });
-
-    TelegramService.appendTgCmdHandler(EBBotCommand.FLIP, () => {
-      this.bot.bbUtil.flipTradingMode();
     });
   }
 }

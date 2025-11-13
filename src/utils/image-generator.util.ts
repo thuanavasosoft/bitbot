@@ -106,6 +106,8 @@ export async function generateImageOfCandlesWithSupportResistance(
   writeFile: boolean = false,
   endDate?: Date,
   currOpenedPos?: { avgPrice: number, side: TPositionSide },
+  longTrigger?: number | null,
+  shortTrigger?: number | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
   const ctx = canvas.getContext('2d');
@@ -113,7 +115,7 @@ export async function generateImageOfCandlesWithSupportResistance(
   const greenColor = "#008000";
   const redColor = "#800000";
   const supportColor = "#FF0000"; // Red for support
-  const resistanceColor = "#00FF00"; // Green for resistance
+  const resistanceColor = "#006400"; // Dark green for resistance (darker than bright green)
 
   const annotations: any = {};
 
@@ -165,6 +167,60 @@ export async function generateImageOfCandlesWithSupportResistance(
           weight: "bold",
         },
         padding: 5,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
+  // Add long trigger line if available
+  if (longTrigger !== null && longTrigger !== undefined) {
+    annotations.longTrigger = {
+      type: 'line' as any,
+      yMin: longTrigger,
+      yMax: longTrigger,
+      borderColor: "#32CD32", // Lime green for long trigger
+      borderWidth: 2,
+      borderDash: [3, 3],
+      label: {
+        display: true,
+        content: [`Long Trigger: ${longTrigger.toFixed(4)}`],
+        position: "end",
+        backgroundColor: "#32CD32",
+        color: "#FFFFFF",
+        xAdjust: 4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
+  // Add short trigger line if available
+  if (shortTrigger !== null && shortTrigger !== undefined) {
+    annotations.shortTrigger = {
+      type: 'line' as any,
+      yMin: shortTrigger,
+      yMax: shortTrigger,
+      borderColor: "#FF6347", // Tomato red for short trigger
+      borderWidth: 2,
+      borderDash: [3, 3],
+      label: {
+        display: true,
+        content: [`Short Trigger: ${shortTrigger.toFixed(4)}`],
+        position: "start",
+        backgroundColor: "#FF6347",
+        color: "#FFFFFF",
+        xAdjust: -4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
         borderRadius: 4,
         textAlign: "left",
       },
