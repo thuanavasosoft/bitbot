@@ -84,6 +84,18 @@ Current Quote Balance (100%): ${this.bot.currQuoteBalance} USDT
     console.log(msg);
     TelegramService.queueMsg(msg);
 
+    if (this.bot.connectedClientsAmt === 0) {
+      TelegramService.queueMsg("❗ No clients connected yet, waiting for client to be connected to continue...");
+
+      while (true) {
+        if (this.bot.connectedClientsAmt > 0) {
+          TelegramService.queueMsg("✅ Client connected, continuing to wait for signal...");
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second before checking again
+      }
+    }
+
     if (!this.bot.cbWsClient.isConnected) await this.bot.cbWsClient.connect()
     if (!this.bot.cbTrendWatcher.isTrendWatcherStarted) this.bot.cbTrendWatcher.startWatchCandlesTrend()
 

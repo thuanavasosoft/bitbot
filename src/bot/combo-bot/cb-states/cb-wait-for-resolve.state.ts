@@ -98,6 +98,19 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     TelegramService.queueMsg(`💭 Current estimated unrealized profit: ${estimatedUnrealizedProfit >= 0 ? "🟩️️️️️️" : "🟥"} ~${estimatedUnrealizedProfit}`)
 
     if (!this.bot.betRuleValsToResolvePosition?.includes(ruleValPosDir)) return;
+
+    if (this.bot.connectedClientsAmt === 0) {
+      TelegramService.queueMsg("❗ No clients connected yet, waiting for client to be connected to continue...");
+
+      while (true) {
+        if (this.bot.connectedClientsAmt > 0) {
+          TelegramService.queueMsg("✅ Client connected, continuing to wait for signal...");
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second before checking again
+      }
+    }
+
     this.trendListenerRemover && this.trendListenerRemover();
     this.priceListenerRemover && this.priceListenerRemover();
 
