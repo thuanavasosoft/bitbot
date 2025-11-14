@@ -30,6 +30,9 @@ const INPUT_WRAPPER_QUERY_SELECTOR = '.component_numberInput__PF7Vf';
 const OPEN_ORDER_ROW_QUERY_SELECTOR = 'tr.ant-table-row.ant-table-row-level-0';
 const CANCEL_OPEN_ORDER_BTN_QUERY_SELECTOR = 'button.ant-btn-v2.ant-btn-v2-text.ant-btn-v2-md.position_operateBtn__y3e2M.position_chaseCancelBtn__zjBkZ';
 
+const BUDGET_SLIDER_QUERY_SELECTOR = '.ant-slider';
+const BUDGET_SLIDER_HANDLE_QUERY_SELECTOR = '.ant-slider-handle';
+
 async function openLongPosition(budgetAmt) {
   // Using querySelector with data-testid attribute selector
   let openLongBtn = document.querySelector(OPEN_LONG_BTN_LAPTOP_SELECTOR);
@@ -78,8 +81,8 @@ async function closeOpenedPosition() {
 
 function setBudgetSlider(percent) {
   return new Promise((resolve) => {
-    const slider = document.querySelector('.ant-slider');
-    const handle = slider?.querySelector('.ant-slider-handle');
+    const slider = document.querySelector(BUDGET_SLIDER_QUERY_SELECTOR);
+    const handle = slider?.querySelector(BUDGET_SLIDER_HANDLE_QUERY_SELECTOR);
     if (!slider || !handle) return resolve();
     const rect = slider.getBoundingClientRect();
     const start = rect.left;
