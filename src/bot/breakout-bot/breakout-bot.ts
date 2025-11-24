@@ -1,6 +1,7 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
 import { generateRandomString } from "@/utils/strings.util";
+import BigNumber from "bignumber.js";
 import BBUtil from "./bb-util";
 import BBWSSignaling from "./bb-ws-signaling";
 import BBStartingState from "./bb-states/bb-starting.state";
@@ -37,6 +38,7 @@ class BreakoutBot {
   isSleeping: boolean = false;
   betSize: number;
   signalParams: SignalParams;
+  symbolInfo?: ISymbolInfo;
 
   currActivePosition?: IPosition;
   entryWsPrice?: { price: number, time: Date };
@@ -159,19 +161,30 @@ class BreakoutBot {
       return;
     }
 
+    await this._ensureSymbolInfoLoaded();
+
     const quoteAmt = Number(openBalanceAmt);
     if (!Number.isFinite(quoteAmt) || quoteAmt <= 0) {
       throw new Error(`Invalid quote amount supplied for open signal: ${openBalanceAmt}`);
     }
 
+    const sanitizedQuoteAmt = this._sanitizeQuoteAmount(quoteAmt);
+    const rawMarkPrice = await ExchangeService.getMarkPrice(this.symbol);
+    const markPrice = this._formatPrice(rawMarkPrice) || rawMarkPrice;
+    const baseAmt = this._calcBaseQtyFromQuote(sanitizedQuoteAmt, markPrice);
+
+    if (!Number.isFinite(baseAmt) || baseAmt <= 0) {
+      throw new Error(`[BreakoutBot] Invalid base amount (${baseAmt}) calculated from quote ${sanitizedQuoteAmt}`);
+    }
+
     const orderSide = posDir === "long" ? "buy" : "sell";
     const clientOrderId = `bb-open-${generateRandomString(10)}`;
-    console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${quoteAmt}) for ${this.symbol}`);
+    console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.symbol}`);
     await ExchangeService.placeOrder({
       symbol: this.symbol,
       orderType: "market",
       orderSide,
-      quoteAmt,
+      baseAmt,
       clientOrderId,
     });
   }
@@ -187,13 +200,15 @@ class BreakoutBot {
       return;
     }
 
+    await this._ensureSymbolInfoLoaded();
+
     const targetPosition = position || this.currActivePosition || await ExchangeService.getPosition(this.symbol);
     if (!targetPosition) {
       console.warn("[BreakoutBot] No active position found to close");
       return;
     }
 
-    const baseAmt = Math.abs(targetPosition.size);
+    const baseAmt = this._sanitizeBaseQty(Math.abs(targetPosition.size));
     if (baseAmt <= 0) {
       console.warn("[BreakoutBot] Target position size is zero, skipping close signal");
       return;
@@ -209,6 +224,62 @@ class BreakoutBot {
       baseAmt,
       clientOrderId,
     });
+  }
+
+  async loadSymbolInfo() {
+    if (!this.usesExchangeOrders()) return;
+    this.symbolInfo = await ExchangeService.getSymbolInfo(this.symbol);
+    console.log(`[BreakoutBot] Loaded symbol info for ${this.symbol}:`, this.symbolInfo);
+  }
+
+  private async _ensureSymbolInfoLoaded() {
+    if (this.symbolInfo || !this.usesExchangeOrders()) return;
+    await this.loadSymbolInfo();
+  }
+
+  private _formatWithPrecision(value: number, precision?: number) {
+    if (!Number.isFinite(value) || precision === undefined) return value;
+    return new BigNumber(value).decimalPlaces(precision, BigNumber.ROUND_DOWN).toNumber();
+  }
+
+  private _formatPrice(value: number) {
+    return this._formatWithPrecision(value, this.symbolInfo?.pricePrecision);
+  }
+
+  private _formatQuoteAmount(value: number) {
+    return this._formatWithPrecision(value, this.symbolInfo?.quotePrecision);
+  }
+
+  private _formatBaseAmount(value: number) {
+    return this._formatWithPrecision(value, this.symbolInfo?.basePrecision);
+  }
+
+  private _sanitizeQuoteAmount(rawQuoteAmt: number) {
+    const minNotional = this.symbolInfo?.minNotionalValue;
+    let sanitized = rawQuoteAmt;
+    if (minNotional && sanitized < minNotional) {
+      console.warn(`[BreakoutBot] Quote amount ${sanitized} is below min notional ${minNotional}, adjusting to min.`);
+      sanitized = minNotional;
+    }
+    return this._formatQuoteAmount(sanitized);
+  }
+
+  private _sanitizeBaseQty(rawBaseAmt: number) {
+    let sanitized = this._formatBaseAmount(rawBaseAmt);
+    const maxMarketQty = this.symbolInfo?.maxMktOrderQty;
+    if (maxMarketQty && sanitized > maxMarketQty) {
+      console.warn(`[BreakoutBot] Base quantity ${sanitized} exceeds max market qty ${maxMarketQty}, capping value.`);
+      sanitized = maxMarketQty;
+    }
+    return sanitized;
+  }
+
+  private _calcBaseQtyFromQuote(quoteAmt: number, price: number) {
+    if (price <= 0) {
+      throw new Error(`[BreakoutBot] Invalid price (${price}) when calculating base quantity from quote ${quoteAmt}`);
+    }
+    const baseQty = new BigNumber(quoteAmt).div(price).toNumber();
+    return this._sanitizeBaseQty(baseQty);
   }
 
   async startMakeMoney() {

@@ -187,6 +187,7 @@ class BinanceExchange implements IExchangeInstance {
     return {
       pricePrecision: info.pricePrecision,
       basePrecision: info.quantityPrecision,
+      quotePrecision: info.quotePrecision,
       minNotionalValue: Number(minNotionalFilter?.notional || 0),
       maxMktOrderQty: Number(marketLotSizeFilter?.maxQty || 0),
       maxLimitOrderQty: Number(lotSizeFilter?.maxQty || 0),

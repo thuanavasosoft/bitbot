@@ -110,6 +110,7 @@ export interface IPosition {
 export interface ISymbolInfo {
   pricePrecision: number;
   basePrecision: number;
+  quotePrecision: number;
   minNotionalValue: number;
   maxMktOrderQty: number;
   maxLimitOrderQty: number;

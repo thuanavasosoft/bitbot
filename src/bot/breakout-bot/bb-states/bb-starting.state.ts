@@ -57,6 +57,7 @@ class BBStartingState implements BBState {
       (!this.bot.startQuoteBalance) && this._updateBotStartBalances(),
       (!this.bot.currQuoteBalance) && this.updateBotCurrentBalances(),
       this._updateLeverage(),
+      this.bot.loadSymbolInfo(),
     ]);
 
     console.log('Breakout Bot MEXC Entering Starting State')
