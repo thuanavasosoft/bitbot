@@ -65,6 +65,19 @@ module.exports = {
       out_file: './logs/thuan4work-out.log',
       log_file: './logs/thuan4work-combined.log',
       time: true
+    },
+    {
+      name: 'nhthuan20-binance',
+      script: 'node dist/index.js',
+      instances: 1,
+      autorestart: false,
+      watch: false,
+      max_memory_restart: '3G',
+      env_file: './env-files/nhthuan20-binance.env',
+      error_file: './logs/nhthuan20-binance-err.log',
+      out_file: './logs/nhthuan20-binance-out.log',
+      log_file: './logs/nhthuan20-binance-combined.log',
+      time: true
     }
   ]
   // Other accounts can be added below here
