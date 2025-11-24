@@ -48,16 +48,53 @@ class BBWaitForResolveState implements BBState {
       const position = this.bot.currActivePosition;
       let shouldExit = false;
       let exitReason = "";
+      const priceBn = new BigNumber(price);
+      const fractionalStopLoss = this.bot.fractionalStopLoss;
 
-      // Check support/resistance exits
-      if (position.side === "long" && new BigNumber(price).lte(this.bot.currentSupport)) {
-        shouldExit = true;
-        exitReason = "support_resistance";
-        TelegramService.queueMsg(`📉 Long position exit trigger: Price ${price} <= Support ${this.bot.currentSupport}`);
-      } else if (position.side === "short" && new BigNumber(price).gte(this.bot.currentResistance)) {
-        shouldExit = true;
-        exitReason = "support_resistance";
-        TelegramService.queueMsg(`📈 Short position exit trigger: Price ${price} >= Resistance ${this.bot.currentResistance}`);
+      if (
+        !shouldExit &&
+        fractionalStopLoss > 0 &&
+        this.bot.currentResistance !== null &&
+        this.bot.currentSupport !== null
+      ) {
+        const range = new BigNumber(this.bot.currentResistance).minus(this.bot.currentSupport);
+
+        if (range.gt(0)) {
+          const fractionalDistance = range.times(fractionalStopLoss);
+
+          if (position.side === "long") {
+            const stopLevel = new BigNumber(this.bot.currentResistance).minus(fractionalDistance);
+            if (priceBn.lte(stopLevel)) {
+              shouldExit = true;
+              exitReason = "fractional_stop_loss";
+              const msg = `🛑 Fractional stop hit (long). Price ${price} <= ${stopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
+              console.log(msg);
+              TelegramService.queueMsg(msg);
+            }
+          } else if (position.side === "short") {
+            const stopLevel = new BigNumber(this.bot.currentSupport).plus(fractionalDistance);
+            if (priceBn.gte(stopLevel)) {
+              shouldExit = true;
+              exitReason = "fractional_stop_loss";
+              const msg = `🛑 Fractional stop hit (short). Price ${price} >= ${stopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
+              console.log(msg);
+              TelegramService.queueMsg(msg);
+            }
+          }
+        }
+      }
+
+      if (!shouldExit) {
+        // Check support/resistance exits
+        if (position.side === "long" && priceBn.lte(this.bot.currentSupport)) {
+          shouldExit = true;
+          exitReason = "support_resistance";
+          TelegramService.queueMsg(`📉 Long position exit trigger: Price ${price} <= Support ${this.bot.currentSupport}`);
+        } else if (position.side === "short" && priceBn.gte(this.bot.currentResistance)) {
+          shouldExit = true;
+          exitReason = "support_resistance";
+          TelegramService.queueMsg(`📈 Short position exit trigger: Price ${price} >= Resistance ${this.bot.currentResistance}`);
+        }
       }
 
       if (shouldExit) {

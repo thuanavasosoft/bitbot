@@ -50,6 +50,7 @@ class BreakoutBot {
   longTrigger: number | null = null; // Trigger price for long entry (resistance adjusted down by buffer)
   shortTrigger: number | null = null; // Trigger price for short entry (support adjusted up by buffer)
   bufferPercentage: number; // Buffer percentage for trigger adjustments
+  fractionalStopLoss: number;
   lastSRUpdateTime: number = 0; // Timestamp of last support/resistance update
   lastExitTime: number = 0; // Timestamp of last position exit
   lastEntryTime: number = 0; // Timestamp of last position entry
@@ -75,6 +76,7 @@ class BreakoutBot {
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
     this.bufferPercentage = Number(process.env.BREAKOUT_BOT_BUFFER_PERCENTAGE || 0) / 100; // Convert percentage to decimal
+    this.fractionalStopLoss = Math.max(0, Number(process.env.BREAKOUT_BOT_FRACTIONAL_STOP_LOSS || 0));
 
     // Signal parameters with defaults from backtest
     this.signalParams = {
