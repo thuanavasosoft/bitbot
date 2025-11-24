@@ -28,7 +28,7 @@ class BBTrendWatcher {
         await new Promise(r => setTimeout(r, 5000));
         continue;
       }
-      if (this.bot.connectedClientsAmt === 0) {
+      if (this.bot.connectedClientsAmt === 0 && process.env.EXCHANGE_ADAPTER === "1") {
         TelegramService.queueMsg("❗ No clients connected yet, waiting for client to be connected to continue...");
 
         while (true) {
