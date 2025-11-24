@@ -73,6 +73,9 @@ class BBTrendWatcher {
       const rawSupport = signalResult.support;
       const rawResistance = signalResult.resistance;
       
+      let fractionalStopRaw: number | null = null;
+      let fractionalStopBuffered: number | null = null;
+
       // Calculate trigger prices with buffer percentage
       let longTrigger: number | null = null;
       let shortTrigger: number | null = null;
@@ -105,6 +108,32 @@ class BBTrendWatcher {
         const multiplier = Math.pow(10, precision);
         shortTrigger = Math.floor(shortTriggerRaw.times(multiplier).toNumber()) / multiplier;
       }
+
+      if (
+        this.bot.currActivePosition &&
+        rawSupport !== null &&
+        rawResistance !== null &&
+        this.bot.fractionalStopLoss > 0
+      ) {
+        const supportBn = new BigNumber(rawSupport);
+        const resistanceBn = new BigNumber(rawResistance);
+        const range = resistanceBn.minus(supportBn);
+        if (range.gt(0)) {
+          const fractionalDistance = range.times(this.bot.fractionalStopLoss);
+          const bufferPct = new BigNumber(this.bot.bufferPercentage || 0);
+          const one = new BigNumber(1);
+
+          if (this.bot.currActivePosition.side === "long") {
+            const bufferedResistance = resistanceBn.times(one.minus(bufferPct));
+            fractionalStopRaw = resistanceBn.minus(fractionalDistance).toNumber();
+            fractionalStopBuffered = bufferedResistance.minus(fractionalDistance).toNumber();
+          } else {
+            const bufferedSupport = supportBn.times(one.plus(bufferPct));
+            fractionalStopRaw = supportBn.plus(fractionalDistance).toNumber();
+            fractionalStopBuffered = bufferedSupport.plus(fractionalDistance).toNumber();
+          }
+        }
+      }
       
       // Generate chart with support/resistance and trigger lines
       const signalImageData = await generateImageOfCandlesWithSupportResistance(
@@ -116,7 +145,9 @@ class BBTrendWatcher {
         candlesEndDate,
         this.bot.currActivePosition,
         longTrigger,
-        shortTrigger
+        shortTrigger,
+        fractionalStopRaw,
+        fractionalStopBuffered
       );
 
       const signalData: ISignalData = {
@@ -130,10 +161,13 @@ class BBTrendWatcher {
       const triggerMsg = longTrigger !== null || shortTrigger !== null
         ? `\nLong Trigger: ${longTrigger !== null ? longTrigger.toFixed(4) : 'N/A'}\nShort Trigger: ${shortTrigger !== null ? shortTrigger.toFixed(4) : 'N/A'}`
         : '';
+      const fractionalMsg = fractionalStopRaw !== null || fractionalStopBuffered !== null
+        ? `\nFrac Stop (raw): ${fractionalStopRaw !== null ? fractionalStopRaw.toFixed(4) : 'N/A'}\nFrac Stop (buffered): ${fractionalStopBuffered !== null ? fractionalStopBuffered.toFixed(4) : 'N/A'}`
+        : '';
       TelegramService.queueMsg(
         `ℹ️ Breakout signal check result: ${signalResult.signal} - Price: ${signalData.closePrice.toFixed(4)}\n` +
         `Support: ${rawSupport !== null ? rawSupport.toFixed(4) : 'N/A'}\n` +
-        `Resistance: ${rawResistance !== null ? rawResistance.toFixed(4) : 'N/A'}${triggerMsg}`
+        `Resistance: ${rawResistance !== null ? rawResistance.toFixed(4) : 'N/A'}${triggerMsg}${fractionalMsg}`
       );
 
       // Update bot's current signal levels with raw values and triggers

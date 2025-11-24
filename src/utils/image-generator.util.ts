@@ -108,6 +108,8 @@ export async function generateImageOfCandlesWithSupportResistance(
   currOpenedPos?: { avgPrice: number, side: TPositionSide },
   longTrigger?: number | null,
   shortTrigger?: number | null,
+  fractionalStopRaw?: number | null,
+  fractionalStopBuffered?: number | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
   const ctx = canvas.getContext('2d');
@@ -216,6 +218,58 @@ export async function generateImageOfCandlesWithSupportResistance(
         backgroundColor: "#FF6347",
         color: "#FFFFFF",
         xAdjust: -4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
+  if (fractionalStopRaw !== null && fractionalStopRaw !== undefined) {
+    annotations.fractionalStopRaw = {
+      type: 'line' as any,
+      yMin: fractionalStopRaw,
+      yMax: fractionalStopRaw,
+      borderColor: "#8A2BE2", // Blue Violet
+      borderWidth: 2,
+      borderDash: [4, 2],
+      label: {
+        display: true,
+        content: [`Frac Stop: ${fractionalStopRaw.toFixed(4)}`],
+        position: "start",
+        backgroundColor: "#8A2BE2",
+        color: "#FFFFFF",
+        xAdjust: -4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
+  if (fractionalStopBuffered !== null && fractionalStopBuffered !== undefined) {
+    annotations.fractionalStopBuffered = {
+      type: 'line' as any,
+      yMin: fractionalStopBuffered,
+      yMax: fractionalStopBuffered,
+      borderColor: "#DA70D6", // Orchid
+      borderWidth: 2,
+      borderDash: [2, 2],
+      label: {
+        display: true,
+        content: [`Frac Stop (Buf): ${fractionalStopBuffered.toFixed(4)}`],
+        position: "end",
+        backgroundColor: "#DA70D6",
+        color: "#FFFFFF",
+        xAdjust: 4,
         font: {
           size: 11,
           weight: "bold",

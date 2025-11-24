@@ -50,50 +50,79 @@ class BBWaitForResolveState implements BBState {
       let exitReason = "";
       const priceBn = new BigNumber(price);
       const fractionalStopLoss = this.bot.fractionalStopLoss;
+      const one = new BigNumber(1);
+      const bufferPct = new BigNumber(this.bot.bufferPercentage || 0);
+      const resistanceBn = this.bot.currentResistance !== null ? new BigNumber(this.bot.currentResistance) : null;
+      const supportBn = this.bot.currentSupport !== null ? new BigNumber(this.bot.currentSupport) : null;
+      const bufferedResistance = resistanceBn ? resistanceBn.times(one.minus(bufferPct)) : null;
+      const bufferedSupport = supportBn ? supportBn.times(one.plus(bufferPct)) : null;
+
+      this.bot.bufferedExitLevels = {
+        resistance: bufferedResistance ? bufferedResistance.toNumber() : null,
+        support: bufferedSupport ? bufferedSupport.toNumber() : null,
+      };
 
       if (
         !shouldExit &&
         fractionalStopLoss > 0 &&
-        this.bot.currentResistance !== null &&
-        this.bot.currentSupport !== null
+        resistanceBn !== null &&
+        supportBn !== null
       ) {
-        const range = new BigNumber(this.bot.currentResistance).minus(this.bot.currentSupport);
+        const range = resistanceBn.minus(supportBn);
 
         if (range.gt(0)) {
           const fractionalDistance = range.times(fractionalStopLoss);
+          let bufferedStopLevel: BigNumber | null = null;
+          let rawStopLevel: BigNumber | null = null;
 
           if (position.side === "long") {
-            const stopLevel = new BigNumber(this.bot.currentResistance).minus(fractionalDistance);
-            if (priceBn.lte(stopLevel)) {
+            const baseResistance = bufferedResistance ?? resistanceBn;
+            bufferedStopLevel = baseResistance.minus(fractionalDistance);
+            rawStopLevel = resistanceBn.minus(fractionalDistance);
+
+            if (priceBn.lte(bufferedStopLevel)) {
               shouldExit = true;
               exitReason = "fractional_stop_loss";
-              const msg = `🛑 Fractional stop hit (long). Price ${price} <= ${stopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
+              const msg = `🛑 Fractional stop hit (long). Price ${price} <= ${bufferedStopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
               console.log(msg);
               TelegramService.queueMsg(msg);
             }
           } else if (position.side === "short") {
-            const stopLevel = new BigNumber(this.bot.currentSupport).plus(fractionalDistance);
-            if (priceBn.gte(stopLevel)) {
+            const baseSupport = bufferedSupport ?? supportBn;
+            bufferedStopLevel = baseSupport.plus(fractionalDistance);
+            rawStopLevel = supportBn.plus(fractionalDistance);
+
+            if (priceBn.gte(bufferedStopLevel)) {
               shouldExit = true;
               exitReason = "fractional_stop_loss";
-              const msg = `🛑 Fractional stop hit (short). Price ${price} >= ${stopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
+              const msg = `🛑 Fractional stop hit (short). Price ${price} >= ${bufferedStopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
               console.log(msg);
               TelegramService.queueMsg(msg);
             }
           }
+
+          if (rawStopLevel && bufferedStopLevel) {
+            this.bot.fractionalStopTargets = {
+              side: position.side,
+              rawLevel: rawStopLevel.toNumber(),
+              bufferedLevel: bufferedStopLevel.toNumber(),
+            };
+          }
         }
+      } else {
+        this.bot.fractionalStopTargets = undefined;
       }
 
       if (!shouldExit) {
         // Check support/resistance exits
-        if (position.side === "long" && priceBn.lte(this.bot.currentSupport)) {
+        if (position.side === "long" && bufferedSupport && priceBn.lte(bufferedSupport)) {
           shouldExit = true;
           exitReason = "support_resistance";
-          TelegramService.queueMsg(`📉 Long position exit trigger: Price ${price} <= Support ${this.bot.currentSupport}`);
-        } else if (position.side === "short" && priceBn.gte(this.bot.currentResistance)) {
+          TelegramService.queueMsg(`📉 Long position exit trigger: Price ${price} <= Buffered Support ${bufferedSupport.toFixed(4)}`);
+        } else if (position.side === "short" && bufferedResistance && priceBn.gte(bufferedResistance)) {
           shouldExit = true;
           exitReason = "support_resistance";
-          TelegramService.queueMsg(`📈 Short position exit trigger: Price ${price} >= Resistance ${this.bot.currentResistance}`);
+          TelegramService.queueMsg(`📈 Short position exit trigger: Price ${price} >= Buffered Resistance ${bufferedResistance.toFixed(4)}`);
         }
       }
 
@@ -210,15 +239,17 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     // For short exit (buy): compare avgPrice with resistance (lower avgPrice relative to resistance = better = negative slippage)
     const positionSide = this.bot.currActivePosition?.side;
     let srLevel: number | null = null;
-    if (positionSide === "long") {
+    if (this.bot.fractionalStopTargets && this.bot.fractionalStopTargets.side === positionSide) {
+      srLevel = this.bot.fractionalStopTargets.rawLevel;
+    } else if (positionSide === "long") {
       srLevel = this.bot.currentSupport;
     } else if (positionSide === "short") {
       srLevel = this.bot.currentResistance;
     }
     
     if (srLevel === null) {
-      console.warn(`⚠️ Cannot calculate slippage: ${positionSide === "long" ? "support" : "resistance"} level is null`);
-      TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`);
+      console.warn(`⚠️ Cannot calculate slippage: ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level is null`);
+      TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level not available`);
     }
     
     slippage = srLevel !== null
@@ -239,6 +270,8 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     this.bot.currActivePosition = undefined;
     this.bot.entryWsPrice = undefined;
     this.bot.resolveWsPrice = undefined;
+    this.bot.fractionalStopTargets = undefined;
+    this.bot.bufferedExitLevels = undefined;
     this.bot.numberOfTrades++;
     this.bot.lastExitTime = Date.now(); // Track when we exited
 

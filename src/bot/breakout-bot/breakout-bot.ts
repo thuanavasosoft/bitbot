@@ -1,4 +1,4 @@
-import { IPosition } from "@/services/exchange-service/exchange-type";
+import { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
 import BBUtil from "./bb-util";
 import BBWSSignaling from "./bb-ws-signaling";
 import BBStartingState from "./bb-states/bb-starting.state";
@@ -38,6 +38,8 @@ class BreakoutBot {
   currActivePosition?: IPosition;
   entryWsPrice?: { price: number, time: Date };
   resolveWsPrice?: { price: number, time: Date };
+  bufferedExitLevels?: { support: number | null; resistance: number | null };
+  fractionalStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number };
 
   slippageAccumulation: number = 0;
   numberOfTrades: number = 0;
