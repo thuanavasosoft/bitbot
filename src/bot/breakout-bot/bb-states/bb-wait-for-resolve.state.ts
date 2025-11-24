@@ -207,8 +207,14 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     let timeDiffMs: number = 0;
 
     const closedPosition = await (async () => {
+      let hasSubmittedBinanceClose = false;
       for (let i = 0; i < 10; i++) { // Try 10 times
-        this.bot.bbWsSignaling.broadcast("close-position");
+        if (this.bot.usesWsSignaling()) {
+          await this.bot.triggerCloseSignal(this.bot.currActivePosition);
+        } else if (!hasSubmittedBinanceClose) {
+          await this.bot.triggerCloseSignal(this.bot.currActivePosition);
+          hasSubmittedBinanceClose = true;
+        }
         await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds before checking closed position again
 
         console.log("Fetching position for this position id: ", this.bot.currActivePosition!.id!);

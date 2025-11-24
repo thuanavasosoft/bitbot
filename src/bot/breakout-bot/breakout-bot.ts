@@ -1,4 +1,6 @@
+import ExchangeService from "@/services/exchange-service/exchange-service";
 import { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { generateRandomString } from "@/utils/strings.util";
 import BBUtil from "./bb-util";
 import BBWSSignaling from "./bb-ws-signaling";
 import BBStartingState from "./bb-states/bb-starting.state";
@@ -19,6 +21,7 @@ class BreakoutBot {
 
   symbol: string;
   leverage: number;
+  exchangeAdapter: number;
 
   startQuoteBalance!: string;
   currQuoteBalance!: string;
@@ -74,6 +77,7 @@ class BreakoutBot {
 
     this.symbol = process.env.SYMBOL!;
     this.leverage = Number(process.env.BREAKOUT_BOT_LEVERAGE!);
+    this.exchangeAdapter = Number(process.env.EXCHANGE_ADAPTER || 1);
     this.sleepDurationAfterLiquidation = process.env.BREAKOUT_BOT_SLEEP_DURATION_AFTER_LIQUIDATION!;
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
@@ -116,6 +120,7 @@ class BreakoutBot {
       "BREAKOUT_BOT_BET_SIZE",
       "BREAKOUT_BOT_CHECK_INTERVAL_MINUTES",
       "BREAKOUT_BOT_SERVER_PORT",
+      "EXCHANGE_ADAPTER",
     ];
 
     for (const envKey of necessaryEnvKeys) {
@@ -133,6 +138,77 @@ class BreakoutBot {
         }
       }
     }
+  }
+
+  usesWsSignaling() {
+    return this.exchangeAdapter === 1;
+  }
+
+  usesExchangeOrders() {
+    return this.exchangeAdapter === 2;
+  }
+
+  async triggerOpenSignal(posDir: TPositionSide, openBalanceAmt: string) {
+    if (this.usesWsSignaling()) {
+      this.bbWsSignaling.broadcast(`open-${posDir}`, openBalanceAmt);
+      return;
+    }
+
+    if (!this.usesExchangeOrders()) {
+      console.warn(`[BreakoutBot] Unsupported adapter ${this.exchangeAdapter} for triggerOpenSignal`);
+      return;
+    }
+
+    const quoteAmt = Number(openBalanceAmt);
+    if (!Number.isFinite(quoteAmt) || quoteAmt <= 0) {
+      throw new Error(`Invalid quote amount supplied for open signal: ${openBalanceAmt}`);
+    }
+
+    const orderSide = posDir === "long" ? "buy" : "sell";
+    const clientOrderId = `bb-open-${generateRandomString(10)}`;
+    console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${quoteAmt}) for ${this.symbol}`);
+    await ExchangeService.placeOrder({
+      symbol: this.symbol,
+      orderType: "market",
+      orderSide,
+      quoteAmt,
+      clientOrderId,
+    });
+  }
+
+  async triggerCloseSignal(position?: IPosition) {
+    if (this.usesWsSignaling()) {
+      this.bbWsSignaling.broadcast("close-position");
+      return;
+    }
+
+    if (!this.usesExchangeOrders()) {
+      console.warn(`[BreakoutBot] Unsupported adapter ${this.exchangeAdapter} for triggerCloseSignal`);
+      return;
+    }
+
+    const targetPosition = position || this.currActivePosition || await ExchangeService.getPosition(this.symbol);
+    if (!targetPosition) {
+      console.warn("[BreakoutBot] No active position found to close");
+      return;
+    }
+
+    const baseAmt = Math.abs(targetPosition.size);
+    if (baseAmt <= 0) {
+      console.warn("[BreakoutBot] Target position size is zero, skipping close signal");
+      return;
+    }
+
+    const orderSide = targetPosition.side === "long" ? "sell" : "buy";
+    const clientOrderId = `bb-close-${generateRandomString(10)}`;
+    console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (base: ${baseAmt}) to close position ${targetPosition.id}`);
+    await ExchangeService.placeOrder({
+      symbol: targetPosition.symbol,
+      orderType: "market",
+      orderSide,
+      baseAmt,
+      clientOrderId,
+    });
   }
 
   async startMakeMoney() {

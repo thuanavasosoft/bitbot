@@ -217,19 +217,19 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
       }
     });
 
-    TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_LONG, () => {
-      console.log("Broadcasting open-long");
-      this.bot.bbWsSignaling.broadcast("open-long", "10");
+    TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_LONG, async () => {
+      console.log("Triggering manual open-long");
+      await this.bot.triggerOpenSignal("long", "10");
     });
 
-    TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_SHORT, () => {
-      console.log("Broadcasting open-short");
-      this.bot.bbWsSignaling.broadcast("open-short", "10");
+    TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_SHORT, async () => {
+      console.log("Triggering manual open-short");
+      await this.bot.triggerOpenSignal("short", "10");
     });
 
-    TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, () => {
-      console.log("Broadcasting close-position");
-      this.bot.bbWsSignaling.broadcast("close-position");
+    TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, async () => {
+      console.log("Triggering manual close-position");
+      await this.bot.triggerCloseSignal();
     });
   }
 }

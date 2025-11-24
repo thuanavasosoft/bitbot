@@ -70,7 +70,7 @@ class BBWaitForEntryState implements BBState {
     const msg = `✨️️️️️️️ Opening ${posDir} position`;
     TelegramService.queueMsg(msg);
     console.log(msg);
-    console.log(`Broadcasting: open-${posDir}`);
+    console.log(`Triggering open-${posDir} signal`);
 
     const currLatestMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
     const triggerTs = +new Date();
@@ -81,9 +81,15 @@ class BBWaitForEntryState implements BBState {
 
     console.log("Opening position...");
     let position: IPosition | undefined = undefined;
+    let hasSubmittedBinanceOrder = false;
     for (let i = 0; i < 10; i++) {
       try {
-        this.bot.bbWsSignaling.broadcast(`open-${posDir}`, budget);
+        if (this.bot.usesWsSignaling()) {
+          await this.bot.triggerOpenSignal(posDir, budget);
+        } else if (!hasSubmittedBinanceOrder) {
+          await this.bot.triggerOpenSignal(posDir, budget);
+          hasSubmittedBinanceOrder = true;
+        }
         await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
         position = await ExchangeService.getPosition(this.bot.symbol);
         console.log("position: ", position);
