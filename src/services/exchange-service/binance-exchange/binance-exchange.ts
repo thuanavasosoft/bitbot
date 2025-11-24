@@ -103,22 +103,55 @@ class BinanceExchange implements IExchangeInstance {
   async getCandles(symbol: string, startDate: Date, endDate: Date, resolution: TCandleResolution): Promise<ICandleInfo[]> {
     const normalizedSymbol = this._normalizeSymbol(symbol);
     const interval = this._mapResolution(resolution);
+    const intervalMs = this._resolutionToMs(resolution);
+    if (!intervalMs) {
+      throw new Error(`Unsupported resolution ${resolution} for Binance candle pagination`);
+    }
 
-    const klines = (await this._client.getKlines({
-      symbol: normalizedSymbol,
-      interval,
-      startTime: startDate.getTime(),
-      endTime: endDate.getTime(),
-      limit: 1500,
-    })) as Kline[];
+    const startTime = startDate.getTime();
+    const endTime = endDate.getTime();
+    const limit = 1500;
+    let fetchStart = startTime;
+    const candles: ICandleInfo[] = [];
 
-    return klines.map(([openTime, openPrice, highPrice, lowPrice, closePrice]) => ({
-      timestamp: openTime,
-      openPrice: Number(openPrice),
-      highPrice: Number(highPrice),
-      lowPrice: Number(lowPrice),
-      closePrice: Number(closePrice),
-    }));
+    while (fetchStart < endTime) {
+      const klines = (await this._client.getKlines({
+        symbol: normalizedSymbol,
+        interval,
+        startTime: fetchStart,
+        endTime,
+        limit,
+      })) as Kline[];
+
+      if (!klines.length) break;
+
+      const mappedChunk = klines.map(([openTime, openPrice, highPrice, lowPrice, closePrice]) => ({
+        timestamp: openTime,
+        openPrice: Number(openPrice),
+        highPrice: Number(highPrice),
+        lowPrice: Number(lowPrice),
+        closePrice: Number(closePrice),
+      }));
+
+      let chunkStartIdx = 0;
+      if (candles.length > 0) {
+        const lastTs = candles[candles.length - 1].timestamp;
+        while (chunkStartIdx < mappedChunk.length && mappedChunk[chunkStartIdx].timestamp <= lastTs) {
+          chunkStartIdx++;
+        }
+      }
+
+      if (chunkStartIdx < mappedChunk.length) {
+        candles.push(...mappedChunk.slice(chunkStartIdx));
+      }
+
+      const lastChunk = mappedChunk[mappedChunk.length - 1];
+      fetchStart = lastChunk.timestamp + intervalMs;
+
+      if (klines.length < limit) break;
+    }
+
+    return candles;
   }
 
   async setLeverage(symbol: string, leverage: number): Promise<boolean> {
@@ -354,6 +387,28 @@ class BinanceExchange implements IExchangeInstance {
       "1Day": "1d",
       "1Week": "1w",
       "1Month": "1M",
+    };
+
+    return mapping[resolution];
+  }
+
+  private _resolutionToMs(resolution: TCandleResolution): number | undefined {
+    const minute = 60 * 1000;
+    const hour = 60 * minute;
+    const day = 24 * hour;
+
+    const mapping: Partial<Record<TCandleResolution, number>> = {
+      "1Min": minute,
+      "3Min": 3 * minute,
+      "5Min": 5 * minute,
+      "15Min": 15 * minute,
+      "30Min": 30 * minute,
+      "60Min": hour,
+      "4Hour": 4 * hour,
+      "8Hour": 8 * hour,
+      "1Day": day,
+      "1Week": 7 * day,
+      "1Month": 30 * day,
     };
 
     return mapping[resolution];
