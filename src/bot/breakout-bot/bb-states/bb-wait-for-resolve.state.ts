@@ -76,9 +76,9 @@ class BBWaitForResolveState implements BBState {
           let rawStopLevel: BigNumber | null = null;
 
           if (position.side === "long") {
-            const baseResistance = bufferedResistance ?? resistanceBn;
-            bufferedStopLevel = baseResistance.minus(fractionalDistance);
             rawStopLevel = resistanceBn.minus(fractionalDistance);
+            const stopBufferDelta = rawStopLevel.times(bufferPct);
+            bufferedStopLevel = rawStopLevel.plus(stopBufferDelta);
 
             if (priceBn.lte(bufferedStopLevel)) {
               shouldExit = true;
@@ -88,9 +88,9 @@ class BBWaitForResolveState implements BBState {
               TelegramService.queueMsg(msg);
             }
           } else if (position.side === "short") {
-            const baseSupport = bufferedSupport ?? supportBn;
-            bufferedStopLevel = baseSupport.plus(fractionalDistance);
             rawStopLevel = supportBn.plus(fractionalDistance);
+            const stopBufferDelta = rawStopLevel.times(bufferPct);
+            bufferedStopLevel = rawStopLevel.minus(stopBufferDelta);
 
             if (priceBn.gte(bufferedStopLevel)) {
               shouldExit = true;
