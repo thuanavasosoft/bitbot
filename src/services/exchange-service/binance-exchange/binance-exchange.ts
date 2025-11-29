@@ -415,10 +415,17 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   private _mapBinancePosition(position: any, originalSymbol: string): IPosition | undefined {
-    const size = Math.abs(Number(position.positionAmt));
+    const rawPositionAmt = Number(position.positionAmt);
+    const size = Math.abs(rawPositionAmt);
     if (!size) return undefined;
 
-    const side: TPositionSide = position.positionSide?.toLowerCase() === "short" ? "short" : "long";
+    const normalizedPositionSide = position.positionSide?.toLowerCase();
+    let side: TPositionSide;
+    if (normalizedPositionSide === "short" || normalizedPositionSide === "long") {
+      side = normalizedPositionSide;
+    } else {
+      side = rawPositionAmt < 0 ? "short" : "long";
+    }
     const notional = Math.abs(Number(position.notional));
     const initialMargin = Number(position.initialMargin || position.positionInitialMargin || 0);
     const leverage = initialMargin ? Math.abs(notional / initialMargin) : 0;
