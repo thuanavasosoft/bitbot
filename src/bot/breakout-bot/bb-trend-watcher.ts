@@ -121,16 +121,17 @@ class BBTrendWatcher {
         if (range.gt(0)) {
           const fractionalDistance = range.times(this.bot.fractionalStopLoss);
           const bufferPct = new BigNumber(this.bot.bufferPercentage || 0);
-          const one = new BigNumber(1);
-
+          
           if (this.bot.currActivePosition.side === "long") {
-            const bufferedResistance = resistanceBn.times(one.minus(bufferPct));
             fractionalStopRaw = resistanceBn.minus(fractionalDistance).toNumber();
-            fractionalStopBuffered = bufferedResistance.minus(fractionalDistance).toNumber();
+            const stopBufferDelta = new BigNumber(fractionalStopRaw).times(bufferPct);
+            
+            fractionalStopBuffered = new BigNumber(fractionalStopRaw).plus(stopBufferDelta).toNumber();
           } else {
-            const bufferedSupport = supportBn.times(one.plus(bufferPct));
             fractionalStopRaw = supportBn.plus(fractionalDistance).toNumber();
-            fractionalStopBuffered = bufferedSupport.plus(fractionalDistance).toNumber();
+            const stopBufferDelta = new BigNumber(fractionalStopRaw).times(bufferPct);
+
+            fractionalStopBuffered = new BigNumber(fractionalStopRaw).minus(stopBufferDelta).toNumber();
           }
         }
       }

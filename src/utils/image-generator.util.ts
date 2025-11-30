@@ -265,7 +265,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [2, 2],
       label: {
         display: true,
-        content: [`Frac Stop (Buf): ${fractionalStopBuffered.toFixed(4)}`],
+        content: [`Resolve Trigger: ${fractionalStopBuffered.toFixed(4)}`],
         position: "end",
         backgroundColor: "#DA70D6",
         color: "#FFFFFF",
