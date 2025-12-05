@@ -7,6 +7,9 @@ import BigNumber from "bignumber.js";
 
 class BBWaitForResolveState implements BBState {
   private priceListenerRemover?: () => void;
+  private liquidationListenerRemover?: () => void;
+  private liquidationPollInterval?: NodeJS.Timeout;
+  private manualCloseInProgress = false;
 
   constructor(private bot: BreakoutBot) { }
 
@@ -25,10 +28,37 @@ class BBWaitForResolveState implements BBState {
     this._watchForPositionLiquidation();
   }
 
+  private _clearPriceListener() {
+    if (this.priceListenerRemover) {
+      this.priceListenerRemover();
+      this.priceListenerRemover = undefined;
+    }
+  }
+
+  private _clearLiquidationListener() {
+    if (this.liquidationListenerRemover) {
+      this.liquidationListenerRemover();
+      this.liquidationListenerRemover = undefined;
+    }
+  }
+
+  private _clearLiquidationPollInterval() {
+    if (this.liquidationPollInterval) {
+      clearInterval(this.liquidationPollInterval);
+      this.liquidationPollInterval = undefined;
+    }
+  }
+
+  private _stopAllWatchers() {
+    this._clearPriceListener();
+    this._clearLiquidationListener();
+    this._clearLiquidationPollInterval();
+  }
+
   private async _watchForPositionExit() {
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (price) => {
       if (!this.bot.currActivePosition) {
-        this.priceListenerRemover && this.priceListenerRemover();
+        this._clearPriceListener();
         console.log("No active position found, exiting price exit listener");
         return;
       }
@@ -127,16 +157,17 @@ class BBWaitForResolveState implements BBState {
       }
 
       if (shouldExit) {
-        this.priceListenerRemover && this.priceListenerRemover();
+        this._clearPriceListener();
         await this._closeCurrPosition(exitReason);
       }
     });
   }
 
   private async _watchForPositionLiquidation() {
-    const liquidationListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
+    this._clearLiquidationListener();
+    this.liquidationListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
       if (!this.bot.currActivePosition) {
-        liquidationListenerRemover && liquidationListenerRemover();
+        this._clearLiquidationListener();
         console.log("No active position found, exiting price liquidation listener");
         return;
       }
@@ -151,11 +182,11 @@ class BBWaitForResolveState implements BBState {
       console.log(msg);
       TelegramService.queueMsg(msg);
 
-      this.priceListenerRemover && this.priceListenerRemover();
-      liquidationListenerRemover && liquidationListenerRemover();
+      this._clearPriceListener();
+      this._clearLiquidationListener();
 
-      let intervalId: NodeJS.Timeout;
-      intervalId = setInterval(async () => {
+      this._clearLiquidationPollInterval();
+      this.liquidationPollInterval = setInterval(async () => {
         this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
         const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
         const closedPos = posHistory[0];
@@ -184,7 +215,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
           this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
           this.bot.bbUtil.handlePnL(closedPos.realizedPnl, true);
           
-          clearInterval(intervalId);
+          this._clearLiquidationPollInterval();
           this.bot.currActivePosition = undefined;
           this.bot.lastExitTime = Date.now(); // Track when we exited (liquidation)
           eventBus.emit(EEventBusEventType.StateChange);
@@ -193,6 +224,31 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
       }, 5000);
       return;
     });
+  }
+
+  async handleManualCloseRequest() {
+    if (this.manualCloseInProgress) {
+      const msg = `Close position request is already being processed, please wait...`;
+      console.log(msg);
+      TelegramService.queueMsg(msg);
+      return;
+    }
+
+    if (!this.bot.currActivePosition) {
+      const msg = `No active position to close manually.`;
+      console.warn(msg);
+      TelegramService.queueMsg(msg);
+      return;
+    }
+
+    this.manualCloseInProgress = true;
+
+    try {
+      this._stopAllWatchers();
+      await this._closeCurrPosition("manual_close_command");
+    } finally {
+      this.manualCloseInProgress = false;
+    }
   }
 
   private async _closeCurrPosition(reason: string = "support_resistance") {
@@ -288,7 +344,7 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
 
   async onExit() {
     console.log("Exiting BB Wait For Resolve State");
-    this.priceListenerRemover && this.priceListenerRemover();
+    this._stopAllWatchers();
   }
 }
 

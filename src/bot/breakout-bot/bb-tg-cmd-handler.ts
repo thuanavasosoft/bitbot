@@ -229,7 +229,29 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
 
     TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, async () => {
       console.log("Triggering manual close-position");
-      await this.bot.triggerCloseSignal();
+      TelegramService.queueMsg(`⏳ Received /${EBBotCommand.CLOSE_POSITION}, attempting to close position...`);
+
+      try {
+        if (this.bot.currentState === this.bot.waitForResolveState) {
+          if (!this.bot.currActivePosition) {
+            const msg = `⚠️ Bot is in resolve state but no active position is tracked. Please check exchange manually.`;
+            console.warn(msg);
+            TelegramService.queueMsg(msg);
+            return;
+          }
+
+          await this.bot.waitForResolveState.handleManualCloseRequest();
+          TelegramService.queueMsg(`✅ Manual close completed. Recording PnL and returning to starting cycle.`);
+          return;
+        }
+
+        await this.bot.triggerCloseSignal();
+        TelegramService.queueMsg(`✅ Close signal sent. Monitor exchange for fill confirmation.`);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : `${error}`;
+        console.error("Failed to process /close_position command:", error);
+        TelegramService.queueMsg(`❌ Failed to close position: ${errMsg}`);
+      }
     });
   }
 }
