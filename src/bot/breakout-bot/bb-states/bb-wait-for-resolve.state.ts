@@ -1,5 +1,5 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IPosition, IWSOrderUpdate } from "@/services/exchange-service/exchange-type";
+import { ICandleInfo, IPosition, IWSOrderUpdate } from "@/services/exchange-service/exchange-type";
 import BreakoutBot, { BBState } from "../breakout-bot";
 import { parseDurationStringIntoMs } from "@/utils/maths.util";
 import TelegramService from "@/services/telegram.service";
@@ -10,6 +10,8 @@ class BBWaitForResolveState implements BBState {
   private priceListenerRemover?: () => void;
   private orderUpdateRemover?: () => void;
   private manualCloseInProgress = false;
+  private trailingUpdaterAbort = false;
+  private trailingUpdaterPromise?: Promise<void>;
 
   constructor(private bot: BreakoutBot) { }
 
@@ -26,6 +28,7 @@ class BBWaitForResolveState implements BBState {
 
     this._watchForPositionExit();
     this._watchForPositionLiquidation();
+    this._startTrailingUpdater();
   }
 
   private _clearPriceListener() {
@@ -45,6 +48,7 @@ class BBWaitForResolveState implements BBState {
   private _stopAllWatchers() {
     this._clearPriceListener();
     this._clearOrderUpdateListener();
+    this._stopTrailingUpdater();
   }
 
   private async _watchForPositionExit() {
@@ -71,7 +75,6 @@ class BBWaitForResolveState implements BBState {
       let shouldExit = false;
       let exitReason = "";
       const priceBn = new BigNumber(price);
-      const fractionalStopLoss = this.bot.fractionalStopLoss;
       const one = new BigNumber(1);
       const bufferPct = new BigNumber(this.bot.bufferPercentage || 0);
       const resistanceBn = this.bot.currentResistance !== null ? new BigNumber(this.bot.currentResistance) : null;
@@ -83,57 +86,6 @@ class BBWaitForResolveState implements BBState {
         resistance: bufferedResistance ? bufferedResistance.toNumber() : null,
         support: bufferedSupport ? bufferedSupport.toNumber() : null,
       };
-
-      if (
-        !shouldExit &&
-        fractionalStopLoss > 0 &&
-        resistanceBn !== null &&
-        supportBn !== null
-      ) {
-        const range = resistanceBn.minus(supportBn);
-
-        if (range.gt(0)) {
-          const fractionalDistance = range.times(fractionalStopLoss);
-          let bufferedStopLevel: BigNumber | null = null;
-          let rawStopLevel: BigNumber | null = null;
-
-          if (position.side === "long") {
-            rawStopLevel = resistanceBn.minus(fractionalDistance);
-            const stopBufferDelta = rawStopLevel.times(bufferPct);
-            bufferedStopLevel = rawStopLevel.plus(stopBufferDelta);
-
-            if (priceBn.lte(bufferedStopLevel)) {
-              shouldExit = true;
-              exitReason = "fractional_stop_loss";
-              const msg = `🛑 Fractional stop hit (long). Price ${price} <= ${bufferedStopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
-              console.log(msg);
-              TelegramService.queueMsg(msg);
-            }
-          } else if (position.side === "short") {
-            rawStopLevel = supportBn.plus(fractionalDistance);
-            const stopBufferDelta = rawStopLevel.times(bufferPct);
-            bufferedStopLevel = rawStopLevel.minus(stopBufferDelta);
-
-            if (priceBn.gte(bufferedStopLevel)) {
-              shouldExit = true;
-              exitReason = "fractional_stop_loss";
-              const msg = `🛑 Fractional stop hit (short). Price ${price} >= ${bufferedStopLevel.toFixed(4)} [fraction ${fractionalStopLoss}]`;
-              console.log(msg);
-              TelegramService.queueMsg(msg);
-            }
-          }
-
-          if (rawStopLevel && bufferedStopLevel) {
-            this.bot.fractionalStopTargets = {
-              side: position.side,
-              rawLevel: rawStopLevel.toNumber(),
-              bufferedLevel: bufferedStopLevel.toNumber(),
-            };
-          }
-        }
-      } else {
-        this.bot.fractionalStopTargets = undefined;
-      }
 
       if (!shouldExit) {
         // Check support/resistance exits
@@ -148,6 +100,41 @@ class BBWaitForResolveState implements BBState {
         }
       }
 
+      if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
+        const { bufferedLevel, rawLevel } = this.bot.trailingStopTargets;
+        if (position.side === "long") {
+          if (priceBn.lte(bufferedLevel)) {
+            this.bot.trailingStopBreachCount++;
+          } else {
+            this.bot.trailingStopBreachCount = 0;
+          }
+
+          if (this.bot.trailingStopBreachCount >= this.bot.trailingStopConfirmTicks) {
+            shouldExit = true;
+            exitReason = "atr_trailing";
+            TelegramService.queueMsg(
+              `🟣 Trailing stop (long) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel.toFixed(4)}\nRaw stop: ${rawLevel.toFixed(4)}`
+            );
+          }
+        } else {
+          if (priceBn.gte(bufferedLevel)) {
+            this.bot.trailingStopBreachCount++;
+          } else {
+            this.bot.trailingStopBreachCount = 0;
+          }
+
+          if (this.bot.trailingStopBreachCount >= this.bot.trailingStopConfirmTicks) {
+            shouldExit = true;
+            exitReason = "atr_trailing";
+            TelegramService.queueMsg(
+              `🟣 Trailing stop (short) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel.toFixed(4)}\nRaw stop: ${rawLevel.toFixed(4)}`
+            );
+          }
+        }
+      } else if (!shouldExit) {
+        this.bot.trailingStopBreachCount = 0;
+      }
+
       if (shouldExit) {
         this._clearPriceListener();
         await this._closeCurrPosition(exitReason);
@@ -155,11 +142,157 @@ class BBWaitForResolveState implements BBState {
     });
   }
 
+  private _startTrailingUpdater() {
+    if (this.trailingUpdaterPromise) return;
+    this.trailingUpdaterAbort = false;
+    this.trailingUpdaterPromise = this._runTrailingUpdaterLoop();
+  }
+
+  private _stopTrailingUpdater() {
+    this.trailingUpdaterAbort = true;
+  }
+
+  private async _runTrailingUpdaterLoop() {
+    while (!this.trailingUpdaterAbort) {
+      try {
+        await this._updateTrailingStopLevels();
+      } catch (error) {
+        console.error("[BBWaitForResolveState] Failed to update trailing stop levels:", error);
+      }
+
+      if (this.trailingUpdaterAbort) break;
+      const waitMs = this._msUntilNextMinute();
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+
+    this.trailingUpdaterPromise = undefined;
+  }
+
+  private _msUntilNextMinute(): number {
+    const now = new Date();
+    const next = new Date(now.getTime());
+    next.setSeconds(0, 0);
+    next.setMinutes(now.getMinutes() + 1);
+    return Math.max(200, next.getTime() - now.getTime());
+  }
+
   private _watchForPositionLiquidation() {
     this._clearOrderUpdateListener();
     this.orderUpdateRemover = this.bot.orderWatcher.onOrderUpdate((update) => {
       void this._handleExternalOrderUpdate(update);
     });
+  }
+
+  private _calculateAtrValue(candles: ICandleInfo[], period: number): number | null {
+    if (period <= 0) return null;
+    if (!candles.length || candles.length <= period) return null;
+
+    let trSum = 0;
+    const startIdx = candles.length - period;
+    for (let idx = startIdx; idx < candles.length; idx++) {
+      const current = candles[idx];
+      const previous = candles[idx - 1];
+      if (!previous) {
+        return null;
+      }
+
+      const highLow = current.highPrice - current.lowPrice;
+      const highPrevClose = Math.abs(current.highPrice - previous.closePrice);
+      const lowPrevClose = Math.abs(current.lowPrice - previous.closePrice);
+      const trueRange = Math.max(highLow, highPrevClose, lowPrevClose);
+      trSum += trueRange;
+    }
+
+    return trSum / period;
+  }
+
+  private async _updateTrailingStopLevels() {
+    const position = this.bot.currActivePosition;
+    if (!position) {
+      this.bot.resetTrailingStopTracking();
+      return;
+    }
+
+    const maxWindowLength = Math.max(this.bot.trailingAtrLength + 1, this.bot.trailingHighestLookback);
+    if (!Number.isFinite(maxWindowLength) || maxWindowLength <= 0) {
+      this.bot.resetTrailingStopTracking();
+      return;
+    }
+
+    const now = Date.now();
+    const windowMinutes = Math.max(maxWindowLength + 5, 60);
+    const endDate = new Date(now);
+    const startDate = new Date(endDate.getTime() - windowMinutes * 60 * 1000);
+
+    const candles = await ExchangeService.getCandles(this.bot.symbol, startDate, endDate, "1Min");
+    const cutoffTs = now - 60 * 1000; // Ensure candle fully closed
+    const finishedCandles = candles.filter((candle) => candle.timestamp <= cutoffTs);
+
+    const atrWindowSize = Math.max(this.bot.trailingAtrLength + 1, 2);
+    if (finishedCandles.length < atrWindowSize) {
+      console.warn("[BBWaitForResolveState] Not enough finished candles to compute trailing stop.");
+      return;
+    }
+
+    this.bot.trailingAtrWindow = finishedCandles.slice(-atrWindowSize);
+
+    const entryTime = this.bot.lastEntryTime || 0;
+    const closesSinceEntry = finishedCandles
+      .filter((candle) => entryTime === 0 || candle.timestamp >= entryTime)
+      .map((candle) => candle.closePrice);
+
+    if (!closesSinceEntry.length) {
+      this.bot.trailingCloseWindow = [];
+      this.bot.trailingStopTargets = undefined;
+      return;
+    }
+
+    this.bot.trailingCloseWindow = closesSinceEntry.slice(-this.bot.trailingHighestLookback);
+    this.bot.lastTrailingStopUpdateTime = finishedCandles[finishedCandles.length - 1]?.timestamp || now;
+
+    const atrValue = this._calculateAtrValue(this.bot.trailingAtrWindow, this.bot.trailingAtrLength);
+    if (atrValue === null || !Number.isFinite(atrValue) || atrValue <= 0) {
+      this.bot.trailingStopTargets = undefined;
+      return;
+    }
+
+    const closesWindow = this.bot.trailingCloseWindow;
+    if (!closesWindow.length) {
+      this.bot.trailingStopTargets = undefined;
+      return;
+    }
+
+    const multiplier = this.bot.trailingStopMultiplier;
+    let rawLevel: number | null = null;
+    if (position.side === "long") {
+      const highestClose = Math.max(...closesWindow);
+      rawLevel = highestClose - atrValue * multiplier;
+    } else {
+      const lowestClose = Math.min(...closesWindow);
+      rawLevel = lowestClose + atrValue * multiplier;
+    }
+
+    if (rawLevel === null || !Number.isFinite(rawLevel) || rawLevel <= 0) {
+      this.bot.trailingStopTargets = undefined;
+      return;
+    }
+
+    const bufferPct = this.bot.bufferPercentage || 0;
+    let bufferedLevel = rawLevel;
+    if (bufferPct > 0) {
+      if (position.side === "long") {
+        bufferedLevel = rawLevel * (1 + bufferPct);
+      } else {
+        bufferedLevel = rawLevel * (1 - bufferPct);
+      }
+    }
+
+    this.bot.trailingStopTargets = {
+      side: position.side,
+      rawLevel,
+      bufferedLevel,
+      updatedAt: Date.now(),
+    };
   }
 
   private async _handleExternalOrderUpdate(update: IWSOrderUpdate) {
@@ -290,9 +423,7 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
 
     let srLevel: number | null = null;
-    if (this.bot.fractionalStopTargets && this.bot.fractionalStopTargets.side === positionSide) {
-      srLevel = this.bot.fractionalStopTargets.rawLevel;
-    } else if (positionSide === "long") {
+    if (positionSide === "long") {
       srLevel = this.bot.currentSupport;
     } else if (positionSide === "short") {
       srLevel = this.bot.currentResistance;
@@ -303,8 +434,8 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
 
     if (shouldTrackSlippage) {
       if (srLevel === null) {
-        console.warn(`⚠️ Cannot calculate slippage: ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level is null`);
-        TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level not available`);
+        console.warn(`⚠️ Cannot calculate slippage: ${positionSide === "long" ? "support" : "resistance"} level is null`);
+        TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`);
       } else {
         slippage = positionSide === "short"
           ? new BigNumber(closedPrice).minus(srLevel).toNumber()
@@ -324,8 +455,8 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     this.bot.currActivePosition = undefined;
     this.bot.entryWsPrice = undefined;
     this.bot.resolveWsPrice = undefined;
-    this.bot.fractionalStopTargets = undefined;
     this.bot.bufferedExitLevels = undefined;
+    this.bot.resetTrailingStopTracking();
     if (!options.isLiquidation) {
       this.bot.numberOfTrades++;
     }

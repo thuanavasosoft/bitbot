@@ -62,8 +62,8 @@ class BBTrendWatcher {
       const rawSupport = signalResult.support;
       const rawResistance = signalResult.resistance;
       
-      let fractionalStopRaw: number | null = null;
-      let fractionalStopBuffered: number | null = null;
+      let trailingStopRaw: number | null = null;
+      let trailingStopBuffered: number | null = null;
 
       // Calculate trigger prices with buffer percentage
       let longTrigger: number | null = null;
@@ -83,9 +83,9 @@ class BBTrendWatcher {
         const bufferMultiplier = new BigNumber(1).minus(this.bot.bufferPercentage);
         const longTriggerRaw = new BigNumber(rawResistance).times(bufferMultiplier);
         const precision = getPricePrecision(rawResistance);
-        // Round up: add a small epsilon and then round down, or use ceil with precision
+        // Round down: add a small epsilon and then round down, or use ceil with precision
         const multiplier = Math.pow(10, precision);
-        longTrigger = Math.ceil(longTriggerRaw.times(multiplier).toNumber()) / multiplier;
+        longTrigger = Math.floor(longTriggerRaw.times(multiplier).toNumber()) / multiplier;
       }
       
       if (rawSupport !== null) {
@@ -93,36 +93,19 @@ class BBTrendWatcher {
         const bufferMultiplier = new BigNumber(1).plus(this.bot.bufferPercentage);
         const shortTriggerRaw = new BigNumber(rawSupport).times(bufferMultiplier);
         const precision = getPricePrecision(rawSupport);
-        // Round down: use floor with precision
+        // Round up: use ceil with precision
         const multiplier = Math.pow(10, precision);
-        shortTrigger = Math.floor(shortTriggerRaw.times(multiplier).toNumber()) / multiplier;
+        shortTrigger = Math.ceil(shortTriggerRaw.times(multiplier).toNumber()) / multiplier;
       }
 
+      const trailingTargets = this.bot.trailingStopTargets;
       if (
+        trailingTargets &&
         this.bot.currActivePosition &&
-        rawSupport !== null &&
-        rawResistance !== null &&
-        this.bot.fractionalStopLoss > 0
+        trailingTargets.side === this.bot.currActivePosition.side
       ) {
-        const supportBn = new BigNumber(rawSupport);
-        const resistanceBn = new BigNumber(rawResistance);
-        const range = resistanceBn.minus(supportBn);
-        if (range.gt(0)) {
-          const fractionalDistance = range.times(this.bot.fractionalStopLoss);
-          const bufferPct = new BigNumber(this.bot.bufferPercentage || 0);
-          
-          if (this.bot.currActivePosition.side === "long") {
-            fractionalStopRaw = resistanceBn.minus(fractionalDistance).toNumber();
-            const stopBufferDelta = new BigNumber(fractionalStopRaw).times(bufferPct);
-            
-            fractionalStopBuffered = new BigNumber(fractionalStopRaw).plus(stopBufferDelta).toNumber();
-          } else {
-            fractionalStopRaw = supportBn.plus(fractionalDistance).toNumber();
-            const stopBufferDelta = new BigNumber(fractionalStopRaw).times(bufferPct);
-
-            fractionalStopBuffered = new BigNumber(fractionalStopRaw).minus(stopBufferDelta).toNumber();
-          }
-        }
+        trailingStopRaw = trailingTargets.rawLevel;
+        trailingStopBuffered = trailingTargets.bufferedLevel;
       }
       
       // Generate chart with support/resistance and trigger lines
@@ -136,8 +119,8 @@ class BBTrendWatcher {
         this.bot.currActivePosition,
         longTrigger,
         shortTrigger,
-        fractionalStopRaw,
-        fractionalStopBuffered
+        trailingStopRaw,
+        trailingStopBuffered,
       );
 
       const signalData: ISignalData = {
@@ -151,13 +134,13 @@ class BBTrendWatcher {
       const triggerMsg = longTrigger !== null || shortTrigger !== null
         ? `\nLong Trigger: ${longTrigger !== null ? longTrigger.toFixed(4) : 'N/A'}\nShort Trigger: ${shortTrigger !== null ? shortTrigger.toFixed(4) : 'N/A'}`
         : '';
-      const fractionalMsg = fractionalStopRaw !== null || fractionalStopBuffered !== null
-        ? `\nFrac Stop (raw): ${fractionalStopRaw !== null ? fractionalStopRaw.toFixed(4) : 'N/A'}\nFrac Stop (buffered): ${fractionalStopBuffered !== null ? fractionalStopBuffered.toFixed(4) : 'N/A'}`
+      const trailingMsg = trailingStopRaw !== null || trailingStopBuffered !== null
+        ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw.toFixed(4) : 'N/A'}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered.toFixed(4) : 'N/A'}`
         : '';
       TelegramService.queueMsg(
         `ℹ️ Breakout signal check result: ${signalResult.signal} - Price: ${signalData.closePrice.toFixed(4)}\n` +
         `Support: ${rawSupport !== null ? rawSupport.toFixed(4) : 'N/A'}\n` +
-        `Resistance: ${rawResistance !== null ? rawResistance.toFixed(4) : 'N/A'}${triggerMsg}${fractionalMsg}`
+        `Resistance: ${rawResistance !== null ? rawResistance.toFixed(4) : 'N/A'}${triggerMsg}${trailingMsg}`
       );
 
       // Update bot's current signal levels with raw values and triggers

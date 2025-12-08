@@ -76,6 +76,7 @@ class BBWaitForEntryState implements BBState {
     const position = await this.bot.triggerOpenSignal(posDir, budget);
 
     this.bot.currActivePosition = position;
+    this.bot.resetTrailingStopTracking();
     this.bot.numberOfTrades++;
     this.bot.lastEntryTime = Date.now(); // Track when we entered
 

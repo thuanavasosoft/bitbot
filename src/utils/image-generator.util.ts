@@ -108,8 +108,8 @@ export async function generateImageOfCandlesWithSupportResistance(
   currOpenedPos?: { avgPrice: number, side: TPositionSide },
   longTrigger?: number | null,
   shortTrigger?: number | null,
-  fractionalStopRaw?: number | null,
-  fractionalStopBuffered?: number | null,
+  trailingStopRaw?: number | null,
+  trailingStopBuffered?: number | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
   const ctx = canvas.getContext('2d');
@@ -229,19 +229,19 @@ export async function generateImageOfCandlesWithSupportResistance(
     };
   }
 
-  if (fractionalStopRaw !== null && fractionalStopRaw !== undefined) {
-    annotations.fractionalStopRaw = {
+  if (trailingStopRaw !== null && trailingStopRaw !== undefined) {
+    annotations.trailingStopRaw = {
       type: 'line' as any,
-      yMin: fractionalStopRaw,
-      yMax: fractionalStopRaw,
-      borderColor: "#8A2BE2", // Blue Violet
+      yMin: trailingStopRaw,
+      yMax: trailingStopRaw,
+      borderColor: "#1E90FF", // DodgerBlue
       borderWidth: 2,
-      borderDash: [4, 2],
+      borderDash: [6, 2],
       label: {
         display: true,
-        content: [`Frac Stop: ${fractionalStopRaw.toFixed(4)}`],
+        content: [`Trail Stop: ${trailingStopRaw.toFixed(4)}`],
         position: "start",
-        backgroundColor: "#8A2BE2",
+        backgroundColor: "#1E90FF",
         color: "#FFFFFF",
         xAdjust: -4,
         font: {
@@ -255,19 +255,19 @@ export async function generateImageOfCandlesWithSupportResistance(
     };
   }
 
-  if (fractionalStopBuffered !== null && fractionalStopBuffered !== undefined) {
-    annotations.fractionalStopBuffered = {
+  if (trailingStopBuffered !== null && trailingStopBuffered !== undefined) {
+    annotations.trailingStopBuffered = {
       type: 'line' as any,
-      yMin: fractionalStopBuffered,
-      yMax: fractionalStopBuffered,
-      borderColor: "#DA70D6", // Orchid
+      yMin: trailingStopBuffered,
+      yMax: trailingStopBuffered,
+      borderColor: "#00BFFF", // DeepSkyBlue
       borderWidth: 2,
-      borderDash: [2, 2],
+      borderDash: [3, 3],
       label: {
         display: true,
-        content: [`Resolve Trigger: ${fractionalStopBuffered.toFixed(4)}`],
+        content: [`Trail Stop Buf: ${trailingStopBuffered.toFixed(4)}`],
         position: "end",
-        backgroundColor: "#DA70D6",
+        backgroundColor: "#00BFFF",
         color: "#FFFFFF",
         xAdjust: 4,
         font: {

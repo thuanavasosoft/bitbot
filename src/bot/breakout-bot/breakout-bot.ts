@@ -1,5 +1,5 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
 import { generateRandomString } from "@/utils/strings.util";
 import BigNumber from "bignumber.js";
 import BBUtil from "./bb-util";
@@ -49,7 +49,6 @@ class BreakoutBot {
   entryWsPrice?: { price: number, time: Date };
   resolveWsPrice?: { price: number, time: Date };
   bufferedExitLevels?: { support: number | null; resistance: number | null };
-  fractionalStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number };
 
   slippageAccumulation: number = 0;
   numberOfTrades: number = 0;
@@ -60,9 +59,8 @@ class BreakoutBot {
   currentSupport: number | null = null;
   currentResistance: number | null = null;
   longTrigger: number | null = null; // Trigger price for long entry (resistance adjusted down by buffer)
-  shortTrigger: number | null = null; // Trigger price for short entry (support adjusted up by buffer)
+  shortTrigger: number | null = null; // Trigger price for short entry (support adjusted down by buffer)
   bufferPercentage: number; // Buffer percentage for trigger adjustments
-  fractionalStopLoss: number;
   lastSRUpdateTime: number = 0; // Timestamp of last support/resistance update
   lastExitTime: number = 0; // Timestamp of last position exit
   lastEntryTime: number = 0; // Timestamp of last position entry
@@ -73,6 +71,17 @@ class BreakoutBot {
   lastBalanceDelta?: number;
   lastFeeEstimate?: number;
   lastNetPnl?: number;
+
+  // Trailing stop configuration/state
+  trailingAtrLength: number;
+  trailingHighestLookback: number;
+  trailingStopMultiplier: number;
+  trailingStopConfirmTicks: number;
+  trailingAtrWindow: ICandleInfo[] = [];
+  trailingCloseWindow: number[] = [];
+  trailingStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number; updatedAt: number };
+  lastTrailingStopUpdateTime: number = 0;
+  trailingStopBreachCount: number = 0;
 
   bbUtil: BBUtil;
   bbTrendWatcher: BBTrendWatcher;
@@ -96,7 +105,10 @@ class BreakoutBot {
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
     this.bufferPercentage = Number(process.env.BREAKOUT_BOT_BUFFER_PERCENTAGE || 0) / 100; // Convert percentage to decimal
-    this.fractionalStopLoss = Math.max(0, Number(process.env.BREAKOUT_BOT_FRACTIONAL_STOP_LOSS || 0));
+    this.trailingAtrLength = Number(process.env.BREAKOUT_BOT_TRAIL_ATR_LENGTH || 720 * 4);
+    this.trailingHighestLookback = Number(process.env.BREAKOUT_BOT_TRAIL_LOOKBACK || 720 * 4);
+    this.trailingStopMultiplier = Number(process.env.BREAKOUT_BOT_TRAIL_MULTIPLIER || 25);
+    this.trailingStopConfirmTicks = Math.max(1, Number(process.env.BREAKOUT_BOT_TRAIL_CONFIRM_TICKS || 1));
 
     // Signal parameters with defaults from backtest
     this.signalParams = {
@@ -358,6 +370,14 @@ class BreakoutBot {
     this.lastBalanceDelta = undefined;
     this.lastFeeEstimate = undefined;
     this.lastNetPnl = undefined;
+  }
+
+  resetTrailingStopTracking() {
+    this.trailingAtrWindow = [];
+    this.trailingCloseWindow = [];
+    this.trailingStopTargets = undefined;
+    this.lastTrailingStopUpdateTime = 0;
+    this.trailingStopBreachCount = 0;
   }
 
   private _buildClientOrderId(action: "open" | "close") {
