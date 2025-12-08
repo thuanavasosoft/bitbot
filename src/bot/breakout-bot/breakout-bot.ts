@@ -10,6 +10,7 @@ import BBTrendWatcher from "./bb-trend-watcher";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import BBTgCmdHandler from "./bb-tg-cmd-handler";
 import { SignalParams } from "./breakout-helpers";
+import BBOrderWatcher from "./bb-order-watcher";
 
 export interface BBState {
   onEnter: () => Promise<void>;
@@ -61,6 +62,7 @@ class BreakoutBot {
   bbUtil: BBUtil;
   bbTrendWatcher: BBTrendWatcher;
   bbTgCmdHandler: BBTgCmdHandler;
+  orderWatcher: BBOrderWatcher;
 
   startingState: BBStartingState;
   waitForEntryState: BBWaitForEntryState;
@@ -95,6 +97,11 @@ class BreakoutBot {
 
     this.bbUtil = new BBUtil(this);
     this.bbTrendWatcher = new BBTrendWatcher(this);
+
+    const defaultOrderTimeout = Number(process.env.BREAKOUT_BOT_ORDER_TIMEOUT_MS || 60000);
+    this.orderWatcher = new BBOrderWatcher({
+      defaultTimeoutMs: Number.isFinite(defaultOrderTimeout) ? defaultOrderTimeout : 60000,
+    });
 
     this.bbTgCmdHandler = new BBTgCmdHandler(this);
     this.bbTgCmdHandler.handleTgMsgs();
@@ -159,11 +166,18 @@ class BreakoutBot {
       clientOrderId,
     });
 
-    await this._waitForExchangePropagation();
+    const fillUpdate = await this.orderWatcher.waitForFill(clientOrderId);
     const openedPosition = await ExchangeService.getPosition(this.symbol);
     if (!openedPosition || openedPosition.side !== posDir) {
       throw new Error(`[BreakoutBot] Position not detected after ${orderSide} order submission`);
     }
+
+    const fillPrice = fillUpdate.executionPrice ?? openedPosition.avgPrice;
+    const fillTime = fillUpdate.updateTime ? new Date(fillUpdate.updateTime) : new Date();
+    this.entryWsPrice = {
+      price: fillPrice,
+      time: fillTime,
+    };
 
     return openedPosition;
   }
@@ -192,11 +206,18 @@ class BreakoutBot {
       clientOrderId,
     });
 
-    await this._waitForExchangePropagation();
-    const closedPosition = await this._fetchClosedPositionSnapshot(targetPosition.id);
+    const fillUpdate = await this.orderWatcher.waitForFill(clientOrderId);
+    const closedPosition = await this.fetchClosedPositionSnapshot(targetPosition.id);
     if (!closedPosition || typeof closedPosition.closePrice !== "number") {
       throw new Error(`[BreakoutBot] Failed to retrieve closed position snapshot for id ${targetPosition.id}`);
     }
+
+    const resolvePrice = fillUpdate.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice;
+    const resolveTime = fillUpdate.updateTime ? new Date(fillUpdate.updateTime) : new Date();
+    this.resolveWsPrice = {
+      price: resolvePrice,
+      time: resolveTime,
+    };
 
     return closedPosition;
   }
@@ -281,11 +302,7 @@ class BreakoutBot {
     await this.currentState.onEnter();
   }
 
-  private async _waitForExchangePropagation(delayMs: number = 1000) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  private async _fetchClosedPositionSnapshot(positionId: number): Promise<IPosition | undefined> {
+  async fetchClosedPositionSnapshot(positionId: number): Promise<IPosition | undefined> {
     const history = await ExchangeService.getPositionsHistory({ positionId });
     if (!history.length) return undefined;
     return history[0];

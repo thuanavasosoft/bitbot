@@ -1,4 +1,5 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
+import { IPosition, IWSOrderUpdate } from "@/services/exchange-service/exchange-type";
 import BreakoutBot, { BBState } from "../breakout-bot";
 import { parseDurationStringIntoMs } from "@/utils/maths.util";
 import TelegramService from "@/services/telegram.service";
@@ -7,8 +8,7 @@ import BigNumber from "bignumber.js";
 
 class BBWaitForResolveState implements BBState {
   private priceListenerRemover?: () => void;
-  private liquidationListenerRemover?: () => void;
-  private liquidationPollInterval?: NodeJS.Timeout;
+  private orderUpdateRemover?: () => void;
   private manualCloseInProgress = false;
 
   constructor(private bot: BreakoutBot) { }
@@ -35,24 +35,16 @@ class BBWaitForResolveState implements BBState {
     }
   }
 
-  private _clearLiquidationListener() {
-    if (this.liquidationListenerRemover) {
-      this.liquidationListenerRemover();
-      this.liquidationListenerRemover = undefined;
-    }
-  }
-
-  private _clearLiquidationPollInterval() {
-    if (this.liquidationPollInterval) {
-      clearInterval(this.liquidationPollInterval);
-      this.liquidationPollInterval = undefined;
+  private _clearOrderUpdateListener() {
+    if (this.orderUpdateRemover) {
+      this.orderUpdateRemover();
+      this.orderUpdateRemover = undefined;
     }
   }
 
   private _stopAllWatchers() {
     this._clearPriceListener();
-    this._clearLiquidationListener();
-    this._clearLiquidationPollInterval();
+    this._clearOrderUpdateListener();
   }
 
   private async _watchForPositionExit() {
@@ -163,67 +155,80 @@ class BBWaitForResolveState implements BBState {
     });
   }
 
-  private async _watchForPositionLiquidation() {
-    this._clearLiquidationListener();
-    this.liquidationListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (p) => {
-      if (!this.bot.currActivePosition) {
-        this._clearLiquidationListener();
-        console.log("No active position found, exiting price liquidation listener");
+  private _watchForPositionLiquidation() {
+    this._clearOrderUpdateListener();
+    this.orderUpdateRemover = this.bot.orderWatcher.onOrderUpdate((update) => {
+      void this._handleExternalOrderUpdate(update);
+    });
+  }
+
+  private async _handleExternalOrderUpdate(update: IWSOrderUpdate) {
+    if (!this.bot.currActivePosition) return;
+    if (update.orderStatus !== "filled") return;
+
+    const activePosition = this.bot.currActivePosition;
+    if (!activePosition) return;
+
+    if (update.positionSide && update.positionSide !== activePosition.side) return;
+
+    const normalizedSymbol = update.symbol?.toUpperCase();
+    if (normalizedSymbol && normalizedSymbol !== activePosition.symbol.toUpperCase()) return;
+
+    if (update.clientOrderId?.startsWith("bb-close-")) return;
+
+    try {
+      const closedPosition = await this.bot.fetchClosedPositionSnapshot(activePosition.id);
+      if (!closedPosition) {
+        console.warn(`[BBWaitForResolveState] Closed position snapshot missing for id ${activePosition.id}`);
         return;
       }
 
-      // Not liquidated yet
-      if (
-        (this.bot.currActivePosition!.side === "long" && new BigNumber(p).gt(this.bot.currActivePosition!.liquidationPrice!))
-        || (this.bot.currActivePosition!.side === "short" && new BigNumber(p).lt(this.bot.currActivePosition!.liquidationPrice!))
-      ) return;
+      const resolvePrice = update.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice;
+      const resolveTime = update.updateTime ? new Date(update.updateTime) : new Date();
+      this.bot.resolveWsPrice = {
+        price: resolvePrice,
+        time: resolveTime,
+      };
 
-      const msg = `💣 Current price ${p} is not good, exceeded liquidation price (${this.bot.currActivePosition!.liquidationPrice}) for ${this.bot.currActivePosition!.side}, checking it...`;
-      console.log(msg);
-      TelegramService.queueMsg(msg);
-
-      this._clearPriceListener();
-      this._clearLiquidationListener();
-
-      this._clearLiquidationPollInterval();
-      this.liquidationPollInterval = setInterval(async () => {
-        this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-        const posHistory = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition!.id });
-        const closedPos = posHistory[0];
-        console.log("closedPos: ", closedPos);
-
-        if (!closedPos) {
-          console.log("No closed position found, returning");
-          return;
-        }
-
-        const isPositionLiquidated = (closedPos.side === "long" && new BigNumber(closedPos.closePrice!).lte(closedPos.liquidationPrice)) ||
-          (closedPos.side === "short" && new BigNumber(closedPos.closePrice!).gte(closedPos.liquidationPrice))
-
-
-        if (isPositionLiquidated) {
-          console.log("Liquidated position: ", closedPos);
-          TelegramService.queueMsg(`
+      const isLiquidation = this._isLiquidationClose(closedPosition);
+      if (isLiquidation) {
+        console.log("Liquidated position detected via websocket:", closedPosition);
+        TelegramService.queueMsg(`
 🤯 Position just got liquidated
-Pos ID: ${closedPos.id}
-Avg price: ${closedPos.avgPrice}
-Liquidation price: ${closedPos.liquidationPrice}
-Close price: ${closedPos.closePrice}
+Pos ID: ${closedPosition.id}
+Avg price: ${closedPosition.avgPrice}
+Liquidation price: ${closedPosition.liquidationPrice}
+Close price: ${closedPosition.closePrice}
 
-Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
+Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
 `);
-          this.bot.liquidationSleepFinishTs = +new Date() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
-          this.bot.bbUtil.handlePnL(closedPos.realizedPnl, true);
-          
-          this._clearLiquidationPollInterval();
-          this.bot.currActivePosition = undefined;
-          this.bot.lastExitTime = Date.now(); // Track when we exited (liquidation)
-          eventBus.emit(EEventBusEventType.StateChange);
-        }
+        this.bot.liquidationSleepFinishTs = Date.now() + parseDurationStringIntoMs(this.bot.sleepDurationAfterLiquidation);
+      } else {
+        const msg = `⚠️ Active position ${activePosition.id} closed outside bot (order: ${update.clientOrderId || "N/A"}). Recording outcome...`;
+        console.warn(msg);
+        TelegramService.queueMsg(msg);
+      }
 
-      }, 5000);
-      return;
-    });
+      await this._finalizeClosedPosition(closedPosition, {
+        activePosition,
+        triggerTimestamp: update.updateTime ?? Date.now(),
+        fillTimestamp: update.updateTime ?? Date.now(),
+        isLiquidation,
+      });
+    } catch (error) {
+      console.error("[BBWaitForResolveState] Failed to process external order update:", error);
+    }
+  }
+
+  private _isLiquidationClose(position: IPosition): boolean {
+    const closePrice = typeof position.closePrice === "number" ? position.closePrice : position.avgPrice;
+    if (!Number.isFinite(closePrice) || !Number.isFinite(position.liquidationPrice)) return false;
+
+    const closePriceBn = new BigNumber(closePrice);
+    if (position.side === "long") {
+      return closePriceBn.lte(position.liquidationPrice);
+    }
+    return closePriceBn.gte(position.liquidationPrice);
   }
 
   async handleManualCloseRequest() {
@@ -252,27 +257,36 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
   }
 
   private async _closeCurrPosition(reason: string = "support_resistance") {
-    const currLatestMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
-    const triggerTs = +new Date();
-    this.bot.resolveWsPrice = {
-      price: currLatestMarkPrice,
-      time: new Date(triggerTs),
-    }
-
+    const triggerTs = Date.now();
     const activePosition = this.bot.currActivePosition;
-
     const closedPosition = await this.bot.triggerCloseSignal(this.bot.currActivePosition);
-    const closedPositionPrice = typeof closedPosition.closePrice === "number"
-      ? closedPosition.closePrice
-      : closedPosition.avgPrice;
-    const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
-    let slippage: number = 0;
-    let timeDiffMs: number = 0;
-    
-    // Calculate slippage based on support/resistance levels
-    // For long exit (sell): compare fill price with support (higher fill relative to support = better = negative slippage)
-    // For short exit (buy): compare fill price with resistance (lower fill relative to resistance = better = negative slippage)
+    const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
+
+    await this._finalizeClosedPosition(closedPosition, {
+      activePosition,
+      triggerTimestamp: triggerTs,
+      fillTimestamp,
+      isLiquidation: false,
+    });
+  }
+
+  private async _finalizeClosedPosition(
+    closedPosition: IPosition,
+    options: {
+      activePosition?: IPosition;
+      triggerTimestamp?: number;
+      fillTimestamp?: number;
+      isLiquidation?: boolean;
+    } = {}
+  ) {
+    const activePosition = options.activePosition ?? this.bot.currActivePosition;
     const positionSide = activePosition?.side;
+    const fillTimestamp = options.fillTimestamp ?? this.bot.resolveWsPrice?.time?.getTime() ?? closedPosition.updateTime ?? Date.now();
+    const triggerTimestamp = options.triggerTimestamp ?? fillTimestamp;
+    const shouldTrackSlippage = !options.isLiquidation;
+
+    const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
+
     let srLevel: number | null = null;
     if (this.bot.fractionalStopTargets && this.bot.fractionalStopTargets.side === positionSide) {
       srLevel = this.bot.fractionalStopTargets.rawLevel;
@@ -281,25 +295,28 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     } else if (positionSide === "short") {
       srLevel = this.bot.currentResistance;
     }
-    
-    if (srLevel === null) {
-      console.warn(`⚠️ Cannot calculate slippage: ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level is null`);
-      TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level not available`);
-    }
-    
-    slippage = srLevel !== null
-      ? positionSide === "short"
-        ? new BigNumber(closedPositionPrice).minus(srLevel).toNumber()
-        : new BigNumber(srLevel).minus(closedPositionPrice).toNumber()
-      : 0;
-    timeDiffMs = closedPositionTriggerTs - triggerTs;
 
-    // Negative slippage is good (better price than SR level), positive slippage is bad
+    let slippage = 0;
+    const timeDiffMs = fillTimestamp - triggerTimestamp;
+
+    if (shouldTrackSlippage) {
+      if (srLevel === null) {
+        console.warn(`⚠️ Cannot calculate slippage: ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level is null`);
+        TelegramService.queueMsg(`⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support/fractional stop" : "resistance/fractional stop"} level not available`);
+      } else {
+        slippage = positionSide === "short"
+          ? new BigNumber(closedPrice).minus(srLevel).toNumber()
+          : new BigNumber(srLevel).minus(closedPrice).toNumber();
+      }
+    }
+
     const icon = slippage <= 0 ? "🟩" : "🟥";
-    if (icon === "🟥") {
-      this.bot.slippageAccumulation += Math.abs(slippage);
-    } else {
-      this.bot.slippageAccumulation -= Math.abs(slippage);
+    if (shouldTrackSlippage) {
+      if (icon === "🟥") {
+        this.bot.slippageAccumulation += Math.abs(slippage);
+      } else {
+        this.bot.slippageAccumulation -= Math.abs(slippage);
+      }
     }
 
     this.bot.currActivePosition = undefined;
@@ -307,11 +324,19 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     this.bot.resolveWsPrice = undefined;
     this.bot.fractionalStopTargets = undefined;
     this.bot.bufferedExitLevels = undefined;
-    this.bot.numberOfTrades++;
-    this.bot.lastExitTime = Date.now(); // Track when we exited
+    if (!options.isLiquidation) {
+      this.bot.numberOfTrades++;
+    }
+    this.bot.lastExitTime = Date.now();
 
-    await this.bot.bbUtil.handlePnL(closedPosition.realizedPnl, false, icon, slippage, timeDiffMs);
-    
+    await this.bot.bbUtil.handlePnL(
+      closedPosition.realizedPnl,
+      options.isLiquidation ?? false,
+      shouldTrackSlippage ? icon : undefined,
+      shouldTrackSlippage ? slippage : undefined,
+      shouldTrackSlippage ? timeDiffMs : undefined,
+    );
+
     eventBus.emit(EEventBusEventType.StateChange);
   }
 

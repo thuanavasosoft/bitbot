@@ -129,7 +129,12 @@ export interface IFeeRate {
 }
 
 export interface IWSOrderUpdate {
-  orderId: string,
-  clientOrderId: string,
-  orderStatus: TOrderStatus,
+  orderId: string;
+  clientOrderId: string;
+  orderStatus: TOrderStatus;
+  symbol?: string;
+  positionSide?: TPositionSide;
+  realizedPnl?: number;
+  executionPrice?: number;
+  updateTime?: number;
 }

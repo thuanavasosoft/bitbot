@@ -220,11 +220,13 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
     TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_LONG, async () => {
       console.log("Triggering manual open-long");
       await this.bot.triggerOpenSignal("long", "10");
+      TelegramService.queueMsg("✅ Manual long order filled.");
     });
 
     TelegramService.appendTgCmdHandler(EBBotCommand.OPEN_SHORT, async () => {
       console.log("Triggering manual open-short");
       await this.bot.triggerOpenSignal("short", "10");
+      TelegramService.queueMsg("✅ Manual short order filled.");
     });
 
     TelegramService.appendTgCmdHandler(EBBotCommand.CLOSE_POSITION, async () => {
@@ -246,7 +248,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
         }
 
         await this.bot.triggerCloseSignal();
-        TelegramService.queueMsg(`✅ Close signal sent. Monitor exchange for fill confirmation.`);
+        TelegramService.queueMsg(`✅ Close order filled. Position snapshot updated.`);
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : `${error}`;
         console.error("Failed to process /close_position command:", error);

@@ -70,12 +70,7 @@ class BBWaitForEntryState implements BBState {
     console.log(msg);
     console.log(`Triggering open-${posDir} signal`);
 
-    const currLatestMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
-    const triggerTs = +new Date();
-    this.bot.entryWsPrice = {
-      price: currLatestMarkPrice,
-      time: new Date(triggerTs),
-    };
+    const triggerTs = Date.now();
 
     console.log("Opening position...");
     const position = await this.bot.triggerOpenSignal(posDir, budget);
@@ -85,7 +80,8 @@ class BBWaitForEntryState implements BBState {
     this.bot.lastEntryTime = Date.now(); // Track when we entered
 
     const positionAvgPrice = position.avgPrice;
-    const positionTriggerTs = +new Date(position.createTime);
+    const entryFill = this.bot.entryWsPrice;
+    const positionTriggerTs = entryFill?.time ? entryFill.time.getTime() : Date.now();
     const timeDiffMs = positionTriggerTs - triggerTs;
     
     // Calculate slippage based on support/resistance levels

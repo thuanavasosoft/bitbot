@@ -575,6 +575,11 @@ class BinanceExchange implements IExchangeInstance {
       orderId: order.orderId.toString(),
       clientOrderId: order.clientOrderId,
       orderStatus: this._mapOrderStatus(order.orderStatus),
+      symbol: originalSymbol,
+      positionSide,
+      realizedPnl: Number(order.realisedProfit ?? order.realizedProfit ?? 0),
+      executionPrice: Number(order.averagePrice ?? order.lastFilledPrice ?? order.avgPrice ?? 0),
+      updateTime: order.orderTradeTime || event.eventTime || Date.now(),
     };
 
     Object.values(this._orderListenerCallbacks).forEach((callback) => callback(update));
