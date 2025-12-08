@@ -49,8 +49,8 @@ class BBUtil {
   }
 
   public async getExchFreeUsdtBalance(): Promise<BigNumber> {
-    const mexcBalance = await ExchangeService.getBalances()
-    const usdtBalanceFromExchange = mexcBalance.find((item) => item.coin === 'USDT')
+    const balances = await ExchangeService.getBalances()
+    const usdtBalanceFromExchange = balances.find((item) => item.coin === 'USDT')
     console.log('usdtBalanceFromExchange: ', usdtBalanceFromExchange)
 
     const exchFreeUsdtBalance = new BigNumber(usdtBalanceFromExchange?.free!)

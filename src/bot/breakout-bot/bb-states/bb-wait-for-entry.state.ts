@@ -1,12 +1,10 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { TPositionSide, IPosition } from "@/services/exchange-service/exchange-type";
+import { TPositionSide } from "@/services/exchange-service/exchange-type";
 import TelegramService from "@/services/telegram.service";
 import { getPositionDetailMsg } from "@/utils/strings.util";
 import BreakoutBot, { BBState } from "../breakout-bot";
 import BigNumber from "bignumber.js";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
-
-const WAIT_INTERVAL_MS = 5000;
 
 class BBWaitForEntryState implements BBState {
   private priceListenerRemover?: () => void;
@@ -80,47 +78,7 @@ class BBWaitForEntryState implements BBState {
     };
 
     console.log("Opening position...");
-    let position: IPosition | undefined = undefined;
-    let hasSubmittedBinanceOrder = false;
-    for (let i = 0; i < 10; i++) {
-      try {
-        if (this.bot.usesWsSignaling()) {
-          await this.bot.triggerOpenSignal(posDir, budget);
-        } else if (!hasSubmittedBinanceOrder) {
-          await this.bot.triggerOpenSignal(posDir, budget);
-          hasSubmittedBinanceOrder = true;
-        }
-        await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
-        position = await ExchangeService.getPosition(this.bot.symbol);
-        console.log("position: ", position);
-
-        if (!!position) {
-          console.log(`[Position Check] Position found on attempt ${i + 1}, stop checking`);
-          break;
-        }
-
-        const msg = `[Position Check] Attempt ${i + 1}: Position check result: ${position ? 'Found' : 'Not found. Reopening position...'} `;
-        console.log(msg);
-        TelegramService.queueMsg(msg);
-      } catch (error) {
-        console.error(`[Position Check] Error on attempt ${i + 1}: `, error);
-        if (i < 9) {
-          console.log(`[Position Check] Waiting 5 seconds before retry...`);
-          await new Promise(r => setTimeout(r, WAIT_INTERVAL_MS));
-        }
-      }
-    }
-
-    if (!position) {
-      console.log(`[Position Check] Position not found by symbol ${this.bot.symbol}, checking all open positions...`);
-      const allPositions = await ExchangeService.getOpenedPositions();
-      console.log(`[Position Check] All open positions: `, allPositions);
-
-      const msg = "❌ Position not opened even after 60 seconds after signaling to open please check..."
-      TelegramService.queueMsg(msg);
-      await new Promise(r => setTimeout(r, 1000));
-      throw new Error(msg);
-    };
+    const position = await this.bot.triggerOpenSignal(posDir, budget);
 
     this.bot.currActivePosition = position;
     this.bot.numberOfTrades++;

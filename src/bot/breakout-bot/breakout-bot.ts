@@ -3,7 +3,6 @@ import { IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-servi
 import { generateRandomString } from "@/utils/strings.util";
 import BigNumber from "bignumber.js";
 import BBUtil from "./bb-util";
-import BBWSSignaling from "./bb-ws-signaling";
 import BBStartingState from "./bb-states/bb-starting.state";
 import BBWaitForEntryState from "./bb-states/bb-wait-for-entry.state";
 import BBWaitForResolveState from "./bb-states/bb-wait-for-resolve.state";
@@ -22,13 +21,10 @@ class BreakoutBot {
 
   symbol: string;
   leverage: number;
-  exchangeAdapter: number;
 
   startQuoteBalance!: string;
   currQuoteBalance!: string;
   totalActualCalculatedProfit: number = 0;
-
-  connectedClientsAmt: number = 0;
 
   sleepDurationAfterLiquidation: string;
   liquidationSleepFinishTs?: number;
@@ -63,7 +59,6 @@ class BreakoutBot {
   lastEntryTime: number = 0; // Timestamp of last position entry
 
   bbUtil: BBUtil;
-  bbWsSignaling: BBWSSignaling;
   bbTrendWatcher: BBTrendWatcher;
   bbTgCmdHandler: BBTgCmdHandler;
 
@@ -79,7 +74,6 @@ class BreakoutBot {
 
     this.symbol = process.env.SYMBOL!;
     this.leverage = Number(process.env.BREAKOUT_BOT_LEVERAGE!);
-    this.exchangeAdapter = Number(process.env.EXCHANGE_ADAPTER || 1);
     this.sleepDurationAfterLiquidation = process.env.BREAKOUT_BOT_SLEEP_DURATION_AFTER_LIQUIDATION!;
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
@@ -105,9 +99,6 @@ class BreakoutBot {
     this.bbTgCmdHandler = new BBTgCmdHandler(this);
     this.bbTgCmdHandler.handleTgMsgs();
 
-    this.bbWsSignaling = new BBWSSignaling(this);
-    this.bbWsSignaling.serveServer(Number(process.env.BREAKOUT_BOT_SERVER_PORT!))
-
     this.startingState = new BBStartingState(this);
     this.waitForEntryState = new BBWaitForEntryState(this);
     this.waitForResolveState = new BBWaitForResolveState(this);
@@ -121,8 +112,6 @@ class BreakoutBot {
       "BREAKOUT_BOT_SLEEP_DURATION_AFTER_LIQUIDATION",
       "BREAKOUT_BOT_BET_SIZE",
       "BREAKOUT_BOT_CHECK_INTERVAL_MINUTES",
-      "BREAKOUT_BOT_SERVER_PORT",
-      "EXCHANGE_ADAPTER",
     ];
 
     for (const envKey of necessaryEnvKeys) {
@@ -142,25 +131,7 @@ class BreakoutBot {
     }
   }
 
-  usesWsSignaling() {
-    return this.exchangeAdapter === 1;
-  }
-
-  usesExchangeOrders() {
-    return this.exchangeAdapter === 2;
-  }
-
-  async triggerOpenSignal(posDir: TPositionSide, openBalanceAmt: string) {
-    if (this.usesWsSignaling()) {
-      this.bbWsSignaling.broadcast(`open-${posDir}`, openBalanceAmt);
-      return;
-    }
-
-    if (!this.usesExchangeOrders()) {
-      console.warn(`[BreakoutBot] Unsupported adapter ${this.exchangeAdapter} for triggerOpenSignal`);
-      return;
-    }
-
+  async triggerOpenSignal(posDir: TPositionSide, openBalanceAmt: string): Promise<IPosition> {
     await this._ensureSymbolInfoLoaded();
 
     const quoteAmt = Number(openBalanceAmt);
@@ -187,31 +158,27 @@ class BreakoutBot {
       baseAmt,
       clientOrderId,
     });
+
+    await this._waitForExchangePropagation();
+    const openedPosition = await ExchangeService.getPosition(this.symbol);
+    if (!openedPosition || openedPosition.side !== posDir) {
+      throw new Error(`[BreakoutBot] Position not detected after ${orderSide} order submission`);
+    }
+
+    return openedPosition;
   }
 
-  async triggerCloseSignal(position?: IPosition) {
-    if (this.usesWsSignaling()) {
-      this.bbWsSignaling.broadcast("close-position");
-      return;
-    }
-
-    if (!this.usesExchangeOrders()) {
-      console.warn(`[BreakoutBot] Unsupported adapter ${this.exchangeAdapter} for triggerCloseSignal`);
-      return;
-    }
-
+  async triggerCloseSignal(position?: IPosition): Promise<IPosition> {
     await this._ensureSymbolInfoLoaded();
 
     const targetPosition = position || this.currActivePosition || await ExchangeService.getPosition(this.symbol);
     if (!targetPosition) {
-      console.warn("[BreakoutBot] No active position found to close");
-      return;
+      throw new Error("[BreakoutBot] No active position found to close");
     }
 
     const baseAmt = this._sanitizeBaseQty(Math.abs(targetPosition.size));
-    if (baseAmt <= 0) {
-      console.warn("[BreakoutBot] Target position size is zero, skipping close signal");
-      return;
+    if (!Number.isFinite(baseAmt) || baseAmt <= 0) {
+      throw new Error("[BreakoutBot] Target position size is zero, cannot close position");
     }
 
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";
@@ -224,16 +191,23 @@ class BreakoutBot {
       baseAmt,
       clientOrderId,
     });
+
+    await this._waitForExchangePropagation();
+    const closedPosition = await this._fetchClosedPositionSnapshot(targetPosition.id);
+    if (!closedPosition || typeof closedPosition.closePrice !== "number") {
+      throw new Error(`[BreakoutBot] Failed to retrieve closed position snapshot for id ${targetPosition.id}`);
+    }
+
+    return closedPosition;
   }
 
   async loadSymbolInfo() {
-    if (!this.usesExchangeOrders()) return;
     this.symbolInfo = await ExchangeService.getSymbolInfo(this.symbol);
     console.log(`[BreakoutBot] Loaded symbol info for ${this.symbol}:`, this.symbolInfo);
   }
 
   private async _ensureSymbolInfoLoaded() {
-    if (this.symbolInfo || !this.usesExchangeOrders()) return;
+    if (this.symbolInfo) return;
     await this.loadSymbolInfo();
   }
 
@@ -305,6 +279,16 @@ class BreakoutBot {
     });
 
     await this.currentState.onEnter();
+  }
+
+  private async _waitForExchangePropagation(delayMs: number = 1000) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  private async _fetchClosedPositionSnapshot(positionId: number): Promise<IPosition | undefined> {
+    const history = await ExchangeService.getPositionsHistory({ positionId });
+    if (!history.length) return undefined;
+    return history[0];
   }
 }
 

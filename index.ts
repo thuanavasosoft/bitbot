@@ -19,7 +19,6 @@ async function runProgram() {
 
     if (!symbol && !symbols.length) throw "PLEASE SPECIFY EITHER SYMBOL OR SYMBOLS ACCORDING TO THE BOT";
     await ExchangeService.configure(
-      Number(process.env.EXCHANGE_ADAPTER),
       process.env.API_KEY!,
       process.env.API_SECRET!,
       !!symbol ? [symbol] : symbols,

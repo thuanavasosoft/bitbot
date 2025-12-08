@@ -259,47 +259,20 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
       time: new Date(triggerTs),
     }
 
+    const activePosition = this.bot.currActivePosition;
+
+    const closedPosition = await this.bot.triggerCloseSignal(this.bot.currActivePosition);
+    const closedPositionPrice = typeof closedPosition.closePrice === "number"
+      ? closedPosition.closePrice
+      : closedPosition.avgPrice;
+    const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
     let slippage: number = 0;
     let timeDiffMs: number = 0;
-
-    const closedPosition = await (async () => {
-      let hasSubmittedBinanceClose = false;
-      for (let i = 0; i < 10; i++) { // Try 10 times
-        if (this.bot.usesWsSignaling()) {
-          await this.bot.triggerCloseSignal(this.bot.currActivePosition);
-        } else if (!hasSubmittedBinanceClose) {
-          await this.bot.triggerCloseSignal(this.bot.currActivePosition);
-          hasSubmittedBinanceClose = true;
-        }
-        await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds before checking closed position again
-
-        console.log("Fetching position for this position id: ", this.bot.currActivePosition!.id!);
-        const latestClosedPositions = await ExchangeService.getPositionsHistory({
-          positionId: this.bot.currActivePosition!.id!
-        });
-        const closedPosition = latestClosedPositions?.find(p => p.id === this.bot.currActivePosition!.id!)
-        console.log("Found closed position: ", closedPosition);
-
-        if (!!closedPosition) {
-          return closedPosition;
-        }
-
-        TelegramService.queueMsg(`No closed position found will try again after 5 seconds attempt (${i + 1}/10)`)
-      }
-    })();
-
-    if (!closedPosition) {
-      TelegramService.queueMsg(`Failed to fetch latest closed position that needed to get the realized PnL this will make the calculation wrong`);
-      process.exit(-100);
-    }
-
-    const closedPositionAvgPrice = closedPosition.avgPrice;
-    const closedPositionTriggerTs = +new Date(closedPosition.updateTime);
     
     // Calculate slippage based on support/resistance levels
-    // For long exit (sell): compare avgPrice with support (higher avgPrice relative to support = better = negative slippage)
-    // For short exit (buy): compare avgPrice with resistance (lower avgPrice relative to resistance = better = negative slippage)
-    const positionSide = this.bot.currActivePosition?.side;
+    // For long exit (sell): compare fill price with support (higher fill relative to support = better = negative slippage)
+    // For short exit (buy): compare fill price with resistance (lower fill relative to resistance = better = negative slippage)
+    const positionSide = activePosition?.side;
     let srLevel: number | null = null;
     if (this.bot.fractionalStopTargets && this.bot.fractionalStopTargets.side === positionSide) {
       srLevel = this.bot.fractionalStopTargets.rawLevel;
@@ -316,8 +289,8 @@ Realized PnL: 🟥🟥🟥 ${closedPos.realizedPnl}
     
     slippage = srLevel !== null
       ? positionSide === "short"
-        ? new BigNumber(closedPositionAvgPrice).minus(srLevel).toNumber()
-        : new BigNumber(srLevel).minus(closedPositionAvgPrice).toNumber()
+        ? new BigNumber(closedPositionPrice).minus(srLevel).toNumber()
+        : new BigNumber(srLevel).minus(closedPositionPrice).toNumber()
       : 0;
     timeDiffMs = closedPositionTriggerTs - triggerTs;
 

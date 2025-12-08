@@ -1,5 +1,4 @@
 import type { IBalanceInfo, ICancelOrderResponse, ICandleInfo, IFeeRate, IGetPositionHistoryParams, IOrder, IPlaceOrderParams, IPlaceOrderResponse, IPosition, ISymbolInfo, ITrade, IWSOrderUpdate, TCandleResolution } from "./exchange-type";
-import MexcExchange from "./mexc-exchange/mexc-exchange";
 import BinanceExchange from "./binance-exchange/binance-exchange";
 
 
@@ -27,14 +26,9 @@ export interface IExchangeInstance {
 class ExchangeService {
   private static exchangeInstance: IExchangeInstance;
 
-  static async configure(exchange: number, apiKey: string, secretKey: string, symbols: string[]) {
-    if (exchange === 1) {
-      this.exchangeInstance = new MexcExchange(apiKey, secretKey, symbols);
-      await this.exchangeInstance.prepare()
-    } else if (exchange === 2) {
-      this.exchangeInstance = new BinanceExchange(apiKey, secretKey, symbols);
-      await this.exchangeInstance.prepare();
-    }
+  static async configure(apiKey: string, secretKey: string, symbols: string[]) {
+    this.exchangeInstance = new BinanceExchange(apiKey, secretKey, symbols);
+    await this.exchangeInstance.prepare();
   }
 
   static async getBalances(): Promise<IBalanceInfo[]> {
