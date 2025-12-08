@@ -44,6 +44,7 @@ class BreakoutBot {
   betSize: number;
   signalParams: SignalParams;
   symbolInfo?: ISymbolInfo;
+  pricePrecision?: number;
 
   currActivePosition?: IPosition;
   entryWsPrice?: { price: number, time: Date };
@@ -252,6 +253,7 @@ class BreakoutBot {
 
   async loadSymbolInfo() {
     this.symbolInfo = await ExchangeService.getSymbolInfo(this.symbol);
+    this.pricePrecision = this.symbolInfo?.pricePrecision;
     console.log(`[BreakoutBot] Loaded symbol info for ${this.symbol}:`, this.symbolInfo);
   }
 

@@ -69,20 +69,13 @@ class BBTrendWatcher {
       let longTrigger: number | null = null;
       let shortTrigger: number | null = null;
       
-      // Helper function to get price precision (decimal places)
-      const getPricePrecision = (price: number): number => {
-        const priceStr = price.toString();
-        if (priceStr.includes('.')) {
-          return priceStr.split('.')[1].length;
-        }
-        return 0;
-      };
+      const pricePrecision = this.bot.pricePrecision ?? this.bot.symbolInfo?.pricePrecision ?? 0;
       
       if (rawResistance !== null) {
         // Long trigger: resistance * (1 - buffer_percentage), rounded UP
         const bufferMultiplier = new BigNumber(1).minus(this.bot.bufferPercentage);
         const longTriggerRaw = new BigNumber(rawResistance).times(bufferMultiplier);
-        const precision = getPricePrecision(rawResistance);
+        const precision = pricePrecision;
         // Round down: add a small epsilon and then round down, or use ceil with precision
         const multiplier = Math.pow(10, precision);
         longTrigger = Math.floor(longTriggerRaw.times(multiplier).toNumber()) / multiplier;
@@ -92,7 +85,7 @@ class BBTrendWatcher {
         // Short trigger: support * (1 + buffer_percentage), rounded DOWN
         const bufferMultiplier = new BigNumber(1).plus(this.bot.bufferPercentage);
         const shortTriggerRaw = new BigNumber(rawSupport).times(bufferMultiplier);
-        const precision = getPricePrecision(rawSupport);
+        const precision = pricePrecision;
         // Round up: use ceil with precision
         const multiplier = Math.pow(10, precision);
         shortTrigger = Math.ceil(shortTriggerRaw.times(multiplier).toNumber()) / multiplier;

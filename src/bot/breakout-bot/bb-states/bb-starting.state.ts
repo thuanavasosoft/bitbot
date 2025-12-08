@@ -44,6 +44,12 @@ class BBStartingState implements BBState {
     TelegramService.queueMsg(msg1)
   }
 
+  private async _updatePricePrecision() {
+    const symbolInfo = await ExchangeService.getSymbolInfo(this.bot.symbol);
+    this.bot.symbolInfo = symbolInfo;
+    this.bot.pricePrecision = symbolInfo.pricePrecision;
+  }
+
   async onEnter() {
     if (!!this.bot.liquidationSleepFinishTs) {
       TelegramService.queueMsg(`Position has just liquidated waiting for ${this.bot.sleepDurationAfterLiquidation} (finished at: ${moment(this.bot.liquidationSleepFinishTs).format("YYYY-MM-DD HH:mm:ss")})`)
@@ -58,6 +64,7 @@ class BBStartingState implements BBState {
       (!this.bot.currQuoteBalance) && this.updateBotCurrentBalances(),
       this._updateLeverage(),
       this.bot.loadSymbolInfo(),
+      this._updatePricePrecision(),
     ]);
 
     console.log('Breakout Bot MEXC Entering Starting State')
