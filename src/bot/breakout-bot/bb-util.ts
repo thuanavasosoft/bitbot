@@ -3,6 +3,7 @@ import BreakoutBot from "./breakout-bot";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
+import { formatFeeAwarePnLLine } from "@/utils/strings.util";
 
 class BBUtil {
   constructor(private bot: BreakoutBot) { }
@@ -15,16 +16,43 @@ class BBUtil {
     return { thisRunCurrQuoteBalance, currExchFreeUsdtBalance };
   }
 
-  public async handlePnL(PnL: number, isLiquidated: boolean, icon?: string, slippage?: number, timeDiffMs?: number) {
+  public async handlePnL(
+    PnL: number,
+    isLiquidated: boolean,
+    icon?: string,
+    slippage?: number,
+    timeDiffMs?: number,
+    closedPositionId?: number,
+  ) {
     console.log("Calculating expected profit...");
 
     const iterationPnL = new BigNumber(PnL);
-    const isProfit = new BigNumber(iterationPnL).gt(0)
     console.log("this iteration Profit: ", iterationPnL);
 
     const { thisRunCurrQuoteBalance, currExchFreeUsdtBalance } = await this.updateBalance();
+    const prevBalance = new BigNumber(thisRunCurrQuoteBalance || 0);
+    const balanceDelta = currExchFreeUsdtBalance.minus(prevBalance);
+    const feeImpact = iterationPnL.minus(balanceDelta);
 
-    this.bot.totalActualCalculatedProfit = new BigNumber(this.bot.totalActualCalculatedProfit).plus(iterationPnL).toNumber();
+    const normalize = (value: BigNumber) => {
+      if (!value.isFinite()) return undefined;
+      if (value.abs().lt(1e-8)) return 0;
+      return value.decimalPlaces(6, BigNumber.ROUND_HALF_UP).toNumber();
+    };
+
+    const roundedGross = normalize(iterationPnL);
+    const roundedDelta = normalize(balanceDelta);
+    const roundedFees = normalize(feeImpact);
+
+    this.bot.updateLastTradeMetrics({
+      closedPositionId,
+      grossPnl: roundedGross,
+      balanceDelta: roundedDelta,
+      feeEstimate: roundedFees,
+      netPnl: roundedDelta,
+    });
+
+    this.bot.totalActualCalculatedProfit = new BigNumber(this.bot.totalActualCalculatedProfit).plus(iterationPnL).minus(feeImpact).toNumber();
 
     // Record PnL history
     const currentTimestamp = Date.now();
@@ -51,13 +79,22 @@ class BBUtil {
       }
     }
 
+    const feeAwareLine = formatFeeAwarePnLLine({
+      grossPnl: roundedGross,
+      feeEstimate: roundedFees,
+      netPnl: roundedDelta,
+    });
+
     const msg = `
 🏁 PnL Information
-Actual iteration pnl: ${isProfit ? "🟩" : "🟥"} ${iterationPnL.toFixed(4)} USDT
 Total calculated PnL: ${this.bot.totalActualCalculatedProfit >= 0 ? "🟩" : "🟥"} ${this.bot.totalActualCalculatedProfit.toFixed(4)}
 
 This run quote balance: ${thisRunCurrQuoteBalance} USDT
 Next run quote balance: ${currExchFreeUsdtBalance.toFixed(4)} USDT
+Wallet delta this resolve: ${balanceDelta.gt(0) ? "🟩" : "🟥"} ${balanceDelta.toFixed(4)} USDT
+--
+${closedPositionId ? `Closed position id: ${closedPositionId}\n` : ""}${feeAwareLine}
+--
 ${!!icon && !!slippage && !!timeDiffMs ? `-- Close Slippage: --
 Time Diff: ${timeDiffMs}ms
 Price Diff (pips): ${icon} ${slippage}` : ""}`;

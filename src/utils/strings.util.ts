@@ -12,7 +12,38 @@ export function isSameOrderLinkId(input: string, stringPattern: string): boolean
   return regex.test(input);
 }
 
-export function getPositionDetailMsg(position: IPosition) {
+export interface FeeAwarePnLOptions {
+  grossPnl?: number;
+  feeEstimate?: number;
+  netPnl?: number;
+}
+
+const formatNumberOrFallback = (value?: number, decimals: number = 4) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "N/A";
+  return value.toFixed(decimals);
+};
+
+export function formatFeeAwarePnLLine(summary?: FeeAwarePnLOptions, decimals: number = 4) {
+  const gross = formatNumberOrFallback(summary?.grossPnl, decimals);
+  const fees = formatNumberOrFallback(summary?.feeEstimate, decimals);
+  const net = formatNumberOrFallback(summary?.netPnl, decimals);
+
+  const iconNetPnl = summary?.netPnl && summary.netPnl > 0 ? "🟩" : "🟥";
+  const iconGross = summary?.grossPnl && summary.grossPnl > 0 ? "🟩" : "🟥";
+  return `Realized PnL: ${iconNetPnl} $${net} | Fees: -$${fees} | Gross (without fees): ${iconGross} $${gross}`;
+}
+
+export function getPositionDetailMsg(position: IPosition, options?: { feeSummary?: FeeAwarePnLOptions; digits?: number }) {
+  const digits = options?.digits ?? 4;
+  const shouldUseFeeSummary = !!options?.feeSummary;
+  const realizedLine = shouldUseFeeSummary
+    ? formatFeeAwarePnLLine({
+      grossPnl: options?.feeSummary?.grossPnl ?? (typeof position.realizedPnl === "number" ? position.realizedPnl : undefined),
+      feeEstimate: options?.feeSummary?.feeEstimate,
+      netPnl: options?.feeSummary?.netPnl,
+    }, digits)
+    : `Realized PnL: ${position.realizedPnl}`;
+
   return `
 ID: ${position.id}
 Side: ${position.side}
@@ -23,7 +54,7 @@ Notional Value: ${position.notional}
 Liquidation Price: ${position.liquidationPrice}
 Avg Price: ${position.avgPrice}
 
-Realized PnL: ${position.realizedPnl}
+${realizedLine}
 Unrealized PnL: ${position.unrealizedPnl > 0 ? "🟩" : "🟥"} ${position.unrealizedPnl}`
 }
 

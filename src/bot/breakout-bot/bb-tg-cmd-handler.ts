@@ -1,7 +1,7 @@
 import BigNumber from "bignumber.js";
 import BreakoutBot from "./breakout-bot";
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { getPositionDetailMsg } from "@/utils/strings.util";
+import { FeeAwarePnLOptions, formatFeeAwarePnLLine, getPositionDetailMsg } from "@/utils/strings.util";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
 import { getRunDuration } from "@/utils/maths.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
@@ -17,27 +17,64 @@ enum EBBotCommand {
 class BBTgCmdHandler {
   constructor(private bot: BreakoutBot) { }
 
+  private _getFeeSummaryForDisplay(): FeeAwarePnLOptions | undefined {
+    const metrics = this.bot.getLastTradeMetrics();
+    const net = typeof metrics.netPnl === "number" ? metrics.netPnl : metrics.balanceDelta;
+    const hasValue = [metrics.grossPnl, metrics.feeEstimate, net].some(
+      (value) => typeof value === "number" && Number.isFinite(value),
+    );
+
+    if (!hasValue) return undefined;
+
+    return {
+      grossPnl: metrics.grossPnl,
+      feeEstimate: metrics.feeEstimate,
+      netPnl: net,
+    };
+  }
+
+  private _formatLastTradeSummaryBlock() {
+    const metrics = this.bot.getLastTradeMetrics();
+    const feeSummary = this._getFeeSummaryForDisplay();
+    const feeLine = feeSummary
+      ? formatFeeAwarePnLLine(feeSummary)
+      : formatFeeAwarePnLLine();
+    const walletDelta = typeof metrics.balanceDelta === "number" && Number.isFinite(metrics.balanceDelta)
+      ? metrics.balanceDelta.toFixed(4)
+      : "N/A";
+
+    return `Last closed position ID: ${metrics.closedPositionId ?? "N/A"}
+${feeLine}
+Wallet delta: ${walletDelta} USDT`;
+  }
+
   private async _getFullUpdateDetailsMsg() {
+    let details = "";
     if (this.bot.currentState === this.bot.startingState) {
-      return `Bot in starting state, preparing bot balances, symbols, leverage`
-    }
-
-    if (this.bot.currentState === this.bot.waitForEntryState) {
-      return `
-Bot are in wait for entry state, waiting for breakout signal (Up/Down)`;
-    }
-
-    if (this.bot.currentState === this.bot.waitForResolveState) {
+      details = `Bot in starting state, preparing bot balances, symbols, leverage`;
+    } else if (this.bot.currentState === this.bot.waitForEntryState) {
+      details = `
+Bot are in wait for entry state, waiting for breakout signal (Up/Down)`.trim();
+    } else if (this.bot.currentState === this.bot.waitForResolveState) {
       let position = await ExchangeService.getPosition(this.bot.symbol);
       if (!position) {
         const closedPositions = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition?.id! });
         if (closedPositions?.length > 1) position = closedPositions[0];
       }
-      return `
+      details = `
 Bot are in wait for resolve state, monitoring price for exit
 
-${!!position && getPositionDetailMsg(position)}`
+${!!position && getPositionDetailMsg(position, { feeSummary: this._getFeeSummaryForDisplay() })}`.trim();
     }
+
+    if (!details) {
+      details = `Bot state details unavailable`;
+    }
+
+    const lastTradeSummary = this._formatLastTradeSummaryBlock();
+    return `${details}
+
+${lastTradeSummary}`;
   }
 
   handleTgMsgs() {
@@ -79,6 +116,8 @@ ${!!position && getPositionDetailMsg(position)}`
         ? new BigNumber(this.bot.slippageAccumulation).div(this.bot.numberOfTrades).toFixed(5)
         : "0";
 
+      const lastTradeSummary = this._formatLastTradeSummaryBlock();
+
       const msg = `
 === GENERAL ===
 Symbol: ${this.bot.symbol}
@@ -113,6 +152,9 @@ Calculated actual profit: ${this.bot.totalActualCalculatedProfit.toLocaleString(
 Run time: ${runDurationDisplay}
 Total profit till now: ${totalProfit.isGreaterThanOrEqualTo(0) ? "🟩" : "🟥"} ${totalProfit.toNumber().toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} USDT (${totalProfit.div(startQuoteBalance).times(100).toNumber().toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%) / ${runDurationDisplay}
 Estimated yearly profit: ${stratEstimatedYearlyProfit.toNumber().toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} USDT (${stratEstimatedROI.toNumber().toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%)
+
+=== LAST TRADE ===
+${lastTradeSummary}
 
 === SLIPPAGE ===
 Slippage accumulation: ${this.bot.slippageAccumulation} pip(s)

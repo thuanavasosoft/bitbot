@@ -17,6 +17,14 @@ export interface BBState {
   onExit: () => Promise<void>;
 }
 
+export interface BBTradeMetrics {
+  closedPositionId?: number;
+  grossPnl?: number;
+  balanceDelta?: number;
+  feeEstimate?: number;
+  netPnl?: number;
+}
+
 class BreakoutBot {
   runStartTs: Date = new Date();
 
@@ -59,6 +67,13 @@ class BreakoutBot {
   lastExitTime: number = 0; // Timestamp of last position exit
   lastEntryTime: number = 0; // Timestamp of last position entry
 
+  clientOrderPrefix: string;
+  lastClosedPositionId?: number;
+  lastGrossPnl?: number;
+  lastBalanceDelta?: number;
+  lastFeeEstimate?: number;
+  lastNetPnl?: number;
+
   bbUtil: BBUtil;
   bbTrendWatcher: BBTrendWatcher;
   bbTgCmdHandler: BBTgCmdHandler;
@@ -76,6 +91,7 @@ class BreakoutBot {
 
     this.symbol = process.env.SYMBOL!;
     this.leverage = Number(process.env.BREAKOUT_BOT_LEVERAGE!);
+    this.clientOrderPrefix = process.env.BINANCE_CLIENT_PREFIX || "";
     this.sleepDurationAfterLiquidation = process.env.BREAKOUT_BOT_SLEEP_DURATION_AFTER_LIQUIDATION!;
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
@@ -156,7 +172,7 @@ class BreakoutBot {
     }
 
     const orderSide = posDir === "long" ? "buy" : "sell";
-    const clientOrderId = `bb-open-${generateRandomString(10)}`;
+    const clientOrderId = this._buildClientOrderId("open");
     console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.symbol}`);
     await ExchangeService.placeOrder({
       symbol: this.symbol,
@@ -196,7 +212,7 @@ class BreakoutBot {
     }
 
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";
-    const clientOrderId = `bb-close-${generateRandomString(10)}`;
+    const clientOrderId = this._buildClientOrderId("close");
     console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (base: ${baseAmt}) to close position ${targetPosition.id}`);
     await ExchangeService.placeOrder({
       symbol: targetPosition.symbol,
@@ -306,6 +322,47 @@ class BreakoutBot {
     const history = await ExchangeService.getPositionsHistory({ positionId });
     if (!history.length) return undefined;
     return history[0];
+  }
+
+  updateLastTradeMetrics(metrics: BBTradeMetrics = {}) {
+    if ("closedPositionId" in metrics) {
+      this.lastClosedPositionId = metrics.closedPositionId;
+    }
+    if ("grossPnl" in metrics) {
+      this.lastGrossPnl = metrics.grossPnl;
+    }
+    if ("balanceDelta" in metrics) {
+      this.lastBalanceDelta = metrics.balanceDelta;
+    }
+    if ("feeEstimate" in metrics) {
+      this.lastFeeEstimate = metrics.feeEstimate;
+    }
+    if ("netPnl" in metrics) {
+      this.lastNetPnl = metrics.netPnl;
+    }
+  }
+
+  getLastTradeMetrics(): BBTradeMetrics {
+    return {
+      closedPositionId: this.lastClosedPositionId,
+      grossPnl: this.lastGrossPnl,
+      balanceDelta: this.lastBalanceDelta,
+      feeEstimate: this.lastFeeEstimate,
+      netPnl: this.lastNetPnl ?? this.lastBalanceDelta,
+    };
+  }
+
+  clearLastTradeMetrics() {
+    this.lastClosedPositionId = undefined;
+    this.lastGrossPnl = undefined;
+    this.lastBalanceDelta = undefined;
+    this.lastFeeEstimate = undefined;
+    this.lastNetPnl = undefined;
+  }
+
+  private _buildClientOrderId(action: "open" | "close") {
+    const prefix = this.clientOrderPrefix || "";
+    return `${prefix}bb-${action}-${generateRandomString(10)}`;
   }
 }
 

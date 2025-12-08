@@ -174,7 +174,8 @@ class BBWaitForResolveState implements BBState {
     const normalizedSymbol = update.symbol?.toUpperCase();
     if (normalizedSymbol && normalizedSymbol !== activePosition.symbol.toUpperCase()) return;
 
-    if (update.clientOrderId?.startsWith("bb-close-")) return;
+    const closeOrderPrefix = `${this.bot.clientOrderPrefix || ""}bb-close-`;
+    if (typeof update.clientOrderId === "string" && update.clientOrderId.startsWith(closeOrderPrefix)) return;
 
     try {
       const closedPosition = await this.bot.fetchClosedPositionSnapshot(activePosition.id);
@@ -280,6 +281,7 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     } = {}
   ) {
     const activePosition = options.activePosition ?? this.bot.currActivePosition;
+    const closedPositionId = closedPosition.id;
     const positionSide = activePosition?.side;
     const fillTimestamp = options.fillTimestamp ?? this.bot.resolveWsPrice?.time?.getTime() ?? closedPosition.updateTime ?? Date.now();
     const triggerTimestamp = options.triggerTimestamp ?? fillTimestamp;
@@ -335,6 +337,7 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
       shouldTrackSlippage ? icon : undefined,
       shouldTrackSlippage ? slippage : undefined,
       shouldTrackSlippage ? timeDiffMs : undefined,
+      closedPositionId,
     );
 
     eventBus.emit(EEventBusEventType.StateChange);
