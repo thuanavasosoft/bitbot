@@ -4,12 +4,18 @@ import { IWSOrderUpdate } from "@/services/exchange-service/exchange-type";
 type PendingRequest = {
   resolve: (update: IWSOrderUpdate) => void;
   reject: (error: Error) => void;
-  timeoutHandle: NodeJS.Timeout;
+  timeoutHandle?: NodeJS.Timeout;
+  earlyResult?: { type: "success"; value: IWSOrderUpdate } | { type: "error"; value: Error };
 };
 
 const FAILURE_STATUSES = new Set(["canceled", "partially_filled_canceled", "unknown"]);
 
 export type OrderWatcherResult = IWSOrderUpdate;
+
+export type PreRegisteredOrder = {
+  wait: (timeoutMs?: number) => Promise<OrderWatcherResult>;
+  cancel: () => void;
+};
 
 class BBOrderWatcher {
   private pendingRequests = new Map<string, PendingRequest>();
@@ -20,6 +26,65 @@ class BBOrderWatcher {
   constructor(options?: { defaultTimeoutMs?: number }) {
     this.defaultTimeoutMs = Math.max(1000, options?.defaultTimeoutMs ?? 60_000);
     this.removeOrderListener = ExchangeService.hookOrderListener((update) => this._handleOrderUpdate(update));
+  }
+
+  preRegister(clientOrderId: string): PreRegisteredOrder {
+    if (!clientOrderId) {
+      return {
+        wait: () => Promise.reject(new Error("[BBOrderWatcher] Invalid clientOrderId supplied")),
+        cancel: () => {},
+      };
+    }
+
+    if (this.pendingRequests.has(clientOrderId)) {
+      return {
+        wait: () => Promise.reject(new Error(`[BBOrderWatcher] Already awaiting clientOrderId ${clientOrderId}`)),
+        cancel: () => {},
+      };
+    }
+
+    let resolvePromise: (update: IWSOrderUpdate) => void;
+    let rejectPromise: (error: Error) => void;
+
+    const promise = new Promise<OrderWatcherResult>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+
+    const pending: PendingRequest = {
+      resolve: resolvePromise!,
+      reject: rejectPromise!,
+    };
+
+    this.pendingRequests.set(clientOrderId, pending);
+
+    const wait = (timeoutMs?: number): Promise<OrderWatcherResult> => {
+      if (pending.earlyResult) {
+        this.pendingRequests.delete(clientOrderId);
+        if (pending.earlyResult.type === "success") {
+          return Promise.resolve(pending.earlyResult.value);
+        } else {
+          return Promise.reject(pending.earlyResult.value);
+        }
+      }
+
+      const waitTimeout = timeoutMs ?? this.defaultTimeoutMs;
+      pending.timeoutHandle = setTimeout(() => {
+        this.pendingRequests.delete(clientOrderId);
+        rejectPromise(new Error(`[BBOrderWatcher] Timed out waiting for fill (clientOrderId=${clientOrderId})`));
+      }, waitTimeout);
+
+      return promise;
+    };
+
+    const cancel = () => {
+      if (pending.timeoutHandle) {
+        clearTimeout(pending.timeoutHandle);
+      }
+      this.pendingRequests.delete(clientOrderId);
+    };
+
+    return { wait, cancel };
   }
 
   waitForFill(clientOrderId: string, timeoutMs?: number): Promise<OrderWatcherResult> {
@@ -88,15 +153,25 @@ class BBOrderWatcher {
   }
 
   private _resolvePending(clientOrderId: string, pending: PendingRequest, update: IWSOrderUpdate) {
-    clearTimeout(pending.timeoutHandle);
-    this.pendingRequests.delete(clientOrderId);
-    pending.resolve(update);
+    if (pending.timeoutHandle) {
+      clearTimeout(pending.timeoutHandle);
+      this.pendingRequests.delete(clientOrderId);
+      pending.resolve(update);
+    } else {
+      // wait() not called yet, store result for when it is
+      pending.earlyResult = { type: "success", value: update };
+    }
   }
 
   private _rejectPending(clientOrderId: string, pending: PendingRequest, error: Error) {
-    clearTimeout(pending.timeoutHandle);
-    this.pendingRequests.delete(clientOrderId);
-    pending.reject(error);
+    if (pending.timeoutHandle) {
+      clearTimeout(pending.timeoutHandle);
+      this.pendingRequests.delete(clientOrderId);
+      pending.reject(error);
+    } else {
+      // wait() not called yet, store error for when it is
+      pending.earlyResult = { type: "error", value: error };
+    }
   }
 }
 

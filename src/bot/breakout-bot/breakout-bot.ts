@@ -185,29 +185,35 @@ class BreakoutBot {
 
     const orderSide = posDir === "long" ? "buy" : "sell";
     const clientOrderId = await ExchangeService.generateClientOrderId();
-    console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.symbol}`);
-    await ExchangeService.placeOrder({
-      symbol: this.symbol,
-      orderType: "market",
-      orderSide,
-      baseAmt,
-      clientOrderId,
-    });
+    const orderHandle = this.orderWatcher.preRegister(clientOrderId);
+    try {
+      console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.symbol}`);
+      await ExchangeService.placeOrder({
+        symbol: this.symbol,
+        orderType: "market",
+        orderSide,
+        baseAmt,
+        clientOrderId,
+      });
 
-    const fillUpdate = await this.orderWatcher.waitForFill(clientOrderId);
-    const openedPosition = await ExchangeService.getPosition(this.symbol);
-    if (!openedPosition || openedPosition.side !== posDir) {
-      throw new Error(`[BreakoutBot] Position not detected after ${orderSide} order submission`);
+      const fillUpdate = await orderHandle.wait();
+      const openedPosition = await ExchangeService.getPosition(this.symbol);
+      if (!openedPosition || openedPosition.side !== posDir) {
+        throw new Error(`[BreakoutBot] Position not detected after ${orderSide} order submission`);
+      }
+
+      const fillPrice = fillUpdate.executionPrice ?? openedPosition.avgPrice;
+      const fillTime = fillUpdate.updateTime ? new Date(fillUpdate.updateTime) : new Date();
+      this.entryWsPrice = {
+        price: fillPrice,
+        time: fillTime,
+      };
+
+      return openedPosition;
+    } catch (error) {
+      orderHandle.cancel();
+      throw error;
     }
-
-    const fillPrice = fillUpdate.executionPrice ?? openedPosition.avgPrice;
-    const fillTime = fillUpdate.updateTime ? new Date(fillUpdate.updateTime) : new Date();
-    this.entryWsPrice = {
-      price: fillPrice,
-      time: fillTime,
-    };
-
-    return openedPosition;
   }
 
   async triggerCloseSignal(position?: IPosition): Promise<IPosition> {
@@ -225,6 +231,7 @@ class BreakoutBot {
 
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";
     const clientOrderId = await ExchangeService.generateClientOrderId();
+    const orderHandle = this.orderWatcher.preRegister(clientOrderId);
     this._trackCloseOrderId(clientOrderId);
     try {
       console.log(
@@ -238,7 +245,7 @@ class BreakoutBot {
         clientOrderId,
       });
 
-      const fillUpdate = await this.orderWatcher.waitForFill(clientOrderId);
+      const fillUpdate = await orderHandle.wait();
       const closedPosition = await this.fetchClosedPositionSnapshot(targetPosition.id);
       if (!closedPosition || typeof closedPosition.closePrice !== "number") {
         throw new Error(`[BreakoutBot] Failed to retrieve closed position snapshot for id ${targetPosition.id}`);
@@ -252,6 +259,9 @@ class BreakoutBot {
       };
 
       return closedPosition;
+    } catch (error) {
+      orderHandle.cancel();
+      throw error;
     } finally {
       this._untrackCloseOrderId(clientOrderId);
     }

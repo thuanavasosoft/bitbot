@@ -1,5 +1,5 @@
 import { USDMClient, WebsocketClient } from "binance";
-import { generateNewOrderId as binanceGenerateNewOrderId } from "binance/lib/util/requestUtils";
+import { generateNewOrderId as binanceGenerateNewOrderId } from "binance/lib/util/requestUtils.js";
 
 type BinanceNetworkKey = Parameters<typeof binanceGenerateNewOrderId>[0];
 import type { Kline, KlineInterval, SymbolLotSizeFilter, SymbolMarketLotSizeFilter } from "binance/lib/types/shared";
@@ -193,6 +193,19 @@ class BinanceExchange implements IExchangeInstance {
       });
       return true;
     } catch (error) {
+      const errorCode = (error as any)?.code ?? (error as any)?.body?.code;
+      const errorMessage = `${(error as any)?.message ?? ""}`.toLowerCase();
+      const isNoOpMarginError =
+        errorCode === -4046 || errorMessage.includes("no need to change margin type");
+
+      if (isNoOpMarginError) {
+        // Binance responds with -4046 when the margin type already matches the requested mode.
+        console.info(
+          `[BinanceExchange] Margin mode already ${apiMarginType} for ${symbol}, continuing without changes.`,
+        );
+        return true;
+      }
+
       console.error(`[BinanceExchange] Failed to set margin mode (symbol=${symbol}, mode=${apiMarginType})`, error);
       return false;
     }
