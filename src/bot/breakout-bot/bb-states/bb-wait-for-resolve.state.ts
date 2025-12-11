@@ -307,8 +307,7 @@ class BBWaitForResolveState implements BBState {
     const normalizedSymbol = update.symbol?.toUpperCase();
     if (normalizedSymbol && normalizedSymbol !== activePosition.symbol.toUpperCase()) return;
 
-    const closeOrderPrefix = `${this.bot.clientOrderPrefix || ""}bb-close-`;
-    if (typeof update.clientOrderId === "string" && update.clientOrderId.startsWith(closeOrderPrefix)) return;
+    if (this.bot.isBotGeneratedCloseOrder(update.clientOrderId)) return;
 
     try {
       const closedPosition = await this.bot.fetchClosedPositionSnapshot(activePosition.id);

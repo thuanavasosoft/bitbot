@@ -1,4 +1,7 @@
 import { USDMClient, WebsocketClient } from "binance";
+import { generateNewOrderId as binanceGenerateNewOrderId } from "binance/lib/util/requestUtils";
+
+type BinanceNetworkKey = Parameters<typeof binanceGenerateNewOrderId>[0];
 import type { Kline, KlineInterval, SymbolLotSizeFilter, SymbolMarketLotSizeFilter } from "binance/lib/types/shared";
 import type {
   FuturesSymbolExchangeInfo,
@@ -83,6 +86,25 @@ class BinanceExchange implements IExchangeInstance {
     this._mapWsEvents();
   }
 
+  async generateClientOrderId(): Promise<string> {
+    const networkKey = this._getClientNetworkKey();
+    const fallback = () => `x-15PC4ZJy${generateRandomString(16)}`;
+
+    try {
+      const generated = binanceGenerateNewOrderId(networkKey);
+      if (typeof generated === "string" && generated.length > 0) {
+        return generated;
+      }
+      console.warn(`[BinanceExchange] Helper returned invalid client order id, falling back. Value: ${generated}`);
+    } catch (error) {
+      console.error(`[BinanceExchange] Failed to fetch client order id via helper (network=${networkKey}):`, error);
+    }
+
+    const fallbackId = fallback();
+    console.warn(`[BinanceExchange] Falling back to locally generated client order id (${fallbackId})`);
+    return fallbackId;
+  }
+
   async prepare(): Promise<void> {
     await Promise.all([
       ...this._symbols.map((symbol) => this._subscribeMarkPrice(symbol)),
@@ -158,6 +180,22 @@ class BinanceExchange implements IExchangeInstance {
     const normalizedSymbol = this._normalizeSymbol(symbol);
     await this._client.setLeverage({ symbol: normalizedSymbol, leverage });
     return true;
+  }
+
+  async setMarginMode(symbol: string, marginMode: TPositionType): Promise<boolean> {
+    const normalizedSymbol = this._normalizeSymbol(symbol);
+    const apiMarginType = marginMode === "isolated" ? "ISOLATED" : "CROSSED";
+
+    try {
+      await this._client.setMarginType({
+        symbol: normalizedSymbol,
+        marginType: apiMarginType,
+      });
+      return true;
+    } catch (error) {
+      console.error(`[BinanceExchange] Failed to set margin mode (symbol=${symbol}, mode=${apiMarginType})`, error);
+      return false;
+    }
   }
 
   async getPosition(symbol: string): Promise<IPosition | undefined> {
@@ -372,6 +410,14 @@ class BinanceExchange implements IExchangeInstance {
 
   private _toOriginalSymbol(normalized: string): string {
     return this._normalizedToOriginalSymbol[normalized] || normalized;
+  }
+
+  private _getClientNetworkKey(): BinanceNetworkKey {
+    const client = this._client as unknown as { clientId?: string };
+    if (client && typeof client.clientId === "string" && client.clientId.length > 0) {
+      return client.clientId as BinanceNetworkKey;
+    }
+    return "usdm";
   }
 
   private _mapResolution(resolution: TCandleResolution): KlineInterval {

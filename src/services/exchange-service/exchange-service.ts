@@ -1,4 +1,4 @@
-import type { IBalanceInfo, ICancelOrderResponse, ICandleInfo, IFeeRate, IGetPositionHistoryParams, IOrder, IPlaceOrderParams, IPlaceOrderResponse, IPosition, ISymbolInfo, ITrade, IWSOrderUpdate, TCandleResolution } from "./exchange-type";
+import type { IBalanceInfo, ICancelOrderResponse, ICandleInfo, IFeeRate, IGetPositionHistoryParams, IOrder, IPlaceOrderParams, IPlaceOrderResponse, IPosition, ISymbolInfo, ITrade, IWSOrderUpdate, TCandleResolution, TPositionType } from "./exchange-type";
 import BinanceExchange from "./binance-exchange/binance-exchange";
 
 
@@ -7,6 +7,7 @@ export interface IExchangeInstance {
   getBalances: () => Promise<IBalanceInfo[]>,
   getCandles: (symbol: string, startDate: Date, endDate: Date, resolution: TCandleResolution) => Promise<ICandleInfo[]>
   setLeverage: (symbol: string, leverage: number) => Promise<boolean>,
+  setMarginMode: (symbol: string, marginMode: TPositionType) => Promise<boolean>,
   getPosition: (symbol: string) => Promise<IPosition | undefined>
   getOpenedPositions: () => Promise<IPosition[] | undefined>
   getPositionsHistory: (params: IGetPositionHistoryParams) => Promise<IPosition[]>
@@ -18,6 +19,7 @@ export interface IExchangeInstance {
   getTradeList: (symbol: string, clientOrderId: string) => Promise<ITrade[]>;
   getOrderDetail: (symbol: string, clientOrderId: string) => Promise<IOrder | undefined>;
   cancelOrder(symbol: string, clientOrderId: string): Promise<ICancelOrderResponse>;
+  generateClientOrderId: () => Promise<string>;
   hookPriceListener: (symbol: string, callback: (price: number) => void) => () => void;
   hookPriceListenerWithTimestamp: (symbol: string, callback: (price: number, timestamp: number) => void) => () => void;
   hookOrderListener: (callback: (order: IWSOrderUpdate) => void) => () => void;
@@ -41,6 +43,10 @@ class ExchangeService {
 
   static async setLeverage(symbol: string, leverage: number): Promise<boolean> {
     return await this.exchangeInstance.setLeverage(symbol, leverage);
+  }
+
+  static async setMarginMode(symbol: string, marginMode: TPositionType): Promise<boolean> {
+    return await this.exchangeInstance.setMarginMode(symbol, marginMode);
   }
 
   static async getPosition(symbol: string): Promise<IPosition | undefined> {
@@ -85,6 +91,10 @@ class ExchangeService {
 
   static async cancelOrder(symbol: string, clientOrderId: string): Promise<ICancelOrderResponse> {
     return await this.exchangeInstance.cancelOrder(symbol, clientOrderId);
+  }
+
+  static async generateClientOrderId(): Promise<string> {
+    return await this.exchangeInstance.generateClientOrderId();
   }
 
   static hookPriceListener(symbol: string, callback: (price: number) => void): () => void {

@@ -44,6 +44,24 @@ class BBStartingState implements BBState {
     TelegramService.queueMsg(msg1)
   }
 
+  private async _ensureIsolatedMarginMode() {
+    const msg = `Setting margin mode of ${this.bot.symbol} to Isolated...`;
+    console.log(msg);
+    TelegramService.queueMsg(msg);
+
+    const success = await ExchangeService.setMarginMode(this.bot.symbol, "isolated");
+    if (!success) {
+      const errMsg = `Failed to set margin mode of ${this.bot.symbol} to Isolated`;
+      console.error(errMsg);
+      TelegramService.queueMsg(`❌ ${errMsg}`);
+      throw new Error(errMsg);
+    }
+
+    const successMsg = `Margin mode set to Isolated successfully`;
+    console.log(successMsg);
+    TelegramService.queueMsg(successMsg);
+  }
+
   private async _updatePricePrecision() {
     const symbolInfo = await ExchangeService.getSymbolInfo(this.bot.symbol);
     this.bot.symbolInfo = symbolInfo;
@@ -63,6 +81,7 @@ class BBStartingState implements BBState {
       (!this.bot.startQuoteBalance) && this._updateBotStartBalances(),
       (!this.bot.currQuoteBalance) && this.updateBotCurrentBalances(),
       this._updateLeverage(),
+      this._ensureIsolatedMarginMode(),
       this.bot.loadSymbolInfo(),
       this._updatePricePrecision(),
     ]);

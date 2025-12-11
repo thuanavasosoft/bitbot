@@ -1,6 +1,5 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
-import { generateRandomString } from "@/utils/strings.util";
 import BigNumber from "bignumber.js";
 import BBUtil from "./bb-util";
 import BBStartingState from "./bb-states/bb-starting.state";
@@ -66,7 +65,6 @@ class BreakoutBot {
   lastExitTime: number = 0; // Timestamp of last position exit
   lastEntryTime: number = 0; // Timestamp of last position entry
 
-  clientOrderPrefix: string;
   lastClosedPositionId?: number;
   lastGrossPnl?: number;
   lastBalanceDelta?: number;
@@ -89,6 +87,8 @@ class BreakoutBot {
   bbTgCmdHandler: BBTgCmdHandler;
   orderWatcher: BBOrderWatcher;
 
+  private botCloseOrderIds: Set<string> = new Set();
+
   startingState: BBStartingState;
   waitForEntryState: BBWaitForEntryState;
   waitForResolveState: BBWaitForResolveState;
@@ -101,7 +101,6 @@ class BreakoutBot {
 
     this.symbol = process.env.SYMBOL!;
     this.leverage = Number(process.env.BREAKOUT_BOT_LEVERAGE!);
-    this.clientOrderPrefix = process.env.BINANCE_CLIENT_PREFIX || "";
     this.sleepDurationAfterLiquidation = process.env.BREAKOUT_BOT_SLEEP_DURATION_AFTER_LIQUIDATION!;
     this.betSize = Number(process.env.BREAKOUT_BOT_BET_SIZE!);
     this.checkIntervalMinutes = Number(process.env.BREAKOUT_BOT_CHECK_INTERVAL_MINUTES!);
@@ -185,7 +184,7 @@ class BreakoutBot {
     }
 
     const orderSide = posDir === "long" ? "buy" : "sell";
-    const clientOrderId = this._buildClientOrderId("open");
+    const clientOrderId = await ExchangeService.generateClientOrderId();
     console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.symbol}`);
     await ExchangeService.placeOrder({
       symbol: this.symbol,
@@ -225,30 +224,37 @@ class BreakoutBot {
     }
 
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";
-    const clientOrderId = this._buildClientOrderId("close");
-    console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (base: ${baseAmt}) to close position ${targetPosition.id}`);
-    await ExchangeService.placeOrder({
-      symbol: targetPosition.symbol,
-      orderType: "market",
-      orderSide,
-      baseAmt,
-      clientOrderId,
-    });
+    const clientOrderId = await ExchangeService.generateClientOrderId();
+    this._trackCloseOrderId(clientOrderId);
+    try {
+      console.log(
+        `[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (base: ${baseAmt}) to close position ${targetPosition.id}`
+      );
+      await ExchangeService.placeOrder({
+        symbol: targetPosition.symbol,
+        orderType: "market",
+        orderSide,
+        baseAmt,
+        clientOrderId,
+      });
 
-    const fillUpdate = await this.orderWatcher.waitForFill(clientOrderId);
-    const closedPosition = await this.fetchClosedPositionSnapshot(targetPosition.id);
-    if (!closedPosition || typeof closedPosition.closePrice !== "number") {
-      throw new Error(`[BreakoutBot] Failed to retrieve closed position snapshot for id ${targetPosition.id}`);
+      const fillUpdate = await this.orderWatcher.waitForFill(clientOrderId);
+      const closedPosition = await this.fetchClosedPositionSnapshot(targetPosition.id);
+      if (!closedPosition || typeof closedPosition.closePrice !== "number") {
+        throw new Error(`[BreakoutBot] Failed to retrieve closed position snapshot for id ${targetPosition.id}`);
+      }
+
+      const resolvePrice = fillUpdate.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice;
+      const resolveTime = fillUpdate.updateTime ? new Date(fillUpdate.updateTime) : new Date();
+      this.resolveWsPrice = {
+        price: resolvePrice,
+        time: resolveTime,
+      };
+
+      return closedPosition;
+    } finally {
+      this._untrackCloseOrderId(clientOrderId);
     }
-
-    const resolvePrice = fillUpdate.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice;
-    const resolveTime = fillUpdate.updateTime ? new Date(fillUpdate.updateTime) : new Date();
-    this.resolveWsPrice = {
-      price: resolvePrice,
-      time: resolveTime,
-    };
-
-    return closedPosition;
   }
 
   async loadSymbolInfo() {
@@ -382,9 +388,21 @@ class BreakoutBot {
     this.trailingStopBreachCount = 0;
   }
 
-  private _buildClientOrderId(action: "open" | "close") {
-    const prefix = this.clientOrderPrefix || "";
-    return `${prefix}bb-${action}-${generateRandomString(10)}`;
+  isBotGeneratedCloseOrder(clientOrderId?: string | null): boolean {
+    if (!clientOrderId) return false;
+    return this.botCloseOrderIds.has(clientOrderId);
+  }
+
+  private _trackCloseOrderId(clientOrderId: string) {
+    if (clientOrderId) {
+      this.botCloseOrderIds.add(clientOrderId);
+    }
+  }
+
+  private _untrackCloseOrderId(clientOrderId: string) {
+    if (clientOrderId) {
+      this.botCloseOrderIds.delete(clientOrderId);
+    }
   }
 }
 
