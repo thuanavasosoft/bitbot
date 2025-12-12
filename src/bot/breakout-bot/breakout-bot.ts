@@ -348,10 +348,19 @@ class BreakoutBot {
     await this.currentState.onEnter();
   }
 
-  async fetchClosedPositionSnapshot(positionId: number): Promise<IPosition | undefined> {
-    const history = await ExchangeService.getPositionsHistory({ positionId });
-    if (!history.length) return undefined;
-    return history[0];
+  async fetchClosedPositionSnapshot(positionId: number, maxRetries = 5): Promise<IPosition | undefined> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const history = await ExchangeService.getPositionsHistory({ positionId });
+      const position = history[0];
+      if (position && typeof position.closePrice === "number") {
+        return position;
+      }
+      if (attempt < maxRetries - 1) {
+        const delayMs = 200 * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+    return undefined;
   }
 
   updateLastTradeMetrics(metrics: BBTradeMetrics = {}) {
