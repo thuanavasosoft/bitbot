@@ -10,6 +10,7 @@ import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import BBTgCmdHandler from "./bb-tg-cmd-handler";
 import { SignalParams } from "./breakout-helpers";
 import BBOrderWatcher from "./bb-order-watcher";
+import { isTransientError, withRetries } from "./bb-retry";
 
 export interface BBState {
   onEnter: () => Promise<void>;
@@ -175,7 +176,18 @@ class BreakoutBot {
     }
 
     const sanitizedQuoteAmt = this._sanitizeQuoteAmount(quoteAmt);
-    const rawMarkPrice = await ExchangeService.getMarkPrice(this.symbol);
+    const rawMarkPrice = await withRetries(
+      () => ExchangeService.getMarkPrice(this.symbol),
+      {
+        label: "[BreakoutBot] getMarkPrice (open)",
+        retries: 5,
+        minDelayMs: 5000,
+        isTransientError,
+        onRetry: ({ attempt, delayMs, error, label }) => {
+          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+        },
+      }
+    );
     const markPrice = this._formatPrice(rawMarkPrice) || rawMarkPrice;
     const baseAmt = this._calcBaseQtyFromQuote(sanitizedQuoteAmt, markPrice);
 
@@ -188,16 +200,55 @@ class BreakoutBot {
     const orderHandle = this.orderWatcher.preRegister(clientOrderId);
     try {
       console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.symbol}`);
-      await ExchangeService.placeOrder({
-        symbol: this.symbol,
-        orderType: "market",
-        orderSide,
-        baseAmt,
-        clientOrderId,
-      });
+      await withRetries(
+        async () => {
+          try {
+            await ExchangeService.placeOrder({
+              symbol: this.symbol,
+              orderType: "market",
+              orderSide,
+              baseAmt,
+              clientOrderId,
+            });
+            return;
+          } catch (error) {
+            // Network blip after request acceptance: check if order exists before re-submitting.
+            try {
+              const existing = await ExchangeService.getOrderDetail(this.symbol, clientOrderId);
+              if (existing) {
+                console.warn(`[BreakoutBot] placeOrder failed but order exists (clientOrderId=${clientOrderId}), continuing.`);
+                return;
+              }
+            } catch (lookupErr) {
+              console.warn(`[BreakoutBot] Failed to verify order existence (clientOrderId=${clientOrderId}):`, lookupErr);
+            }
+            throw error;
+          }
+        },
+        {
+          label: "[BreakoutBot] placeOrder (open)",
+          retries: 5,
+          minDelayMs: 5000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error, label }) => {
+            console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}, clientOrderId=${clientOrderId}):`, error);
+          },
+        }
+      );
 
       const fillUpdate = await orderHandle.wait();
-      const openedPosition = await ExchangeService.getPosition(this.symbol);
+      const openedPosition = await withRetries(
+        () => ExchangeService.getPosition(this.symbol),
+        {
+          label: "[BreakoutBot] getPosition (open)",
+          retries: 5,
+          minDelayMs: 5000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error, label }) => {
+            console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+          },
+        }
+      );
       if (!openedPosition || openedPosition.side !== posDir) {
         throw new Error(`[BreakoutBot] Position not detected after ${orderSide} order submission`);
       }
@@ -219,7 +270,18 @@ class BreakoutBot {
   async triggerCloseSignal(position?: IPosition): Promise<IPosition> {
     await this._ensureSymbolInfoLoaded();
 
-    const targetPosition = position || this.currActivePosition || await ExchangeService.getPosition(this.symbol);
+    const targetPosition = position || this.currActivePosition || await withRetries(
+      () => ExchangeService.getPosition(this.symbol),
+      {
+        label: "[BreakoutBot] getPosition (close)",
+        retries: 5,
+        minDelayMs: 5000,
+        isTransientError,
+        onRetry: ({ attempt, delayMs, error, label }) => {
+          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+        },
+      }
+    );
     if (!targetPosition) {
       throw new Error("[BreakoutBot] No active position found to close");
     }
@@ -237,13 +299,41 @@ class BreakoutBot {
       console.log(
         `[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (base: ${baseAmt}) to close position ${targetPosition.id}`
       );
-      await ExchangeService.placeOrder({
-        symbol: targetPosition.symbol,
-        orderType: "market",
-        orderSide,
-        baseAmt,
-        clientOrderId,
-      });
+      await withRetries(
+        async () => {
+          try {
+            await ExchangeService.placeOrder({
+              symbol: targetPosition.symbol,
+              orderType: "market",
+              orderSide,
+              baseAmt,
+              clientOrderId,
+            });
+            return;
+          } catch (error) {
+            // Network blip after request acceptance: check if order exists before re-submitting.
+            try {
+              const existing = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
+              if (existing) {
+                console.warn(`[BreakoutBot] close placeOrder failed but order exists (clientOrderId=${clientOrderId}), continuing.`);
+                return;
+              }
+            } catch (lookupErr) {
+              console.warn(`[BreakoutBot] Failed to verify close order existence (clientOrderId=${clientOrderId}):`, lookupErr);
+            }
+            throw error;
+          }
+        },
+        {
+          label: "[BreakoutBot] placeOrder (close)",
+          retries: 5,
+          minDelayMs: 5000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error, label }) => {
+            console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}, clientOrderId=${clientOrderId}):`, error);
+          },
+        }
+      );
 
       const fillUpdate = await orderHandle.wait();
       const closedPosition = await this.fetchClosedPositionSnapshot(targetPosition.id);
@@ -268,7 +358,18 @@ class BreakoutBot {
   }
 
   async loadSymbolInfo() {
-    this.symbolInfo = await ExchangeService.getSymbolInfo(this.symbol);
+    this.symbolInfo = await withRetries(
+      () => ExchangeService.getSymbolInfo(this.symbol),
+      {
+        label: "[BreakoutBot] getSymbolInfo",
+        retries: 5,
+        minDelayMs: 5000,
+        isTransientError,
+        onRetry: ({ attempt, delayMs, error, label }) => {
+          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+        },
+      }
+    );
     this.pricePrecision = this.symbolInfo?.pricePrecision;
     console.log(`[BreakoutBot] Loaded symbol info for ${this.symbol}:`, this.symbolInfo);
   }
@@ -326,23 +427,27 @@ class BreakoutBot {
   async startMakeMoney() {
     console.log("Start making money");
 
-    eventBus.addListener(EEventBusEventType.StateChange, async () => {
-      console.log("State change triggered, changing state");
+    eventBus.addListener(EEventBusEventType.StateChange, () => {
+      void (async () => {
+        console.log("State change triggered, changing state");
 
-      await this.currentState.onExit();
+        await this.currentState.onExit();
 
-      if (this.currentState === this.startingState) {
-        console.log("Current state is starting, next state is waiting for entry");
-        this.currentState = this.waitForEntryState;
-      } else if (this.currentState === this.waitForEntryState) {
-        console.log("Current state is waiting for entry, next state is waiting for resolve");
-        this.currentState = this.waitForResolveState;
-      } else if (this.currentState === this.waitForResolveState) {
-        console.log("Current state is waiting for resolve, next state is starting");
-        this.currentState = this.startingState;
-      }
+        if (this.currentState === this.startingState) {
+          console.log("Current state is starting, next state is waiting for entry");
+          this.currentState = this.waitForEntryState;
+        } else if (this.currentState === this.waitForEntryState) {
+          console.log("Current state is waiting for entry, next state is waiting for resolve");
+          this.currentState = this.waitForResolveState;
+        } else if (this.currentState === this.waitForResolveState) {
+          console.log("Current state is waiting for resolve, next state is starting");
+          this.currentState = this.startingState;
+        }
 
-      await this.currentState.onEnter();
+        await this.currentState.onEnter();
+      })().catch((error) => {
+        console.error("[BreakoutBot] Unhandled error during state transition:", error);
+      });
     });
 
     await this.currentState.onEnter();

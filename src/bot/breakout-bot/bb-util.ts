@@ -4,6 +4,7 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
 import { formatFeeAwarePnLLine } from "@/utils/strings.util";
+import { isTransientError, withRetries } from "./bb-retry";
 
 class BBUtil {
   constructor(private bot: BreakoutBot) { }
@@ -104,7 +105,18 @@ Price Diff (pips): ${icon} ${slippage}` : ""}`;
   }
 
   public async getExchFreeUsdtBalance(): Promise<BigNumber> {
-    const balances = await ExchangeService.getBalances()
+    const balances = await withRetries(
+      () => ExchangeService.getBalances(),
+      {
+        label: "[BBUtil] getBalances",
+        retries: 5,
+        minDelayMs: 5000,
+        isTransientError,
+        onRetry: ({ attempt, delayMs, error, label }) => {
+          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+        },
+      }
+    );
     const usdtBalanceFromExchange = balances.find((item) => item.coin === 'USDT')
     console.log('usdtBalanceFromExchange: ', usdtBalanceFromExchange)
 

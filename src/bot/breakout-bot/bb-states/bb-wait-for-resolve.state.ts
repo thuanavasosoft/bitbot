@@ -5,6 +5,7 @@ import { parseDurationStringIntoMs } from "@/utils/maths.util";
 import TelegramService from "@/services/telegram.service";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import BigNumber from "bignumber.js";
+import { isTransientError, withRetries } from "../bb-retry";
 
 class BBWaitForResolveState implements BBState {
   private priceListenerRemover?: () => void;
@@ -52,7 +53,13 @@ class BBWaitForResolveState implements BBState {
   }
 
   private async _watchForPositionExit() {
-    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (price) => {
+    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, (price) => {
+      void this._handleExitPriceUpdate(price);
+    });
+  }
+
+  private async _handleExitPriceUpdate(price: number) {
+    try {
       if (!this.bot.currActivePosition) {
         this._clearPriceListener();
         console.log("No active position found, exiting price exit listener");
@@ -139,7 +146,10 @@ class BBWaitForResolveState implements BBState {
         this._clearPriceListener();
         await this._closeCurrPosition(exitReason);
       }
-    });
+    } catch (error) {
+      console.error("[BBWaitForResolveState] Price listener error:", error);
+      TelegramService.queueMsg(`⚠️ Exit price listener error: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private _startTrailingUpdater() {
@@ -224,7 +234,18 @@ class BBWaitForResolveState implements BBState {
     const endDate = new Date(now);
     const startDate = new Date(endDate.getTime() - windowMinutes * 60 * 1000);
 
-    const candles = await ExchangeService.getCandles(this.bot.symbol, startDate, endDate, "1Min");
+    const candles = await withRetries(
+      () => ExchangeService.getCandles(this.bot.symbol, startDate, endDate, "1Min"),
+      {
+        label: "[BBWaitForResolveState] getCandles (trailing updater)",
+        retries: 5,
+        minDelayMs: 5000,
+        isTransientError,
+        onRetry: ({ attempt, delayMs, error, label }) => {
+          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+        },
+      }
+    );
     const cutoffTs = now - 60 * 1000; // Ensure candle fully closed
     const finishedCandles = candles.filter((candle) => candle.timestamp <= cutoffTs);
 

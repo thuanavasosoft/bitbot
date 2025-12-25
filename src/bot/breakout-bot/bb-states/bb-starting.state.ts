@@ -96,7 +96,12 @@ Current Quote Balance (100%): ${this.bot.currQuoteBalance} USDT
     console.log(msg);
     TelegramService.queueMsg(msg);
 
-    if (!this.bot.bbTrendWatcher.isTrendWatcherStarted) this.bot.bbTrendWatcher.startWatchBreakoutSignals()
+    if (!this.bot.bbTrendWatcher.isTrendWatcherStarted) {
+      void this.bot.bbTrendWatcher.startWatchBreakoutSignals().catch((error) => {
+        console.error("[BBStartingState] Trend watcher crashed:", error);
+        TelegramService.queueMsg(`⚠️ Trend watcher crashed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
 
     eventBus.emit(EEventBusEventType.StateChange);
   }

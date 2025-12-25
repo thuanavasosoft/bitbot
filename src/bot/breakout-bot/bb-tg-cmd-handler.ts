@@ -5,6 +5,7 @@ import { FeeAwarePnLOptions, formatFeeAwarePnLLine, getPositionDetailMsg } from 
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
 import { getRunDuration } from "@/utils/maths.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
+import { isTransientError, withRetries } from "./bb-retry";
 
 enum EBBotCommand {
   UPDATE_BET_SIZE = "update_bet_size",
@@ -56,9 +57,31 @@ Wallet delta: ${walletDelta} USDT`;
       details = `
 Bot are in wait for entry state, waiting for breakout signal (Up/Down)`.trim();
     } else if (this.bot.currentState === this.bot.waitForResolveState) {
-      let position = await ExchangeService.getPosition(this.bot.symbol);
+      let position = await withRetries(
+        () => ExchangeService.getPosition(this.bot.symbol),
+        {
+          label: "[BBTgCmdHandler] getPosition",
+          retries: 5,
+          minDelayMs: 5000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error, label }) => {
+            console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+          },
+        }
+      );
       if (!position) {
-        const closedPositions = await ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition?.id! });
+        const closedPositions = await withRetries(
+          () => ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition?.id! }),
+          {
+            label: "[BBTgCmdHandler] getPositionsHistory",
+            retries: 5,
+            minDelayMs: 5000,
+            isTransientError,
+            onRetry: ({ attempt, delayMs, error, label }) => {
+              console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+            },
+          }
+        );
         if (closedPositions?.length > 1) position = closedPositions[0];
       }
       details = `

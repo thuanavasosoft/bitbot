@@ -19,7 +19,13 @@ class BBWaitForEntryState implements BBState {
   }
 
   private async _watchForBreakout() {
-    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, async (price) => {
+    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, (price) => {
+      void this._handlePriceUpdate(price);
+    });
+  }
+
+  private async _handlePriceUpdate(price: number) {
+    try {
       // Wait for trigger levels to be calculated
       if (this.bot.longTrigger === null && this.bot.shortTrigger === null) {
         return;
@@ -59,7 +65,10 @@ class BBWaitForEntryState implements BBState {
         await this._openPosition(posDir);
         eventBus.emit(EEventBusEventType.StateChange);
       }
-    });
+    } catch (error) {
+      console.error("[BBWaitForEntryState] Price listener error:", error);
+      TelegramService.queueMsg(`⚠️ Entry price listener error: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async _openPosition(posDir: TPositionSide) {
