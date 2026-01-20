@@ -1,5 +1,6 @@
 import type { IBalanceInfo, ICancelOrderResponse, ICandleInfo, IFeeRate, IGetPositionHistoryParams, IOrder, IPlaceOrderParams, IPlaceOrderResponse, IPosition, ISymbolInfo, ITrade, IWSOrderUpdate, TCandleResolution, TPositionType } from "./exchange-type";
 import BinanceExchange from "./binance-exchange/binance-exchange";
+import KrakenExchange from "./kraken-exchange/kraken-exchange";
 
 
 export interface IExchangeInstance {
@@ -29,7 +30,14 @@ class ExchangeService {
   private static exchangeInstance: IExchangeInstance;
 
   static async configure(apiKey: string, secretKey: string, symbols: string[]) {
-    this.exchangeInstance = new BinanceExchange(apiKey, secretKey, symbols);
+    const adapterRaw = (process.env.EXCHANGE_ADAPTER || "binance").toLowerCase();
+    const adapter = adapterRaw === "1" ? "binance" : adapterRaw === "2" ? "kraken" : adapterRaw;
+
+    if (adapter === "kraken") {
+      this.exchangeInstance = new KrakenExchange(apiKey, secretKey, symbols);
+    } else {
+      this.exchangeInstance = new BinanceExchange(apiKey, secretKey, symbols);
+    }
     await this.exchangeInstance.prepare();
   }
 
