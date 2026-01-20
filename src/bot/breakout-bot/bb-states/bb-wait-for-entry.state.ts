@@ -24,6 +24,14 @@ class BBWaitForEntryState implements BBState {
     });
   }
 
+  rehookPriceListener() {
+    if (this.priceListenerRemover) {
+      this.priceListenerRemover();
+      this.priceListenerRemover = undefined;
+    }
+    this._watchForBreakout();
+  }
+
   private async _handlePriceUpdate(price: number) {
     try {
       // Wait for trigger levels to be calculated

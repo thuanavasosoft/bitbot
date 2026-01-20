@@ -491,6 +491,18 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
       closedPositionId,
     );
 
+    try {
+      const appliedUpdates = await this.bot.applyPendingUpdatesIfAny();
+      if (appliedUpdates.length > 0) {
+        TelegramService.queueMsg(`✅ Applied queued updates: ${appliedUpdates.join(", ")}`);
+      }
+    } catch (error) {
+      console.error("[BBWaitForResolveState] Failed to apply queued config updates:", error);
+      TelegramService.queueMsg(
+        `⚠️ Failed to apply queued updates: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
     eventBus.emit(EEventBusEventType.StateChange);
   }
 

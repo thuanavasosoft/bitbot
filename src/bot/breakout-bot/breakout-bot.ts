@@ -25,6 +25,17 @@ export interface BBTradeMetrics {
   netPnl?: number;
 }
 
+export interface BBConfigUpdate {
+  symbol?: string;
+  signalN?: number;
+  betSize?: number;
+  leverage?: number;
+  trailingAtrLength?: number;
+  trailingHighestLookback?: number;
+  trailingStopMultiplier?: number;
+  trailingStopConfirmTicks?: number;
+}
+
 class BreakoutBot {
   runStartTs: Date = new Date();
 
@@ -89,6 +100,7 @@ class BreakoutBot {
   orderWatcher: BBOrderWatcher;
 
   private botCloseOrderIds: Set<string> = new Set();
+  private pendingConfigUpdates: BBConfigUpdate = {};
 
   startingState: BBStartingState;
   waitForEntryState: BBWaitForEntryState;
@@ -510,6 +522,100 @@ class BreakoutBot {
     this.trailingStopTargets = undefined;
     this.lastTrailingStopUpdateTime = 0;
     this.trailingStopBreachCount = 0;
+  }
+
+  queueConfigUpdates(update: BBConfigUpdate) {
+    this.pendingConfigUpdates = {
+      ...this.pendingConfigUpdates,
+      ...update,
+    };
+  }
+
+  hasPendingConfigUpdates(): boolean {
+    return Object.keys(this.pendingConfigUpdates).length > 0;
+  }
+
+  async applyPendingUpdatesIfAny(): Promise<string[]> {
+    if (!this.hasPendingConfigUpdates()) {
+      return [];
+    }
+
+    const updates = this.pendingConfigUpdates;
+    this.pendingConfigUpdates = {};
+    try {
+      return await this.applyConfigUpdates(updates);
+    } catch (error) {
+      this.pendingConfigUpdates = {
+        ...updates,
+        ...this.pendingConfigUpdates,
+      };
+      throw error;
+    }
+  }
+
+  async applyConfigUpdates(update: BBConfigUpdate): Promise<string[]> {
+    const applied: string[] = [];
+
+    const nextSymbol = update.symbol?.toUpperCase();
+    const symbolChanged = !!nextSymbol && nextSymbol !== this.symbol;
+
+    if (typeof update.signalN === "number") {
+      this.signalParams.N = update.signalN;
+      applied.push("signalParams.N");
+    }
+
+    if (typeof update.betSize === "number") {
+      this.betSize = update.betSize;
+      applied.push("betSize");
+    }
+
+    if (typeof update.trailingAtrLength === "number") {
+      this.trailingAtrLength = update.trailingAtrLength;
+      applied.push("trailingAtrLength");
+    }
+
+    if (typeof update.trailingHighestLookback === "number") {
+      this.trailingHighestLookback = update.trailingHighestLookback;
+      applied.push("trailingHighestLookback");
+    }
+
+    if (typeof update.trailingStopMultiplier === "number") {
+      this.trailingStopMultiplier = update.trailingStopMultiplier;
+      applied.push("trailingStopMultiplier");
+    }
+
+    if (typeof update.trailingStopConfirmTicks === "number") {
+      this.trailingStopConfirmTicks = Math.max(1, Math.floor(update.trailingStopConfirmTicks));
+      applied.push("trailingStopConfirmTicks");
+    }
+
+    if (symbolChanged) {
+      this.symbol = nextSymbol!;
+      this.symbolInfo = undefined;
+      this.pricePrecision = undefined;
+      this.currentSignal = "Kangaroo";
+      this.currentSupport = null;
+      this.currentResistance = null;
+      this.longTrigger = null;
+      this.shortTrigger = null;
+      this.lastSRUpdateTime = 0;
+      applied.push("symbol");
+    }
+
+    if (symbolChanged) {
+      await this.loadSymbolInfo();
+      if (this.currentState === this.waitForEntryState) {
+        this.waitForEntryState.rehookPriceListener();
+      }
+    }
+
+    if (typeof update.leverage === "number") {
+      this.leverage = update.leverage;
+      await ExchangeService.setLeverage(this.symbol, this.leverage);
+      applied.push("leverage");
+    }
+
+    return applied;
   }
 
   isBotGeneratedCloseOrder(clientOrderId?: string | null): boolean {
