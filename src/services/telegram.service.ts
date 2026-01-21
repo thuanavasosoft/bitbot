@@ -71,6 +71,17 @@ class TelegramService {
     this.isProcessing = false;
   }
 
+  static async waitForQueueIdle(timeoutMs = 15000, pollMs = 200): Promise<boolean> {
+    const start = Date.now();
+    while (this.isProcessing || this.messageQueue.length > 0) {
+      if (Date.now() - start >= timeoutMs) {
+        return false;
+      }
+      await new Promise(r => setTimeout(r, pollMs));
+    }
+    return true;
+  }
+
   static async sendImg(img: Buffer, chatId: string): Promise<void> {
     try {
       await this.bot.telegram.sendPhoto(chatId, { source: img });

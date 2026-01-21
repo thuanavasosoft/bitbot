@@ -2,7 +2,7 @@ import fs from 'fs';
 import type { ICandleInfo, TPositionSide } from '@/services/exchange-service/exchange-type';
 import annotationPlugin from 'chartjs-plugin-annotation';
 
-import { CategoryScale, Chart, Legend, LinearScale, LineController, LineElement, PointElement, Title, Tooltip } from 'chart.js';
+import { CategoryScale, Chart, Filler, Legend, LinearScale, LineController, LineElement, PointElement, Title, Tooltip } from 'chart.js';
 import { createCanvas } from 'canvas';
 
 Chart.register(
@@ -11,6 +11,7 @@ Chart.register(
   LineController,
   LineElement,
   PointElement,
+  Filler,
   Legend,
   Title,
   Tooltip,
@@ -59,19 +60,46 @@ export async function generateImageOfCandles(
       },
     }
   } : {};
-  const datasets = [{
-    label: 'Price',
-    data: candles.map((candle) => candle.closePrice),
-    fill: false,
-    borderColor: 'rgb(75, 192, 192)',
-    tension: 0.1
-  }];
+  const highSeries = candles.map((candle) => candle.highPrice);
+  const lowSeries = candles.map((candle) => candle.lowPrice);
+  const closeSeries = candles.map((candle) => candle.closePrice);
+
+  const datasets = [
+    {
+      label: 'High',
+      data: highSeries,
+      fill: false,
+      borderColor: 'rgba(75, 192, 192, 0.5)',
+      borderWidth: 1,
+      tension: 0.1,
+      pointRadius: 0,
+    },
+    {
+      label: 'Low',
+      data: lowSeries,
+      fill: '-1',
+      borderColor: 'rgba(75, 192, 192, 0.5)',
+      backgroundColor: 'rgba(75, 192, 192, 0.15)',
+      borderWidth: 1,
+      tension: 0.1,
+      pointRadius: 0,
+    },
+    {
+      label: 'Close',
+      data: closeSeries,
+      fill: false,
+      borderColor: 'rgb(75, 192, 192)',
+      tension: 0.1,
+      pointRadius: 0,
+    }
+  ];
   if (!!currOpenedPos) datasets.push({
     label: 'Position Avg Price',
-    data: [currOpenedPos?.avgPrice!],
+    data: candles.map(() => currOpenedPos?.avgPrice!),
     fill: false,
     borderColor: avgPriceColor,
-    tension: 0.1
+    tension: 0.1,
+    pointRadius: 0,
   });
 
   const chart = new Chart(
@@ -309,13 +337,39 @@ export async function generateImageOfCandlesWithSupportResistance(
     };
   }
 
-  const datasets = [{
-    label: 'Price',
-    data: candles.map((candle) => candle.closePrice),
-    fill: false,
-    borderColor: 'rgb(75, 192, 192)',
-    tension: 0.1
-  }];
+  const highSeries = candles.map((candle) => candle.highPrice);
+  const lowSeries = candles.map((candle) => candle.lowPrice);
+  const closeSeries = candles.map((candle) => candle.closePrice);
+
+  const datasets = [
+    {
+      label: 'High',
+      data: highSeries,
+      fill: false,
+      borderColor: 'rgba(75, 192, 192, 0.5)',
+      borderWidth: 1,
+      tension: 0.1,
+      pointRadius: 0,
+    },
+    {
+      label: 'Low',
+      data: lowSeries,
+      fill: '-1',
+      borderColor: 'rgba(75, 192, 192, 0.5)',
+      backgroundColor: 'rgba(75, 192, 192, 0.15)',
+      borderWidth: 1,
+      tension: 0.1,
+      pointRadius: 0,
+    },
+    {
+      label: 'Close',
+      data: closeSeries,
+      fill: false,
+      borderColor: 'rgb(75, 192, 192)',
+      tension: 0.1,
+      pointRadius: 0,
+    }
+  ];
 
   const chart = new Chart(
     ctx,
