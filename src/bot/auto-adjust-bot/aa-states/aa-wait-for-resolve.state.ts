@@ -356,6 +356,7 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
         triggerTimestamp: update.updateTime ?? Date.now(),
         fillTimestamp: update.updateTime ?? Date.now(),
         isLiquidation,
+        exitReason: isLiquidation ? "liquidation_exit" : "signal_change",
       });
     } catch (error) {
       console.error("[AAWaitForResolveState] Failed to process external order update:", error);
@@ -384,6 +385,7 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
       triggerTimestamp: triggerTs,
       fillTimestamp,
       isLiquidation: reason === "liquidation_exit",
+      exitReason: reason === "atr_trailing" ? "atr_trailing" : "signal_change",
     });
   }
 

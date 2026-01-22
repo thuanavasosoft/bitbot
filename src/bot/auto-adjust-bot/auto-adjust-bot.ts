@@ -871,9 +871,11 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
       triggerTimestamp?: number;
       fillTimestamp?: number;
       isLiquidation?: boolean;
+      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
     } = {}
   ) {
     const activePosition = options.activePosition ?? this.currActivePosition;
+    const entryFill = this.entryWsPrice;
     const closedPositionId = closedPosition.id;
     const positionSide = activePosition?.side;
     const fillTimestamp = options.fillTimestamp ?? this.resolveWsPrice?.time?.getTime() ?? closedPosition.updateTime ?? Date.now();
@@ -931,6 +933,29 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
       shouldTrackSlippage ? timeDiffMs : undefined,
       closedPositionId,
     );
+
+    const entryTimestampMs =
+      entryFill?.time?.getTime() ?? (Number.isFinite(activePosition?.createTime) ? activePosition!.createTime : null);
+    const entryTimestamp = entryTimestampMs ? new Date(entryTimestampMs).toISOString() : null;
+    const entryFillPrice = entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null);
+    const exitFillPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
+    const exitReason =
+      options.exitReason ?? (options.isLiquidation ? "liquidation_exit" : "signal_change");
+
+    this.pnlHistory.push({
+      timestamp: new Date(fillTimestamp).toISOString(),
+      timestampMs: fillTimestamp,
+      side: (positionSide ?? closedPosition.side) as "long" | "short",
+      totalPnL: this.totalActualCalculatedProfit,
+      entryTimestamp,
+      entryTimestampMs,
+      entryFillPrice,
+      exitTimestamp: new Date(fillTimestamp).toISOString(),
+      exitTimestampMs: fillTimestamp,
+      exitFillPrice,
+      tradePnL: Number.isFinite(closedPosition.realizedPnl) ? closedPosition.realizedPnl : 0,
+      exitReason,
+    });
 
     eventBus.emit(EEventBusEventType.StateChange);
   }
