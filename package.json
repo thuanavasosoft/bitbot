@@ -9,7 +9,8 @@
     "start": "npm run build && npm run start:prod",
     "build": "rm -rf dist && npx tsc && npx tsc-alias -p tsconfig.json && node fix-imports.js",
     "start:prod": "node dist/index.js",
-    "drizzle-db-pull": "drizzle-kit introspect"
+    "drizzle-db-pull": "drizzle-kit introspect",
+    "test-kraken": "npm run build && node dist/src/scripts/test-kraken.js"
   },
   "repository": {
     "type": "git",

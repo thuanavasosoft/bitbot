@@ -124,6 +124,12 @@ class KrakenExchange implements IExchangeInstance {
 
   async getBalances(): Promise<IBalanceInfo[]> {
     const data = await this._privateRequest("GET", "/accounts");
+
+    if (data?.result === "error") {
+      const detail = data?.error ?? data?.message ?? "unknown";
+      throw new Error(`[KrakenExchange] getBalances failed: ${detail}`);
+    }
+
     const accounts = data?.accounts ?? data?.result?.accounts ?? {};
     const balanceMap = new Map<string, IBalanceInfo>();
 
@@ -138,12 +144,50 @@ class KrakenExchange implements IExchangeInstance {
       }
     };
 
+    if (Array.isArray(accounts)) {
+      accounts.forEach((account: any) => {
+        const currency =
+          account?.currency ??
+          account?.asset ??
+          account?.collateralCurrency ??
+          account?.unit ??
+          account?.symbol ??
+          account?.account;
+        if (!currency) return;
+        const available = Number(account?.available ?? account?.free ?? account?.quantity ?? account?.balance ?? 0);
+        const total = Number(account?.balance ?? account?.equity ?? account?.quantity ?? available ?? 0);
+        if (!Number.isFinite(available) && !Number.isFinite(total)) return;
+        const frozen = Number.isFinite(total) && Number.isFinite(available) ? Math.max(total - available, 0) : 0;
+        upsertBalance(currency, Number.isFinite(available) ? available : total, frozen);
+      });
+      return Array.from(balanceMap.values());
+    }
+
     Object.values(accounts).forEach((account: any) => {
       if (account?.balances && typeof account.balances === "object") {
         Object.entries(account.balances).forEach(([currency, amount]) => {
           const parsed = Number(amount);
           if (!Number.isFinite(parsed)) return;
           upsertBalance(currency, parsed, 0);
+        });
+      }
+
+      if (
+        account?.currencies &&
+        typeof account.currencies === "object" &&
+        !Array.isArray(account.currencies)
+      ) {
+        Object.entries(account.currencies as Record<string, any>).forEach(([currency, item]) => {
+          if (!currency) return;
+          if (currency.toUpperCase() !== "USDT") return;
+          if (typeof item === "number") {
+            if (!Number.isFinite(item)) return;
+            upsertBalance(currency, item, 0);
+            return;
+          }
+          const available = Number(item?.available ?? item?.free ?? item?.quantity ?? item?.balance ?? 0);
+          if (!Number.isFinite(available)) return;
+          upsertBalance(currency, available, 0);
         });
       }
 
@@ -1034,21 +1078,38 @@ class KrakenExchange implements IExchangeInstance {
       headers["Content-Type"] = "application/x-www-form-urlencoded";
     }
 
+    console.log("---- Request: -----");
+    console.log("headers", headers);
+    console.log("url", url.toString());
+    console.log("postData", postData);
+    console.log("method", method);
+
     const response = await fetch(url.toString(), {
       method,
       headers,
       body: method === "GET" ? undefined : postData,
     });
 
+    const rawText = await response.text();
+    console.log("---- Raw Response: -----");
+    console.log(rawText);
+
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`[KrakenExchange] Private request failed (${response.status}): ${text}`);
+      throw new Error(`[KrakenExchange] Private request failed (${response.status}): ${rawText}`);
     }
-    return response.json() as Promise<Record<string, any>>;
+
+    try {
+      return JSON.parse(rawText) as Record<string, any>;
+    } catch (error) {
+      throw new Error(
+        `[KrakenExchange] Failed to parse response JSON (${response.status}): ${(error as Error).message}`
+      );
+    }
   }
 
   private _signRequest(postData: string, nonce: string, endpointPath: string): string {
-    const sha256 = crypto.createHash("sha256").update(postData + nonce + endpointPath).digest();
+    const normalizedPath = endpointPath.replace("/derivatives", "");
+    const sha256 = crypto.createHash("sha256").update(postData + nonce + normalizedPath).digest();
     const secret = Buffer.from(this._apiSecret, "base64");
     return crypto.createHmac("sha512", secret).update(sha256).digest("base64");
   }
