@@ -86,18 +86,6 @@ class AAWaitForResolveState implements AAState {
         support: bufferedSupport ? bufferedSupport.toNumber() : null,
       };
 
-      if (!shouldExit) {
-        if (position.side === "long" && bufferedSupport && priceBn.lte(bufferedSupport)) {
-          shouldExit = true;
-          exitReason = "support_resistance";
-          TelegramService.queueMsg(`📉 Long exit trigger: Price ${price} <= Buffered Support ${bufferedSupport.toFixed(4)}`);
-        } else if (position.side === "short" && bufferedResistance && priceBn.gte(bufferedResistance)) {
-          shouldExit = true;
-          exitReason = "support_resistance";
-          TelegramService.queueMsg(`📈 Short exit trigger: Price ${price} >= Buffered Resistance ${bufferedResistance.toFixed(4)}`);
-        }
-      }
-
       if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
         const { bufferedLevel, rawLevel } = this.bot.trailingStopTargets;
         if (position.side === "long") {
