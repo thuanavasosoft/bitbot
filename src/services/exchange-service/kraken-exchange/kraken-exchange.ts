@@ -760,10 +760,18 @@ class KrakenExchange implements IExchangeInstance {
       const instruments: KrakenInstrument[] = data?.instruments ?? data?.result?.instruments ?? [];
       instruments.forEach((instrument) => {
         if (!instrument?.symbol) return;
-        const normalized = this._normalizeInstrumentPair(instrument.symbol);
-        this._instrumentBySymbol.set(instrument.symbol, instrument);
+        let symbol = instrument.symbol;
+        if (instrument.type === "flexible_futures" && !symbol.startsWith("PF_")) {
+          symbol = `PF_${symbol}`;
+        }
+        const normalized = this._normalizeInstrumentPair(symbol);
+        const mappedInstrument = symbol === instrument.symbol ? instrument : { ...instrument, symbol };
+        this._instrumentBySymbol.set(symbol, mappedInstrument);
+        if (symbol !== instrument.symbol) {
+          this._instrumentBySymbol.set(instrument.symbol, mappedInstrument);
+        }
         if (normalized) {
-          this._instrumentByNormalized.set(normalized, instrument);
+          this._instrumentByNormalized.set(normalized, mappedInstrument);
         }
       });
     });

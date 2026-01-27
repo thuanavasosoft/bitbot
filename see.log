@@ -1,0 +1,182 @@
+
+> bitbot@1.0.0 test-kraken
+> npm run build && node dist/src/scripts/test-kraken.js
+
+
+> bitbot@1.0.0 build
+> rm -rf dist && npx tsc && npx tsc-alias -p tsconfig.json && node fix-imports.js
+
+Fixed imports in: /root/bitbot/dist/db/drizzle/schema.js
+Fixed imports in: /root/bitbot/dist/index.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-states/aa-live-starting.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-states/aa-optimize.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-states/aa-simulate.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-states/aa-starting.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-states/aa-wait-for-entry.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-states/aa-wait-for-resolve.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-trend-watcher.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/aa-util.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/auto-adjust-bot.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/breakout-helpers.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/candle-utils.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/getCandlesForBacktest.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/optimizeTrailingAtrMultiplier2d.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/runBacktest.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/runOptimization.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/sharpe.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/types.js
+Fixed imports in: /root/bitbot/dist/src/bot/auto-adjust-bot/warmup.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-order-watcher.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-retry.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-states/bb-starting.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-states/bb-wait-for-entry.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-states/bb-wait-for-resolve.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-tg-cmd-handler.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-trend-watcher.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/bb-util.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/breakout-bot.js
+Fixed imports in: /root/bitbot/dist/src/bot/breakout-bot/breakout-helpers.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/bb-states/bb-starting.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/bb-states/bb-wait-for-bet-signal.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/bb-states/bb-wait-for-resolve-signal.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/bb-tg-cmd-handler.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/bb-trend-watcher.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/bb-util.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/bb-ws-signaling.js
+Fixed imports in: /root/bitbot/dist/src/bot/budgeting-bot/budgeting-bot.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/cb-states/cb-starting.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/cb-states/cb-wait-for-entry.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/cb-states/cb-wait-for-resolve.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/cb-tg-cmd-handler.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/cb-trend-watcher.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/cb-util.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/cb-ws-signaling.js
+Fixed imports in: /root/bitbot/dist/src/bot/combo-bot/combo-bot.js
+Fixed imports in: /root/bitbot/dist/src/bot/test-follow-multiple-exits-bot/test-follow-multiple-exits-bot.js
+Fixed imports in: /root/bitbot/dist/src/bot/test-follow-multiple-exits-bot/tfmeb-states/tfmeb-starting.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/test-follow-multiple-exits-bot/tfmeb-states/tfmeb-wait-for-bet-signal.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/test-follow-multiple-exits-bot/tfmeb-states/tfmeb-wait-for-resolve-signal.state.js
+Fixed imports in: /root/bitbot/dist/src/bot/test-follow-multiple-exits-bot/tfmeb-tg-cmd-handler.js
+Fixed imports in: /root/bitbot/dist/src/bot/test-follow-multiple-exits-bot/tfmeb-trend-watcher.js
+Fixed imports in: /root/bitbot/dist/src/bot/test-follow-multiple-exits-bot/tfmeb-util.js
+Fixed imports in: /root/bitbot/dist/src/scripts/test-kraken.js
+Fixed imports in: /root/bitbot/dist/src/services/database.service.js
+Fixed imports in: /root/bitbot/dist/src/services/exchange-service/binance-exchange/binance-exchange.js
+Fixed imports in: /root/bitbot/dist/src/services/exchange-service/exchange-service.js
+Fixed imports in: /root/bitbot/dist/src/services/exchange-service/exchange-type.js
+Fixed imports in: /root/bitbot/dist/src/services/exchange-service/kraken-exchange/kraken-exchange.js
+Fixed imports in: /root/bitbot/dist/src/services/grok-ai.service.js
+Fixed imports in: /root/bitbot/dist/src/services/telegram.service.js
+Fixed imports in: /root/bitbot/dist/src/utils/event-bus.util.js
+Fixed imports in: /root/bitbot/dist/src/utils/image-generator.util.js
+Fixed imports in: /root/bitbot/dist/src/utils/maths.util.js
+Fixed imports in: /root/bitbot/dist/src/utils/strings.util.js
+Fixed imports in: /root/bitbot/dist/src/utils/types.util.js
+Import fixing completed!
+[dotenv@17.2.3] injecting env (4) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+[2026-01-26T13:30:31.200Z] Starting Kraken Futures API test runner (LIVE account)
+[2026-01-26T13:30:31.200Z] Env summary (Futures only)
+{
+  "EXCHANGE_ADAPTER": "kraken",
+  "API_KEY": "2bS***5R4",
+  "API_SECRET": "7m9***hF7",
+  "SYMBOLS": [
+    "PF_DOGEUSD"
+  ]
+}
+[2026-01-26T13:30:31.200Z] Kraken Futures endpoints
+{
+  "restBase": "https://futures.kraken.com",
+  "restPrefix": "/derivatives/api/v3",
+  "wsUrl": "wss://futures.kraken.com/ws/v1"
+}
+[2026-01-26T13:30:31.200Z] Configuring ExchangeService for symbol: PF_DOGEUSD
+[2026-01-26T13:30:31.695Z] ExchangeService configured
+---- Request: -----
+headers {
+  APIKey: '2bS6t7yAlrG7dkNdlA2c+q6CiTF0zWowSVMwh78w8k79/06nKMpe85R4',
+  Authent: 'y4lvdnx52Xz+DZvsNGDvY0eX7NYyqp58JJAdw4PNpjo7oM4oQL6C9V+JlxovLVC0972rT0sixa8im+7x6e1UaA==',
+  Nonce: '1769434231696'
+}
+url https://futures.kraken.com/derivatives/api/v3/accounts
+postData 
+method GET
+---- Raw Response: -----
+{"result":"success","accounts":{"fi_xbtusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"xbt":0.0},"currency":"xbt","type":"marginAccount"},"cash":{"balances":{"chf":0,"tao":0,"paxg":0,"usdg":0,"shib":0,"doge":0,"usdt":0,"near":0,"ondo":0,"pepe":0,"aud":0,"stx":0,"xrp":0,"spx":0,"trx":0,"rune":0,"eur":0,"bch":0,"sui":0,"cad":0,"dot":0,"xbt":0,"arb":0,"avax":0,"wif":0,"sei":0,"ena":0,"ltc":0,"usdc":0,"kas":0,"eurc":0,"inj":0,"crv":0,"grt":0,"render":0,"algo":0,"atom":0,"uni":0,"usd credit":0,"aave":0,"gbp":0,"xlm":0,"link":0,"xtz":0,"mana":0,"ksm":0,"usd":0,"fee":0,"fil":0,"mina":0,"tia":0,"dai":0,"sol":0,"fet":0,"eth":0,"fartcoin":0,"ada":0},"type":"cashAccount"},"fi_xrpusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"xrp":0.0},"currency":"xrp","type":"marginAccount"},"fi_ethusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"eth":0.0},"currency":"eth","type":"marginAccount"},"fi_ltcusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"ltc":0.0},"currency":"ltc","type":"marginAccount"},"fi_bchusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"bch":0.0},"currency":"bch","type":"marginAccount"},"flex":{"currencies":{"USDT":{"quantity":991.0892,"value":989.8404,"collateral":984.8912,"available":990.9512583706838}},"initialMargin":0,"initialMarginWithOrders":0,"maintenanceMargin":0,"balanceValue":989.8404,"portfolioValue":989.8404,"collateralValue":984.8912,"pnl":0,"unrealizedFunding":0,"totalUnrealized":0,"totalUnrealizedAsMargin":0,"availableMargin":984.8912,"marginEquity":984.8912,"type":"multiCollateralMarginAccount"},"fi_solusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"sol":0.0},"currency":"sol","type":"marginAccount"},"fi_linkusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"link":0.0},"currency":"link","type":"marginAccount"},"fi_adausd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"ada":0.0},"currency":"ada","type":"marginAccount"},"fi_dogeusd":{"auxiliary":{"usd":0,"pv":0.0,"pnl":0.0,"af":0.0,"funding":0.0},"marginRequirements":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"triggerEstimates":{"im":0.0,"mm":0.0,"lt":0.0,"tt":0.0},"balances":{"doge":0.0},"currency":"doge","type":"marginAccount"}},"serverTime":"2026-01-26T13:30:31.806Z"}
+[2026-01-26T13:30:31.890Z] Futures balances
+{
+  "coin": "USDT",
+  "free": 990.9512583706838,
+  "frozen": 0
+}
+---- Request: -----
+headers {
+  APIKey: '2bS6t7yAlrG7dkNdlA2c+q6CiTF0zWowSVMwh78w8k79/06nKMpe85R4',
+  Authent: 'e6a0Q2/nkB9+uBJhTUGmMGSO+gs+ecAF+SYCsno61Wd9y1MDuyA7JWNJQV8lYCWLemcqsuNFbkXOSwH+EC4Vbw==',
+  Nonce: '1769434231890',
+  'Content-Type': 'application/x-www-form-urlencoded'
+}
+url https://futures.kraken.com/derivatives/api/v3/leveragepreferences
+postData symbol=PF_DOGEUSD&maxLeverage=10
+method PUT
+---- Raw Response: -----
+{"result":"success","serverTime":"2026-01-26T13:30:31.994Z"}
+[2026-01-26T13:30:32.076Z] Set leverage
+{
+  "symbol": "PF_DOGEUSD",
+  "leverage": 10,
+  "setLeverage": true
+}
+[2026-01-26T13:30:32.078Z] Symbol info
+{
+  "pricePrecision": 6,
+  "basePrecision": 0,
+  "quotePrecision": 6,
+  "minNotionalValue": 0,
+  "maxMktOrderQty": 200000000,
+  "maxLimitOrderQty": 200000000
+}
+[2026-01-26T13:30:32.704Z] WS price update
+{
+  "symbol": "PF_DOGEUSD",
+  "price": 0.12171448134,
+  "timestamp": 1769434232510
+}
+[2026-01-26T13:30:32.782Z] Current mark price
+{
+  "symbol": "PF_DOGEUSD",
+  "markPrice": 0.12171448134
+}
+---- Request: -----
+headers {
+  APIKey: '2bS6t7yAlrG7dkNdlA2c+q6CiTF0zWowSVMwh78w8k79/06nKMpe85R4',
+  Authent: 'UKbtIO7ZvnYMUudzHM1P86ZDB7Kt9aUl7zp4zxT2tnLG3epjpHE+hpJuagU4H8u13H/Md0ltcu2PGyptl9WAkw==',
+  Nonce: '1769434232783'
+}
+url https://futures.kraken.com/derivatives/api/v3/openpositions
+postData 
+method GET
+---- Raw Response: -----
+{"result":"success","openPositions":[],"serverTime":"2026-01-26T13:30:32.878Z"}
+[2026-01-26T13:30:32.960Z] Opened positions
+[]
+[2026-01-26T13:30:32.960Z] Preparing to place a test order (live account)
+[2026-01-26T13:30:32.960Z] Order params
+{
+  "symbol": "PF_DOGEUSD",
+  "clientOrderId": "kb-j3luocpuxva",
+  "orderType": "limit",
+  "orderSide": "buy",
+  "baseAmt": 1,
+  "orderPrice": 0.120497
+}
+---- Request: -----
+headers {
+  APIKey: '2bS6t7yAlrG7dkNdlA2c+q6CiTF0zWowSVMwh78w8k79/06nKMpe85R4',
+  Authent: 'LIanQITDXUZys2IuJTKHQlZBaOrDfbr4s51uL84vt7LjKXpDR94xBfxz5ZkzBhnh4Z4Z6hw8YUN5ldjU6R1UiQ==',
+  Nonce: '1769434232960',
+  'Content-Type': 'application/x-www-form-urlencoded'
+}
+url https://futures.kraken.com/derivatives/api/v3/sendorder
+postData symbol=PF_DOGEUSD&side=buy&orderType=lmt&cliOrdId=kb-j3luocpuxva&size=1&limitPrice=0.120497
+method POST
