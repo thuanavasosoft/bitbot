@@ -6,6 +6,7 @@ import ExchangeService from '@/services/exchange-service/exchange-service';
 import ComboBot from '@/bot/combo-bot/combo-bot';
 import TestFollowMultipleExits from '@/bot/test-follow-multiple-exits-bot/test-follow-multiple-exits-bot';
 import BreakoutBot from '@/bot/breakout-bot/breakout-bot';
+import AutoAdjustBot from '@/bot/auto-adjust-bot/auto-adjust-bot';
 
 async function runProgram() {
   try {
@@ -39,6 +40,9 @@ async function runProgram() {
       await bot.startMakeMoney();
     } else if (botMode === "breakout_bot") {
       const bot = new BreakoutBot();
+      await bot.startMakeMoney();
+    } else if (botMode === "auto_adjust_bot") {
+      const bot = new AutoAdjustBot();
       await bot.startMakeMoney();
     }
 

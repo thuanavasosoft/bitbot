@@ -101,6 +101,8 @@ class BreakoutBot {
 
   private botCloseOrderIds: Set<string> = new Set();
   private pendingConfigUpdates: BBConfigUpdate = {};
+  lastOpenClientOrderId?: string;
+  lastCloseClientOrderId?: string;
 
   startingState: BBStartingState;
   waitForEntryState: BBWaitForEntryState;
@@ -209,6 +211,7 @@ class BreakoutBot {
 
     const orderSide = posDir === "long" ? "buy" : "sell";
     const clientOrderId = await ExchangeService.generateClientOrderId();
+    this.lastOpenClientOrderId = clientOrderId;
     const orderHandle = this.orderWatcher.preRegister(clientOrderId);
     try {
       console.log(`[BreakoutBot] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.symbol}`);
@@ -305,6 +308,7 @@ class BreakoutBot {
 
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";
     const clientOrderId = await ExchangeService.generateClientOrderId();
+    this.lastCloseClientOrderId = clientOrderId;
     const orderHandle = this.orderWatcher.preRegister(clientOrderId);
     this._trackCloseOrderId(clientOrderId);
     try {
