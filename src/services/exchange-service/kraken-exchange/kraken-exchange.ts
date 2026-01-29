@@ -25,6 +25,66 @@ import type { IExchangeInstance } from "../exchange-service";
 
 type TPriceListener = (price: number) => void;
 type TPriceTimestampListener = (price: number, timestamp: number) => void;
+interface IWSFill {
+  instrument: "PF_DOGEUSD",
+  time: 1769591852332,
+  price: 0.125484,
+  seq: 13,
+  buy: false,
+  qty: 10,
+  remaining_order_qty: 0,
+  order_id: "a0f18560-258a-4976-b449-6fcbc9a3cbcf",
+  cli_ord_id: "kb-wpeomt5gx6f",
+  fill_id: "f94004b2-783c-4dbf-a060-b85a3a083f2d",
+  fill_type: "taker",
+  fee_paid: 0.00031371,
+  fee_currency: "USD",
+  taker_order_type: "market",
+  order_type: "market",
+}
+type TFeeScheduleName =
+  | "Consumer MTF Linear Fees"
+  | "MTF Linear Rebate Fees"
+  | "Consumer Linear Fees"
+  | "Linear Multi-Collateral Rebate Fees"
+  | "Inverse Single-Collateral Rebate Fees";
+
+interface IFeeSchedule {
+  uid: string;
+  name: TFeeScheduleName,
+  tiers: {
+    makerFee: number,
+    takerFee: number,
+    usdVolume: number,
+  }[]
+}
+
+interface IFill {
+  fill_id: string,
+  symbol: string,
+  side: "sell" | "buy",
+  order_id: string,
+  cliOrdId: string,
+  size: number,
+  price: number,
+  fillTime: string,
+  fillType: "taker" | "maker",
+}
+
+interface IOpenOrder {
+  order_id: string,
+  cliOrdId: string,
+  symbol: string,
+  side: "buy" | "sell",
+  orderType: "lmt",
+  limitPrice: number,
+  unfilledSize: number,
+  receivedTime: string,
+  status: string,
+  filledSize: number,
+  lastUpdateTime: string,
+  reduceOnly: boolean,
+}
 
 type KrakenInstrument = {
   symbol: string;
@@ -116,6 +176,9 @@ class KrakenExchange implements IExchangeInstance {
     await Promise.all(
       this._symbols.map(async (symbol) => {
         const instrument = await this._resolveInstrument(symbol);
+        if (!instrument) {
+          throw new Error(`[KrakenExchange] Unable to map symbol ${symbol} to Kraken instrument please check if the symbol is supported`);
+        }
         this._instrumentSymbolToOriginal.set(instrument.symbol, symbol);
         return this._subscribeTicker(symbol);
       })
@@ -213,13 +276,10 @@ class KrakenExchange implements IExchangeInstance {
     const from = Math.floor(startDate.getTime() / 1000);
     const to = Math.floor(endDate.getTime() / 1000);
 
-    const response = await this._publicRequest("GET", "/charts/ohlc", {
-      tick_type: "mark",
-      symbol: instrument.symbol,
-      resolution: resolutionValue,
+    const response = await this._publicRequest("GET", `/charts/v1/mark/${instrument.symbol}/${resolutionValue}`, {
       from,
       to,
-    });
+    }, "/api");
 
     const candles = response?.candles ?? response?.result?.candles ?? [];
 
@@ -267,15 +327,21 @@ class KrakenExchange implements IExchangeInstance {
   }
 
   async getPosition(symbol: string): Promise<IPosition | undefined> {
+    interface IOpenPosition {
+      "side": "long" | "short",
+      "symbol": string,
+      "price": number,
+      "fillTime": string,
+      "size": number,
+      "unrealizedFunding": number,
+      "pnlCurrency": string,
+      "maxFixedLeverage": number,
+    };
     const instrument = await this._resolveInstrument(symbol);
-    const data = await this._privateRequest("GET", "/openpositions", {
-      symbol: instrument.symbol,
-    });
-    const positions = data?.openPositions ?? data?.positions ?? data?.result?.openPositions ?? [];
-    const position = positions.find((pos: any) => {
-      const size = Math.abs(Number(pos.size ?? pos.qty ?? pos.positionSize ?? 0));
-      return size > 0;
-    });
+    const data = await this._privateRequest("GET",
+      "/openpositions");
+    const positions: IOpenPosition[] = data?.openPositions ?? data?.positions ?? data?.result?.openPositions ?? [];
+    const position = positions.find((pos) => pos.symbol === instrument.symbol);
 
     if (!position) return undefined;
 
@@ -296,15 +362,23 @@ class KrakenExchange implements IExchangeInstance {
   }
 
   async getPositionsHistory(params: IGetPositionHistoryParams): Promise<IPosition[]> {
-    const { positionId } = params;
+    const endpoint = "/history/positions";
 
-    if (positionId) {
-      const cached = this._recentClosedPositions.get(positionId);
-      if (cached) return [cached];
-      return [];
-    }
+    const response = await this._privateRequest("GET", endpoint);
+    const positions = response?.positions ?? response?.result?.positions ?? [];
+    console.log("positions: ", positions);
+    return []
 
-    return Array.from(this._recentClosedPositions.values()).sort((a, b) => b.updateTime - a.updateTime);
+
+    // const { positionId } = params;
+
+    // if (positionId) {
+    //   const cached = this._recentClosedPositions.get(positionId);
+    //   if (cached) return [cached];
+    //   return [];
+    // }
+
+    // return Array.from(this._recentClosedPositions.values()).sort((a, b) => b.updateTime - a.updateTime);
   }
 
   async getMarkPrice(symbol: string): Promise<number> {
@@ -337,10 +411,17 @@ class KrakenExchange implements IExchangeInstance {
   }
 
   async getFeeRate(symbol: string): Promise<IFeeRate> {
+
+    const data = await this._privateRequest("GET", "/feeschedules") as { result: string, feeSchedules: IFeeSchedule[] };
+    console.log("data.feeSchedules: ", data.feeSchedules);
+
+    // We consumer MTF Linear Fees, because we are trading on Linear Futures
+    const feeSchedule = data.feeSchedules?.find((schedule) => schedule.name === "Consumer MTF Linear Fees")?.tiers[0];
+
     return {
       symbol,
-      takerFeeRate: "0",
-      makerFeeRate: "0",
+      takerFeeRate: feeSchedule?.takerFee.toString() ?? "0",
+      makerFeeRate: feeSchedule?.makerFee.toString() ?? "0",
     };
   }
 
@@ -380,10 +461,12 @@ class KrakenExchange implements IExchangeInstance {
   async getActiveOrders(symbol: string): Promise<IOrder[]> {
     const instrument = await this._resolveInstrument(symbol);
     const response = await this._privateRequest("GET", "/openorders");
-    const orders = response?.openOrders ?? response?.result?.openOrders ?? [];
-    return orders
-      .filter((order: any) => order.symbol === instrument.symbol)
-      .map((order: any) => this._mapOrder(order, symbol));
+
+    const orders: IOpenOrder[] = response?.openOrders ?? response?.result?.openOrders ?? [];
+
+    let filteredOrders = orders.filter((order) => order.symbol === instrument.symbol);
+
+    return filteredOrders.map((order) => this._mapOrder(order, symbol));
   }
 
   async getTradeList(symbol: string, clientOrderId: string): Promise<ITrade[]> {
@@ -405,15 +488,39 @@ class KrakenExchange implements IExchangeInstance {
     const response = await this._privateRequest("POST", "/orders/status", {
       cliOrdIds: clientOrderId,
     });
-    const orders = response?.orders ?? response?.result?.orders ?? [];
-    const match = orders.find((order: any) => {
-      const payload = order.order ?? order;
-      const cliOrdId = payload.cliOrdId ?? payload.cli_ord_id ?? payload.clientOrderId;
-      return cliOrdId === clientOrderId;
-    });
-    if (!match) return undefined;
-    const payload = match.order ?? match;
-    return this._mapOrder(payload, symbol, match.status ?? payload.status);
+    let orders: IOpenOrder[] = response?.orders ?? response?.result?.orders ?? [];
+    const match = orders.find((order) => order.cliOrdId === clientOrderId);
+
+    if (!!match) return this._mapOrder(match, symbol, match.status);;
+
+    const fillsResponse = await this._privateRequest("GET", "/fills");
+    const fills: IFill[] = fillsResponse?.fills ?? fillsResponse?.result?.fills ?? [];
+    const fill = fills.find((fill) => fill.cliOrdId === clientOrderId);
+
+    // If fill is found, and order no longer exists in the active orders response, then it's executed
+    if (!!fill) return this._mapFillToOrder(fill);
+
+    return undefined;
+  }
+
+  private _mapFillToOrder(fill: IFill): IOrder {
+    return {
+      createdTs: new Date(fill.fillTime).getTime(),
+      id: fill.fill_id,
+      symbol: fill.symbol,
+      clientOrderId: fill.cliOrdId,
+      status: "filled",
+      type: "market",
+      side: fill.side,
+      avgPrice: fill.price,
+      orderQuantity: fill.size,
+      execQty: fill.size,
+      execValue: fill.price * fill.size,
+      fee: {
+        currency: "USD",
+        amt: 0,
+      },
+    };
   }
 
   async cancelOrder(symbol: string, clientOrderId: string): Promise<ICancelOrderResponse> {
@@ -525,6 +632,7 @@ class KrakenExchange implements IExchangeInstance {
   }
 
   private async _subscribeTicker(symbol: string): Promise<void> {
+    console.log("[KRAKEN] subscribeTicker: ", symbol);
     if (this._subscribedSymbols[symbol]) return;
     this._subscribedSymbols[symbol] = true;
     await this._ensureInstrumentCache();
@@ -616,25 +724,38 @@ class KrakenExchange implements IExchangeInstance {
     if (feed === "open_orders") {
       const orders = message.orders || message.order || message.data || [];
       const updates = Array.isArray(orders) ? orders : [orders];
-      updates.forEach((order: any) => this._handleOrderUpdate(order));
+      updates.forEach(async (order: any) => await this._handleOrderUpdate(order));
       return;
     }
 
     if (feed === "fills") {
       const fills = message.fills || message.fill || message.data || [];
       const fillList = Array.isArray(fills) ? fills : [fills];
-      fillList.forEach((fill: any) => this._handleFillUpdate(fill));
+      fillList.forEach(async (fill: any) => await this._handleFillUpdate(fill));
       return;
     }
   }
 
-  private _handleFillUpdate(fill: any) {
-    const orderId = fill.order_id ?? fill.orderId ?? fill.order_id ?? fill.orderId;
+  private async _handleFillUpdate(fill: IWSFill) {
+    console.log("fill: ", fill);
+    const orderId = fill.order_id;
+    const clientOrderId = fill.cli_ord_id;
+    const symbol = this._normalizeInstrumentPair(fill.instrument);
     if (!orderId) return;
-    const price = Number(fill.price ?? fill.execPrice ?? 0);
-    const size = Number(fill.size ?? fill.qty ?? 0);
-    const timestamp = new Date(fill.fillTime ?? fill.timestamp ?? Date.now()).getTime();
+    const price = Number(fill.price);
+    const size = Number(fill.qty);
+    const timestamp = new Date(fill.time).getTime();
     if (!Number.isFinite(price) || !Number.isFinite(size)) return;
+
+    if (!!Object.values(this._orderListenerCallbacks)) {
+      const o = await this.getOrderDetail(symbol!, clientOrderId);
+      if (o?.status === "filled") this._trackedClientOrderIds.delete(clientOrderId);
+      Object.values(this._orderListenerCallbacks).forEach((callback) => callback({
+        orderId: orderId,
+        clientOrderId: clientOrderId,
+        orderStatus: o?.status ?? "unknown",
+      }));
+    }
 
     const existing = this._orderFillsByOrderId.get(orderId);
     if (!existing) {
@@ -650,19 +771,23 @@ class KrakenExchange implements IExchangeInstance {
     });
   }
 
-  private _handleOrderUpdate(order: any, statusOverride?: string) {
+  private async _handleOrderUpdate(order: any, statusOverride?: string) {
     const clientOrderId = order.cliOrdId ?? order.cli_ord_id ?? order.clientOrderId;
     if (!clientOrderId) return;
+    const symbol = order.symbol ?? order.product_id ?? order.productId ?? order.instrument;
 
     const orderId = order.order_id ?? order.orderId ?? clientOrderId;
     const status = statusOverride ?? order.status ?? order.orderStatus ?? "";
     const reason = order.reason ?? order.updateReason ?? "";
     const isCancel = Boolean(order.is_cancel ?? order.isCancel ?? false);
 
-    const mappedStatus = this._mapOrderStatus(status, reason, isCancel);
-    const symbol = order.symbol ?? order.product_id ?? order.productId ?? order.instrument;
+    let mappedStatus = this._mapOrderStatus(status, reason, isCancel);
+    if (mappedStatus === "unknown") {
+      const o = await this.getOrderDetail(symbol, clientOrderId);
+      mappedStatus = o?.status ?? "unknown";
+    }
     const originalSymbol = symbol ? this._toOriginalSymbol(symbol) : undefined;
-    const side = (order.side ?? order.direction ?? "").toLowerCase() as TOrderSide;
+    const side = (order.side ?? (order.direction === 1 ? "sell" : order.direction === 0 ? "buy" : ""))?.toLowerCase() ?? "" as TOrderSide;
 
     const fillMeta = this._orderFillsByOrderId.get(orderId);
     const executionPrice = Number(order.avgPrice ?? order.price ?? order.limitPrice ?? fillMeta?.avgPrice ?? 0);
@@ -759,7 +884,7 @@ class KrakenExchange implements IExchangeInstance {
     this._exchangeInfoPromise = this._publicRequest("GET", "/instruments").then((data) => {
       const instruments: KrakenInstrument[] = data?.instruments ?? data?.result?.instruments ?? [];
       instruments.forEach((instrument) => {
-        if (!instrument?.symbol) return;
+        if (!instrument?.symbol || instrument.symbol.startsWith("PI_") || instrument.type !== "flexible_futures") return;
         let symbol = instrument.symbol;
         if (instrument.type === "flexible_futures" && !symbol.startsWith("PF_")) {
           symbol = `PF_${symbol}`;
@@ -811,7 +936,7 @@ class KrakenExchange implements IExchangeInstance {
     const maintenanceMargin = Number(position.maintenanceMargin ?? 0);
     const leverage = initialMargin ? Math.abs(notional / initialMargin) : Number(position.leverage ?? 0);
     const marginMode: TPositionType = (position.marginType ?? position.marginMode ?? "cross").toLowerCase() === "isolated" ? "isolated" : "cross";
-    const avgPrice = Number(position.entryPrice ?? position.avgPrice ?? position.avgEntryPrice ?? 0);
+    const avgPrice = Number(position.entryPrice ?? position.avgPrice ?? position.avgEntryPrice ?? position.price ?? 0);
     const liquidationPrice = Number(position.liquidationThreshold ?? position.liquidationPrice ?? 0);
     const createTime = new Date(position.openTime ?? position.openTimestamp ?? position.timestamp ?? Date.now()).getTime();
     const updateTime = new Date(position.updateTime ?? position.lastUpdateTime ?? Date.now()).getTime();
@@ -830,7 +955,7 @@ class KrakenExchange implements IExchangeInstance {
       side,
       notional,
       leverage,
-      unrealizedPnl: Number(position.unrealizedPnl ?? position.pnl ?? 0),
+      unrealizedPnl: Number(position.unrealizedPnl ?? position.pnl ?? position.unrealizedFunding ?? 0),
       realizedPnl: Number(position.realizedPnl ?? 0),
       avgPrice,
       closePrice: undefined,
@@ -883,8 +1008,8 @@ class KrakenExchange implements IExchangeInstance {
       status: this._mapOrderStatus(statusOverride ?? order.status ?? ""),
       type: (order.orderType ?? order.type ?? "lmt").toLowerCase() === "mkt" ? "market" : "limit",
       side: (order.side ?? order.direction ?? "buy").toLowerCase() as TOrderSide,
-      avgPrice: Number(order.avgPrice ?? order.price ?? 0),
-      orderQuantity: Number(order.size ?? order.quantity ?? order.orderQty ?? 0),
+      avgPrice: Number(order.avgPrice ?? order.price ?? order.limitPrice ?? 0),
+      orderQuantity: Number(order.size ?? order.quantity ?? order.orderQty ?? order.unfilledSize + order.filledSize),
       execQty: Number(order.filledSize ?? order.filled ?? 0),
       execValue: Number(order.value ?? order.quote ?? 0),
       fee: {
@@ -923,8 +1048,10 @@ class KrakenExchange implements IExchangeInstance {
 
   private _toOriginalSymbol(normalized: string): string {
     if (!normalized) return normalized;
-    const direct = this._instrumentSymbolToOriginal.get(normalized);
+
+    let direct = this._instrumentSymbolToOriginal.get(normalized);
     if (direct) return direct;
+    normalized = normalized.replace(/^(PF_|PI_|FI_)/, "");
     const cleaned = normalized.replace(/[_\s-]/g, "").toUpperCase();
     return this._normalizedToOriginalSymbol[cleaned] || normalized;
   }
@@ -1014,28 +1141,31 @@ class KrakenExchange implements IExchangeInstance {
           cliOrdIds: batch,
         });
         const orders: KrakenOrderStatusPayload[] = response?.orders ?? response?.result?.orders ?? [];
-        orders.forEach((entry) => {
+        await Promise.all(orders.map(async (entry) => {
           const payload = entry.order ?? entry;
           const clientOrderId = payload.cliOrdId ?? payload.cli_ord_id ?? payload.clientOrderId;
           if (!clientOrderId) return;
-          const mappedStatus = this._mapOrderStatus(entry.status ?? payload.status ?? "", entry.updateReason ?? payload.updateReason);
+          let mappedStatus = this._mapOrderStatus(entry.status ?? payload.status ?? "", entry.updateReason ?? payload.updateReason);
+          if (mappedStatus === "unknown") {
+            const o = await this.getOrderDetail(payload.symbol, clientOrderId);
+            mappedStatus = o?.status ?? "unknown";
+          }
           const prevStatus = this._lastOrderStatusByClientId.get(clientOrderId);
           if (prevStatus === mappedStatus) return;
           this._lastOrderStatusByClientId.set(clientOrderId, mappedStatus);
-          this._handleOrderUpdate(payload, entry.status ?? payload.status);
-
+          await this._handleOrderUpdate(payload, entry.status ?? payload.status);
           if (mappedStatus === "filled" || mappedStatus === "canceled" || mappedStatus === "partially_filled_canceled") {
             this._trackedClientOrderIds.delete(clientOrderId);
           }
-        });
+        }));
       } catch (error) {
         console.warn("[KrakenExchange] Failed polling order status:", error);
       }
     }
   }
 
-  private async _publicRequest(method: string, path: string, params?: Record<string, any>): Promise<Record<string, any>> {
-    const url = new URL(`${KrakenExchange.REST_BASE}${KrakenExchange.REST_PREFIX}${path}`);
+  private async _publicRequest(method: string, path: string, params?: Record<string, any>, specialPathPrefix?: string): Promise<Record<string, any>> {
+    const url = new URL(`${KrakenExchange.REST_BASE}${specialPathPrefix ?? KrakenExchange.REST_PREFIX}${path}`);
     if (params && method === "GET") {
       Object.entries(params).forEach(([key, value]) => {
         if (value === undefined || value === null) return;
@@ -1045,7 +1175,7 @@ class KrakenExchange implements IExchangeInstance {
 
     const response = await fetch(url.toString(), { method });
     if (!response.ok) {
-      throw new Error(`[KrakenExchange] Public request failed: ${response.status}`);
+      throw new Error(`[KrakenExchange] Public request ${url.toString()} failed: ${response.status}`);
     }
     return response.json() as Promise<Record<string, any>>;
   }
@@ -1086,11 +1216,14 @@ class KrakenExchange implements IExchangeInstance {
       headers["Content-Type"] = "application/x-www-form-urlencoded";
     }
 
-    console.log("---- Request: -----");
-    console.log("headers", headers);
-    console.log("url", url.toString());
-    console.log("postData", postData);
-    console.log("method", method);
+    // console.log("---- Request: -----");
+    // console.log("headers", headers);
+    // console.log("url", url.toString());
+    // console.log("postData", postData);
+    // console.log("method", method);
+
+    console.log("url: ", url.toString());
+    console.log("body: ", method === "GET" ? undefined : postData);
 
     const response = await fetch(url.toString(), {
       method,
@@ -1099,8 +1232,8 @@ class KrakenExchange implements IExchangeInstance {
     });
 
     const rawText = await response.text();
-    console.log("---- Raw Response: -----");
-    console.log(rawText);
+    // console.log("---- Raw Response: -----");
+    // console.log(rawText);
 
     if (!response.ok) {
       throw new Error(`[KrakenExchange] Private request failed (${response.status}): ${rawText}`);
