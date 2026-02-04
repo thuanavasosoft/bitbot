@@ -8,44 +8,99 @@ import { toIso } from "@/bot/auto-adjust-bot/candle-utils";
 class TMOBStartingState implements TMOBState {
   constructor(private bot: TrailMultiplierOptimizationBot) { }
 
-  private async updateBotBalances() {
-    const currExchFreeUsdtBalance = await this.bot.tmobUtils.getExchFreeUsdtBalance();
-    if (!this.bot.startQuoteBalance) this.bot.startQuoteBalance = currExchFreeUsdtBalance.decimalPlaces(4, BigNumber.ROUND_DOWN).toString();
-    if (!this.bot.currQuoteBalance) this.bot.currQuoteBalance = currExchFreeUsdtBalance.decimalPlaces(4, BigNumber.ROUND_DOWN).toString();
+  private async _updateBotStartBalances() {
+    const exchFreeUsdtBalance = await this.bot.tmobUtils.getExchFreeUsdtBalance();
+
+    if (exchFreeUsdtBalance.lt(this.bot.margin)) {
+      const msg = `Exchange free balance (${exchFreeUsdtBalance}) is less than the margin size: ${this.bot.margin} stopping bot`;
+      console.error(msg);
+      throw new Error(msg);
+    }
+
+    this.bot.startQuoteBalance = exchFreeUsdtBalance.decimalPlaces(4, BigNumber.ROUND_DOWN).toString();
+  }
+
+  async updateBotCurrentBalances() {
+    const exchFreeUsdtBalance = await this.bot.tmobUtils.getExchFreeUsdtBalance();
+
+    if (exchFreeUsdtBalance.lt(this.bot.margin)) {
+      const msg = `Exchange free balance (${exchFreeUsdtBalance}) is less than the margin size: ${this.bot.margin} stopping bot`;
+      console.error(msg);
+      throw new Error(msg);
+    }
+
+    this.bot.currQuoteBalance = exchFreeUsdtBalance.decimalPlaces(4, BigNumber.ROUND_DOWN).toString();
+  }
+
+  private async _updateLeverage() {
+    const msg = `Updating leverage of ${this.bot.symbol} to X${this.bot.leverage}...`;
+    console.log(msg);
+    TelegramService.queueMsg(msg);
+
+    await ExchangeService.setLeverage(this.bot.symbol, this.bot.leverage);
+    TelegramService.queueMsg("Leverage updated successfully");
   }
 
   async onEnter() {
     console.log("Starting TMOBStartingState");
 
+    await Promise.all([
+      (!this.bot.startQuoteBalance) && this._updateBotStartBalances(),
+      (!this.bot.currQuoteBalance) && this.updateBotCurrentBalances(),
+      this._updateLeverage(),
+      this.bot.loadSymbolInfo(),
+    ]);
+
+    // Initial optimization if needed
+    if (this.bot.currTrailMultiplier === undefined) {
+      await this.bot.tmobUtils.updateCurrTrailMultiplier();
+      if (this.bot.currTrailMultiplier !== undefined) {
+        this.bot.trailingStopMultiplier = this.bot.currTrailMultiplier;
+        TelegramService.queueMsg(
+          `🧠 Initial optimization complete\n` +
+          `Trailing ATR Length: ${this.bot.trailingAtrLength} (fixed)\n` +
+          `Trailing Multiplier: ${this.bot.trailingStopMultiplier}`
+        );
+      }
+    }
+
+    // Start optimization loop
+    this.bot.startOptimizationLoop();
+
+    // Start candle watcher if not started
+    if (!this.bot.tmobCandleWatcher.isCandleWatcherStarted) {
+      void this.bot.tmobCandleWatcher.startWatchingCandles().catch((error) => {
+        console.error("[TMOBStartingState] Candle watcher crashed:", error);
+        TelegramService.queueMsg(`⚠️ Candle watcher crashed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
+
     this.bot.runStartTs = new Date();
+    TelegramService.queueMsg("⚙️ Starting Trail Multiplier Optimization Bot");
 
-    const symbolInfo = await ExchangeService.getSymbolInfo(this.bot.symbol);
-    this.bot.basePrecisiion = symbolInfo.basePrecision;
-    this.bot.pricePrecision = symbolInfo.pricePrecision;
-
-    if (!this.bot.startQuoteBalance) await this.updateBotBalances();
-    if (this.bot.currTrailMultiplier === undefined) await this.bot.tmobUtils.updateCurrTrailMultiplier();
-    if (!this.bot.tmobCandleWatcher.isCandleWatcherStarted) this.bot.tmobCandleWatcher.startWatchingCandles();
-
-    this.bot.runStartTs = new Date();
-    const msg = `🟢 TRAIL MULTIPLIER OPTIMIZATION BOT STARTED
+    const msg = `
+🟢 TRAIL MULTIPLIER OPTIMIZATION BOT STARTED
 Start time: ${toIso(this.bot.runStartTs.getTime())}
 Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
 Margin size: ${this.bot.margin} USDT
-Start quote balance: ${this.bot.startQuoteBalance} USDT
-Current quote balance: ${this.bot.currQuoteBalance} USDT
 Trigger buffer percentage: ${this.bot.triggerBufferPercentage}%
-N signal: ${this.bot.nSignal}
-Trailing ATR length: ${this.bot.trailingAtrLength}
-Trail multiplier bounds: ${this.bot.trailMultiplierBounds.min} to ${this.bot.trailMultiplierBounds.max}
 Trail confirm bars: ${this.bot.trailConfirmBars}
-Update interval: ${this.bot.updateIntervalMinutes}m
-Optimization window: ${this.bot.optimizationWindowMinutes}m`;
+
+Optimization window: ${this.bot.optimizationWindowMinutes} minutes
+Update interval: ${this.bot.updateIntervalMinutes} minutes
+
+N signal: ${this.bot.nSignal}
+Trailing ATR length: ${this.bot.trailingAtrLength} (fixed)
+Trail multiplier bounds: ${this.bot.trailMultiplierBounds.min} to ${this.bot.trailMultiplierBounds.max}
+Current trail multiplier: ${this.bot.trailingStopMultiplier}
+
+Start Quote Balance (100%): ${this.bot.startQuoteBalance} USDT
+Current Quote Balance (100%): ${this.bot.currQuoteBalance} USDT
+`;
 
     console.log(msg);
     TelegramService.queueMsg(msg);
-
 
     console.log("Emitting state change");
     eventBus.emit(EEventBusEventType.StateChange);
