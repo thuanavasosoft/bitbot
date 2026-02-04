@@ -4,6 +4,8 @@ import TMOBWaitForResolveState from "./tmob-states/tmob-wait-for-resolve.state";
 import TMOBWaitForSignalState from "./tmob-states/tmob-wait-for-signal.state";
 import TMOBUtils from "./tmob-utils";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
+import { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
+import TMOBCandleWatcher from "./tmob-candle-watcher";
 
 export interface TMOBState {
   onEnter: () => Promise<void>;
@@ -12,7 +14,7 @@ export interface TMOBState {
 
 
 class TrailMultiplierOptimizationBot {
-  runStartTs: Date = new Date();
+  runStartTs?: Date;
 
   symbol: string;
   leverage: number;
@@ -25,16 +27,23 @@ class TrailMultiplierOptimizationBot {
 
   currentSupport: number | null = null;
   currentResistance: number | null = null;
+  triggerBufferPercentage: number;
   longTrigger: number | null = null;
   shortTrigger: number | null = null;
   lastSRUpdateTime: number = 0;
   lastExitTime: number = 0;
   lastEntryTime: number = 0;
 
+  trailingStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number; updatedAt: number };
   trailConfirmBars: number;
   trailingAtrLength: number;
+  updateIntervalMinutes: number;
   optimizationWindowMinutes: number;
   nSignal: number;
+  currActivePosition?: IPosition;
+
+
+  isOpeningPosition: boolean = false;
 
   currTrailMultiplier?: number;
   lastCurrTrailMultiplierUpdateTs?: number;
@@ -45,6 +54,7 @@ class TrailMultiplierOptimizationBot {
   basePrecisiion!: number;
   pricePrecision!: number;
 
+  tmobCandleWatcher: TMOBCandleWatcher;
   tmobUtils: TMOBUtils;
   startingState: TMOBStartingState;
   optimizeTrailMultiplierState: TMOBOptimizeTrailMultiplierState;
@@ -58,7 +68,9 @@ class TrailMultiplierOptimizationBot {
     this.symbol = process.env.SYMBOL!;
     this.leverage = Number(process.env.LEVERAGE!);
     this.margin = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_MARGIN!);
+    this.triggerBufferPercentage = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRIGGER_BUFFER_PERCENTAGE! || 0);
     this.trailingAtrLength = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_N_SIGNAL_AND_ATR_LENGTH!);
+    this.updateIntervalMinutes = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_UPDATE_INTERVAL_MINUTES!);
     this.optimizationWindowMinutes = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_OPTIMIZATION_WINDOW_MINUTES!);
     this.nSignal = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_N_SIGNAL_AND_ATR_LENGTH!);
     this.trailConfirmBars = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRAIL_CONFIRM_BARS! || 1);
@@ -69,6 +81,7 @@ class TrailMultiplierOptimizationBot {
     };
 
     this.tmobUtils = new TMOBUtils(this);
+    this.tmobCandleWatcher = new TMOBCandleWatcher(this);
 
     this.startingState = new TMOBStartingState(this);
     this.optimizeTrailMultiplierState = new TMOBOptimizeTrailMultiplierState(this);
@@ -78,21 +91,20 @@ class TrailMultiplierOptimizationBot {
   }
 
   async startMakeMoney() {
-
-    await this.currentState.onEnter();
-
     eventBus.addListener(EEventBusEventType.StateChange, async (nextState: TMOBState) => {
       console.log("State change triggered, changing state");
 
       await this.currentState.onExit();
 
       if (this.currentState === this.startingState) {
-        console.log("Current state is starting, next state is optimizing trail multiplier");
-        this.currentState = this.optimizeTrailMultiplierState;
-      } else if (this.currentState === this.optimizeTrailMultiplierState) {
+        console.log("Current state is starting, next state is waiting for signal");
         this.currentState = this.waitForSignalState;
       } else if (this.currentState === this.waitForSignalState) {
+        console.log("Current state is waiting for signal, next state is waiting for resolve");
         this.currentState = this.waitForResolveState;
+      } else if (this.currentState === this.optimizeTrailMultiplierState) {
+        console.log("Current state is optimizing trail multiplier, next state is waiting for signal");
+        this.currentState = this.waitForSignalState;
       } else if (this.currentState === this.waitForResolveState) {
         if (!!nextState) this.currentState = nextState;
         else this.currentState = this.startingState;
@@ -100,6 +112,8 @@ class TrailMultiplierOptimizationBot {
 
       await this.currentState.onEnter();
     });
+
+    await this.currentState.onEnter();
   }
 }
 

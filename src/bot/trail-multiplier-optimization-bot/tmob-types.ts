@@ -1,5 +1,5 @@
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
-import { Candle, Side, SignalParams } from "../auto-adjust-bot/types";
+import { Side, SignalParams } from "../auto-adjust-bot/types";
 
 export type TMOBRefTracePoint = {
   i: number;
@@ -61,8 +61,8 @@ export type TMOBRunBacktestArgs = {
   requestedEndTime: string;
   margin?: number;
   leverage?: number;
-  candles: Candle[];
-  endCandle?: Candle;
+  candles: ICandleInfo[];
+  endCandle?: ICandleInfo;
   trailingAtrLength: number;
   highestLookback: number;
   trailMultiplier: number;

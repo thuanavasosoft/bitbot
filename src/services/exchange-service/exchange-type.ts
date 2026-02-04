@@ -66,6 +66,7 @@ export interface ICandleInfo {
   highPrice: number,
   lowPrice: number,
   closePrice: number,
+  volume: number
 }
 
 export interface IBalanceInfo {

@@ -4,10 +4,9 @@ import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { tmobRunBacktest } from "./tmob-backtest";
 import { TMOBSignalParams } from "./tmob-types";
-import { Candle } from "../auto-adjust-bot/types";
 import BigNumber from "bignumber.js";
 
-const DEFAULT_SIGNAL_PARAMS: TMOBSignalParams = {
+export const TMOB_DEFAULT_SIGNAL_PARAMS: TMOBSignalParams = {
   N: 2880,
   atr_len: 14,
   K: 5,
@@ -43,18 +42,7 @@ class TMOBUtils {
       }
     );
 
-    let filteredCandles = candles.filter((candle) => candle.timestamp >= optimizationWindowStartDate.getTime()).map(c => {
-      const candle: Candle = {
-        openTime: c.openTime,
-        closeTime: c.closeTime,
-        open: c.openPrice,
-        high: c.highPrice,
-        low: c.lowPrice,
-        close: c.closePrice,
-        volume: 0,
-      };
-      return candle;
-    });
+    let filteredCandles = candles.filter((candle) => candle.timestamp >= optimizationWindowStartDate.getTime())
     if (filteredCandles.length > this.bot.optimizationWindowMinutes) {
       filteredCandles = filteredCandles.slice(filteredCandles.length - this.bot.optimizationWindowMinutes);
     }
@@ -73,13 +61,10 @@ class TMOBUtils {
         highestLookback: this.bot.trailingAtrLength,
         trailMultiplier: trailMultiplier,
         trailConfirmBars: this.bot.trailConfirmBars,
-        signalParams: DEFAULT_SIGNAL_PARAMS,
+        signalParams: TMOB_DEFAULT_SIGNAL_PARAMS,
         tickSize: this.bot.basePrecisiion,
         pricePrecision: this.bot.pricePrecision,
       });
-
-      console.log("trailMultiplier: ", trailMultiplier);
-      console.log("backtestResult.summary.totalPnL: ", backtestResult.summary.totalPnL);
 
       if (backtestResult.summary.totalPnL > bestTotalPnL) {
         console.log("new best total pnl: ", backtestResult.summary.totalPnL);
@@ -104,7 +89,7 @@ class TMOBUtils {
 
   public async getExchFreeUsdtBalance(): Promise<BigNumber> {
     const balances = await withRetries(
-      ExchangeService.getBalances,
+      () => ExchangeService.getBalances(),
       {
         label: "[TMOBUtils] getBalances",
         retries: 5,

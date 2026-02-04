@@ -1,4 +1,5 @@
-import { Candle, Side } from "../auto-adjust-bot/types";
+import { ICandleInfo } from "@/services/exchange-service/exchange-type";
+import { Side } from "../auto-adjust-bot/types";
 import { TMOBRunBacktestArgs, TMOBBacktestRunSummary, TMOBRefTracePoint, TMOBSignalParams, TMOBSignalResult, TMOBRefPnlPoint, TMOBRefPosition, TMOBRefEvent, TMOBRefStrategyConfig } from "./tmob-types";
 import bn from "bignumber.js";
 
@@ -140,11 +141,11 @@ function calculateSharpeRatio(values: number[]): number {
 
 
 function createReferenceBreakoutExitTrailingAtrEngine(
-  allCandles: Candle[],
+  allCandles: ICandleInfo[],
   cfg: TMOBRefStrategyConfig,
 ): {
-  step: (candle: Candle, i: number) => void;
-  closeAtEnd: (lastCandle: Candle) => void;
+  step: (candle: ICandleInfo, i: number) => void;
+  closeAtEnd: (lastCandle: ICandleInfo) => void;
   getState: () => {
     numberOfTrades: number;
     current_position: TMOBRefPosition;
@@ -214,7 +215,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
   let atrTrCount = 0;
   let atrTrHead = 0;
   const atrTrWindow: number[] = new Array(trailingAtrLength);
-  let prevAtrCandle: Candle | null = null;
+  let prevAtrCandle: ICandleInfo | null = null;
 
   let closesSinceEntry: number[] = new Array(highestLookback);
   let closesHead = 0;
@@ -463,14 +464,14 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     return isInSleep;
   };
 
-  const _checkLiquidationOrDoubled = (candle: Candle, currentTime: Date): boolean => {
+  const _checkLiquidationOrDoubled = (candle: ICandleInfo, currentTime: Date): boolean => {
     if (!current_position) return false;
     if (!liquidationPrice) return false;
 
     const position = current_position;
 
     // Check liquidation using high/low
-    const isLiquidation = position.side === "long" ? candle.low <= liquidationPrice : candle.high >= liquidationPrice;
+    const isLiquidation = position.side === "long" ? candle.lowPrice <= liquidationPrice : candle.highPrice >= liquidationPrice;
 
     if (isLiquidation) {
       const liquidationPnl = -margin;
@@ -519,16 +520,16 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     return false;
   };
 
-  const step = (candle: Candle, i: number): void => {
+  const step = (candle: ICandleInfo, i: number): void => {
     // Main loop through candles (reference order & timestamps)
     const currentTime = new Date(candle.openTime);
     const isTradable = candle.openTime >= tradeStartMs;
 
     let currentAtr: number | null = null;
     if (prevAtrCandle) {
-      const currentHigh = Number(candle.high);
-      const currentLow = Number(candle.low);
-      const previousClose = Number(prevAtrCandle.close);
+      const currentHigh = Number(candle.highPrice);
+      const currentLow = Number(candle.lowPrice);
+      const previousClose = Number(prevAtrCandle.closePrice);
       const highLow = currentHigh - currentLow;
       const highPrevClose = Math.abs(currentHigh - previousClose);
       const lowPrevClose = Math.abs(currentLow - previousClose);
@@ -626,13 +627,13 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     }
 
     if (positionAtBarStart && current_position) {
-      _updateTrailingStructures(candle.close, currentAtr);
+      _updateTrailingStructures(candle.closePrice, currentAtr);
 
       if (trailingStop !== null) {
         // For longs: exit when price drops below stop
         // For shorts: exit when price rises above stop
         const isStopBreached =
-          current_position.side === "long" ? candle.close <= trailingStop : candle.close >= trailingStop;
+          current_position.side === "long" ? candle.closePrice <= trailingStop : candle.closePrice >= trailingStop;
 
         if (isStopBreached) {
           trailingStopBreachCount++;
@@ -641,7 +642,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
         }
 
         if (trailingStopBreachCount >= minTrailConfirmBars) {
-          _closePositionIfAny(candle.close, currentTime, "atr_trailing");
+          _closePositionIfAny(candle.closePrice, currentTime, "atr_trailing");
         }
       } else {
         trailingStopBreachCount = 0;
@@ -655,7 +656,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
       accumulatedNegativePnl = 0;
     }
 
-    if (currentResistance !== null && candle.high >= currentResistance) {
+    if (currentResistance !== null && candle.highPrice >= currentResistance) {
       // Breakout above resistance
       const entrySide: Side = isFlippedMode ? "short" : "long";
       if (!current_position) {
@@ -671,7 +672,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
         //   enteredThisBar = true;
         // }
       }
-    } else if (currentSupport !== null && candle.low <= currentSupport) {
+    } else if (currentSupport !== null && candle.lowPrice <= currentSupport) {
       // Breakout below support
       const entrySide: Side = isFlippedMode ? "long" : "short";
       if (!current_position) {
@@ -690,7 +691,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     }
 
     if (enteredThisBar && current_position) {
-      _updateTrailingStructures(candle.close, currentAtr);
+      _updateTrailingStructures(candle.closePrice, currentAtr);
       trailingStopBreachCount = 0;
     }
 
@@ -723,9 +724,9 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     });
   };
 
-  const closeAtEnd = (lastCandle: Candle): void => {
+  const closeAtEnd = (lastCandle: ICandleInfo): void => {
     if (current_position && lastCandle) {
-      _closePositionIfAny(lastCandle.close, new Date(lastCandle.closeTime), "end");
+      _closePositionIfAny(lastCandle.closePrice, new Date(lastCandle.closeTime), "end");
     }
   };
 
@@ -759,11 +760,12 @@ function createReferenceBreakoutExitTrailingAtrEngine(
  * @param params - Parameters object
  * @returns Object with signal, resistance, support, and other metrics
  */
-function calculateBreakoutSignal(
-  candles: Candle[],
+export function calculateBreakoutSignal(
+  candles: ICandleInfo[],
   params: TMOBSignalParams = {}
 ): TMOBSignalResult {
   if (!candles || candles.length === 0) {
+    console.log("[tmob-backtest] calculateBreakoutSignal: No candles provided");
     return {
       signal: "Kangaroo",
       resistance: null,
@@ -788,6 +790,9 @@ function calculateBreakoutSignal(
   // Need enough candles for calculations
   const minRequired = Math.max(N + 1, atr_len, K, ema_period);
   if (candles.length < minRequired) {
+    console.log("[tmob-backtest] calculateBreakoutSignal: Not enough candles provided");
+    console.log("[tmob-backtest] calculateBreakoutSignal: Candles length: ", candles.length);
+    console.log("[tmob-backtest] calculateBreakoutSignal: Min required: ", minRequired);
     return {
       signal: "Kangaroo",
       resistance: null,
@@ -814,22 +819,22 @@ function calculateBreakoutSignal(
   let support = Infinity;
 
   for (let i = lookbackStart; i < lookbackEnd; i++) {
-    if (candles[i].high > resistance) {
-      resistance = candles[i].high;
+    if (candles[i].highPrice > resistance) {
+      resistance = candles[i].highPrice;
     }
-    if (candles[i].low < support) {
-      support = candles[i].low;
+    if (candles[i].lowPrice < support) {
+      support = candles[i].lowPrice;
     }
   }
 
   // Get current and previous candle indices
   const currentIdx = candles.length - 1;
   const prevIdx = currentIdx - 1;
-  const currentClose = candles[currentIdx].close;
+  const currentClose = candles[currentIdx].closePrice;
 
   // Calculate ROC (Rate of Change)
   const rocStartIdx = Math.max(0, currentIdx - K);
-  const rocStartClose = candles[rocStartIdx].close;
+  const rocStartClose = candles[rocStartIdx].closePrice;
   const ROC = rocStartClose !== 0 ? currentClose / rocStartClose - 1 : 0;
 
   // Calculate EMA for slope
@@ -884,7 +889,7 @@ function calculateBreakoutSignal(
   let dn_lvl_confirmed = dn_lvl;
 
   if (need_two_closes && candles.length >= 2) {
-    const prevCloseValue = candles[prevIdx].close;
+    const prevCloseValue = candles[prevIdx].closePrice;
     up_lvl_confirmed = up_lvl && prevCloseValue > resistance * (1 + eps);
     dn_lvl_confirmed = dn_lvl && prevCloseValue < support * (1 - eps);
   }
@@ -925,7 +930,7 @@ interface EMAPoint {
  * @param period - Period for EMA calculation
  * @returns Array of { time, value } objects aligned with candles
  */
-function calculateEMA(candles: Candle[], period: number): EMAPoint[] {
+function calculateEMA(candles: ICandleInfo[], period: number): EMAPoint[] {
   if (!candles || candles.length === 0 || period < 1) {
     return [];
   }
@@ -937,10 +942,10 @@ function calculateEMA(candles: Candle[], period: number): EMAPoint[] {
   for (let i = 0; i < candles.length; i++) {
     if (i === 0) {
       // First value is just the close price
-      ema = candles[i].close;
+      ema = candles[i].closePrice;
     } else {
       // EMA = (Close - Previous EMA) * Multiplier + Previous EMA
-      ema = (candles[i].close - ema!) * multiplier + ema!;
+      ema = (candles[i].closePrice - ema!) * multiplier + ema!;
     }
 
     result.push({
@@ -957,7 +962,7 @@ function calculateEMA(candles: Candle[], period: number): EMAPoint[] {
  * @param candles - Array of candle objects with high, low, close
  * @returns Array of true range values
  */
-function calculateTrueRange(candles: Candle[]): number[] {
+function calculateTrueRange(candles: ICandleInfo[]): number[] {
   if (!candles || candles.length === 0) {
     return [];
   }
@@ -965,11 +970,11 @@ function calculateTrueRange(candles: Candle[]): number[] {
   const tr: number[] = [];
   for (let i = 0; i < candles.length; i++) {
     if (i === 0) {
-      tr.push(candles[i].high - candles[i].low);
+      tr.push(candles[i].highPrice - candles[i].lowPrice);
     } else {
-      const hl = candles[i].high - candles[i].low;
-      const hc = Math.abs(candles[i].high - candles[i - 1].close);
-      const lc = Math.abs(candles[i].low - candles[i - 1].close);
+      const hl = candles[i].highPrice - candles[i].lowPrice;
+      const hc = Math.abs(candles[i].highPrice - candles[i - 1].closePrice);
+      const lc = Math.abs(candles[i].lowPrice - candles[i - 1].closePrice);
       tr.push(Math.max(hl, hc, lc));
     }
   }

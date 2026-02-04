@@ -155,6 +155,7 @@ class BinanceExchange implements IExchangeInstance {
         highPrice: Number(highPrice),
         lowPrice: Number(lowPrice),
         closePrice: Number(closePrice),
+        volume: Number(volume),
       }));
 
       let chunkStartIdx = 0;
