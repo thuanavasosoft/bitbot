@@ -147,8 +147,10 @@ class BinanceExchange implements IExchangeInstance {
 
       if (!klines.length) break;
 
-      const mappedChunk = klines.map(([openTime, openPrice, highPrice, lowPrice, closePrice]) => ({
+      const mappedChunk = klines.map(([openTime, openPrice, highPrice, lowPrice, closePrice, volume, closeTime]) => ({
         timestamp: openTime,
+        openTime: openTime,
+        closeTime: closeTime,
         openPrice: Number(openPrice),
         highPrice: Number(highPrice),
         lowPrice: Number(lowPrice),

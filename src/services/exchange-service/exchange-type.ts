@@ -60,6 +60,8 @@ export interface ICancelOrderResponse {
 
 export interface ICandleInfo {
   timestamp: number,
+  openTime: number,
+  closeTime: number,
   openPrice: number,
   highPrice: number,
   lowPrice: number,
