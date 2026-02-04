@@ -7,6 +7,7 @@ import ComboBot from '@/bot/combo-bot/combo-bot';
 import TestFollowMultipleExits from '@/bot/test-follow-multiple-exits-bot/test-follow-multiple-exits-bot';
 import BreakoutBot from '@/bot/breakout-bot/breakout-bot';
 import AutoAdjustBot from '@/bot/auto-adjust-bot/auto-adjust-bot';
+import TrailMultiplierOptimizationBot from '@/bot/trail-multiplier-optimization-bot/trail-multiplier-optimization-bot';
 
 async function runProgram() {
   try {
@@ -43,6 +44,9 @@ async function runProgram() {
       await bot.startMakeMoney();
     } else if (botMode === "auto_adjust_bot") {
       const bot = new AutoAdjustBot();
+      await bot.startMakeMoney();
+    } else if (botMode === "trail_multiplier_optimization_bot") {
+      const bot = new TrailMultiplierOptimizationBot();
       await bot.startMakeMoney();
     }
 
