@@ -66,6 +66,9 @@ class BBTrendWatcher {
           highPrice: currMarkPrice,
           lowPrice: currMarkPrice,
           openPrice: currMarkPrice,
+          closeTime: +new Date(),
+          volume: 0,
+          openTime: +new Date(),
           timestamp: +new Date(),
         }
         candles.push(lastCandle);

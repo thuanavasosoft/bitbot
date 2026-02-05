@@ -48,8 +48,8 @@ class TMOBUtils {
       filteredCandles = filteredCandles.slice(filteredCandles.length - this.bot.optimizationWindowMinutes);
     }
 
-    let bestTrailMultiplier = 0;
-    let bestTotalPnL = 0;
+    let bestTrailMultiplier = this.bot.trailMultiplierBounds.min;
+    let bestTotalPnL = Number.NEGATIVE_INFINITY;
     for (let i = this.bot.trailMultiplierBounds.min; i <= this.bot.trailMultiplierBounds.max; i++) {
       const trailMultiplier = i;
       const backtestResult = tmobRunBacktest({

@@ -8,7 +8,7 @@ import { sliceCandles, toIso } from "../candle-utils";
 import { calculateSharpeRatio } from "../sharpe";
 
 class AASimulateState implements AAState {
-  constructor(private bot: AutoAdjustBot) {}
+  constructor(private bot: AutoAdjustBot) { }
 
   async onEnter() {
     const stepIndex = this.bot.stepIndex;
@@ -103,6 +103,9 @@ class AASimulateState implements AAState {
           highPrice: c.high,
           lowPrice: c.low,
           closePrice: c.close,
+          openTime: c.openTime,
+          closeTime: c.closeTime,
+          volume: c.volume,
         }));
         const intervalChart = await generateImageOfCandles(
           this.bot.symbol,
