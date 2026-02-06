@@ -35,3 +35,7 @@ export const sliceCandles = (candles: Candle[], startMs: number, endMs: number) 
   candles.filter((c) => c.openTime >= startMs && c.openTime < endMs);
 
 export const toIso = (ms: number) => new Date(ms).toISOString();
+
+/** Format timestamp for display: 1 second after the minute with 0 milliseconds (e.g. ...:01.000Z). */
+export const toIsoMinutePlusOneSecond = (ms: number) =>
+  new Date(Math.floor(ms / 60_000) * 60_000 + 1000).toISOString();

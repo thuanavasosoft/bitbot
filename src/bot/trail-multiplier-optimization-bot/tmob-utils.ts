@@ -6,6 +6,7 @@ import { tmobRunBacktest } from "./tmob-backtest";
 import { TMOBSignalParams } from "./tmob-types";
 import BigNumber from "bignumber.js";
 import { formatFeeAwarePnLLine } from "@/utils/strings.util";
+import { debugLog } from "./tmob-debug";
 
 export const TMOB_DEFAULT_SIGNAL_PARAMS: TMOBSignalParams = {
   N: 2880,
@@ -24,15 +25,22 @@ class TMOBUtils {
   constructor(private bot: TrailMultiplierOptimizationBot) { }
 
   async updateCurrTrailMultiplier() {
-    console.log("[TMOB UTILS] Updating curr trail multiplier...");
+    const logPrefix = "[TMOB:updateCurrTrailMultiplier]";
+    debugLog(`${logPrefix} Starting update of current trail multiplier`);
     TelegramService.queueMsg(`🚂 Updating current trail multiplier...`);
 
-    // Fetch more into the past
-    const optimizationWindowStartDate = new Date(Date.now() - (this.bot.optimizationWindowMinutes + this.bot.nSignal) * 60 * 1000);
     const now = new Date();
+    this.bot.lastOptimizationAtMs = now.getTime();
+    now.setSeconds(0);
+    now.setMilliseconds(0);
+    const optimizationWindowStartDate = new Date(now.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000);
 
-    console.log("optimizationWindowStartDate: ", optimizationWindowStartDate);
+    debugLog(`${logPrefix} optimizationWindowStartDate=${optimizationWindowStartDate.toISOString()}, now=${now.toISOString()}`);
+    debugLog(`${logPrefix} optimizationWindowMinutes=${this.bot.optimizationWindowMinutes}, nSignal=${this.bot.nSignal}`);
+    debugLog(`${logPrefix} trailMultiplierBounds=[${this.bot.trailMultiplierBounds.min}, ${this.bot.trailMultiplierBounds.max}]`);
+    debugLog(`${logPrefix} trailingAtrLength=${this.bot.trailingAtrLength}, trailConfirmBars=${this.bot.trailConfirmBars}`);
 
+    debugLog(`${logPrefix} Getting candles...`);
     const candles = await withRetries(
       () => ExchangeService.getCandles(this.bot.symbol, optimizationWindowStartDate, now, "1Min"),
       {
@@ -43,15 +51,29 @@ class TMOBUtils {
       }
     );
 
-    let filteredCandles = candles.filter((candle) => candle.timestamp >= optimizationWindowStartDate.getTime())
-    if (filteredCandles.length > this.bot.optimizationWindowMinutes) {
-      filteredCandles = filteredCandles.slice(filteredCandles.length - this.bot.optimizationWindowMinutes);
+    debugLog(`${logPrefix} getCandles returned count=${candles.length}`);
+    if (candles.length > 0) {
+      debugLog(`${logPrefix} candles[0] openTime=${candles[0].openTime} (${new Date(candles[0].openTime).toISOString()})`);
+      debugLog(`${logPrefix} candles[last] openTime=${candles[candles.length - 1].openTime} (${new Date(candles[candles.length - 1].openTime).toISOString()})`);
+    }
+
+    const filteredCandles = candles.filter((candle) => candle.timestamp >= optimizationWindowStartDate.getTime() && candle.timestamp < now.getTime());
+
+
+    debugLog(`${logPrefix} filteredCandles count=${filteredCandles.length}`);
+    if (filteredCandles.length > 0) {
+      debugLog(`${logPrefix} filteredCandles[0] openTime=${filteredCandles[0].openTime} (${new Date(filteredCandles[0].openTime).toISOString()})`);
+      debugLog(`${logPrefix} filteredCandles[last] openTime=${filteredCandles[filteredCandles.length - 1].openTime} (${new Date(filteredCandles[filteredCandles.length - 1].openTime).toISOString()})`);
     }
 
     let bestTrailMultiplier = this.bot.trailMultiplierBounds.min;
     let bestTotalPnL = Number.NEGATIVE_INFINITY;
+    debugLog(`${logPrefix} Starting backtest loop over trail multipliers [${this.bot.trailMultiplierBounds.min}, ${this.bot.trailMultiplierBounds.max}]`);
+
     for (let i = this.bot.trailMultiplierBounds.min; i <= this.bot.trailMultiplierBounds.max; i++) {
       const trailMultiplier = i;
+      debugLog(`${logPrefix} ---- Running backtest for trailMultiplier=${trailMultiplier} ----`);
+
       const backtestResult = tmobRunBacktest({
         symbol: this.bot.symbol,
         interval: "1m",
@@ -67,19 +89,24 @@ class TMOBUtils {
         pricePrecision: this.bot.pricePrecision,
       });
 
+      debugLog(`${logPrefix} backtestResult trailMultiplier=${trailMultiplier} totalPnL=${backtestResult.summary.totalPnL} numberOfTrades=${backtestResult.summary.numberOfTrades} candleCount=${backtestResult.summary.candleCount}`);
+      debugLog(`${logPrefix} backtestResult totalFeesPaid=${backtestResult.summary.totalFeesPaid} liquidationCount=${backtestResult.summary.liquidationCount}`);
+
       if (backtestResult.summary.totalPnL > bestTotalPnL) {
-        console.log("new best total pnl: ", backtestResult.summary.totalPnL);
-        console.log("new best trail multiplier: ", trailMultiplier);
-        console.log("--------------------------------");
+        debugLog(`${logPrefix} NEW BEST: trailMultiplier=${trailMultiplier} totalPnL=${backtestResult.summary.totalPnL} (previous bestTotalPnL=${bestTotalPnL})`);
         bestTotalPnL = backtestResult.summary.totalPnL;
         bestTrailMultiplier = trailMultiplier;
+      } else {
+        debugLog(`${logPrefix} trailMultiplier=${trailMultiplier} totalPnL=${backtestResult.summary.totalPnL} (best so far: ${bestTrailMultiplier} with ${bestTotalPnL})`);
       }
-
     }
+
+    debugLog(`${logPrefix} Loop finished. Best trailMultiplier=${bestTrailMultiplier} bestTotalPnL=${bestTotalPnL}`);
 
     this.bot.currTrailMultiplier = bestTrailMultiplier;
 
     const finishedTs = new Date();
+    debugLog(`${logPrefix} Done. currTrailMultiplier set to ${this.bot.currTrailMultiplier}. Optimization took ${finishedTs.getTime() - now.getTime()} ms`);
     TelegramService.queueMsg(`🚇 Updated Current Trail Multiplier: 
       New trail multiplier: ${this.bot.currTrailMultiplier} 
       Total pnl: ${bestTotalPnL.toFixed(3)} USDT
