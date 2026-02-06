@@ -2,7 +2,9 @@ import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import { Side } from "../auto-adjust-bot/types";
 import { TMOBRunBacktestArgs, TMOBBacktestRunSummary, TMOBRefTracePoint, TMOBSignalParams, TMOBSignalResult, TMOBRefPnlPoint, TMOBRefPosition, TMOBRefEvent, TMOBRefStrategyConfig } from "./tmob-types";
 import bn from "bignumber.js";
+import { debugLog } from "./tmob-debug";
 
+const BACKTEST_LOG_PREFIX = "[TMOB:runBacktest]";
 
 export function tmobRunBacktest(
   args: TMOBRunBacktestArgs
@@ -24,6 +26,10 @@ export function tmobRunBacktest(
     pricePrecision: pricePrecisionArg,
   } = args;
 
+  const runTag = `trailMult=${trailMultiplier}`;
+  debugLog(`${BACKTEST_LOG_PREFIX} [${runTag}] ENTRY: candles.length=${candles.length} requestedStartTime=${requestedStartTime} requestedEndTime=${requestedEndTime}`);
+  debugLog(`${BACKTEST_LOG_PREFIX} [${runTag}] args: trailingAtrLength=${trailingAtrLength} highestLookback=${highestLookback} trailMultiplier=${trailMultiplier} trailConfirmBars=${trailConfirmBars}`);
+
   if (!candles.length) {
     throw new Error("No candles provided");
   }
@@ -38,6 +44,9 @@ export function tmobRunBacktest(
   const tradeStartMs = Number.isFinite(requestedStartMs)
     ? Math.max(candles[0].openTime, requestedStartMs)
     : candles[0].openTime;
+
+  debugLog(`${BACKTEST_LOG_PREFIX} [${runTag}] resolved: margin=${margin} leverage=${leverage} tickSize=${tickSize} pricePrecision=${pricePrecision} tradeStartMs=${tradeStartMs} (${new Date(tradeStartMs).toISOString()})`);
+
   const cfg: TMOBRefStrategyConfig = {
     margin,
     leverage,
@@ -55,16 +64,27 @@ export function tmobRunBacktest(
     tradeStartMs,
   };
 
-  const engine = createReferenceBreakoutExitTrailingAtrEngine(candles, cfg);
+  const engine = createReferenceBreakoutExitTrailingAtrEngine(candles, cfg, runTag);
+  debugLog(`${BACKTEST_LOG_PREFIX} [${runTag}] Running engine step loop: ${candles.length} bars`);
+  debugLog("candles[0]: ", candles[0]);
+  debugLog("candles[candles.length - 1]: ", candles[candles.length - 1]);
+
   for (let i = 0; i < candles.length; i++) {
     engine.step(candles[i], i);
   }
 
   // Close any remaining position at the end (reference semantics: end uses closeTime Date)
   const endCandle = args.endCandle ?? candles[candles.length - 1];
+  debugLog(`${BACKTEST_LOG_PREFIX} [${runTag}] closeAtEnd: endCandle openTime=${endCandle.openTime} closePrice=${endCandle.closePrice}`);
   engine.closeAtEnd(endCandle);
 
   const st = engine.getState();
+  debugLog(`${BACKTEST_LOG_PREFIX} [${runTag}] engine state after loop: numberOfTrades=${st.numberOfTrades} currentTotalPnl=${st.currentTotalPnl} totalFeesPaid=${st.totalFeesPaid} liquidationCount=${st.liquidationCount} pnlHistory.length=${st.pnlHistory.length}`);
+  st.pnlHistory.forEach((p, idx) => {
+    debugLog(
+      `${BACKTEST_LOG_PREFIX} [${runTag}] pnlHistory[${idx}] tradePnL=${p.tradePnL} totalPnL=${p.totalPnL} side=${p.side} entry=${p.entryFillPrice} exit=${p.exitFillPrice} reason=${p.exitReason} exitTs=${p.exitTimestamp.toISOString()}`
+    );
+  });
 
   // Convert reference pnlHistory into API summary pnlHistory
   const pnlHistory: TMOBBacktestRunSummary["pnlHistory"] = st.pnlHistory.map((p) => ({
@@ -122,6 +142,7 @@ export function tmobRunBacktest(
     sharpeRatio,
   };
 
+  debugLog(`${BACKTEST_LOG_PREFIX} [${runTag}] EXIT summary: totalPnL=${summary.totalPnL} numberOfTrades=${summary.numberOfTrades} totalFeesPaid=${summary.totalFeesPaid} candleCount=${summary.candleCount} duration=${summary.duration}`);
   return { summary, trace: st.trace, perBarReturns: st.perBarReturns };
 }
 
@@ -140,9 +161,12 @@ function calculateSharpeRatio(values: number[]): number {
 
 
 
+const ENGINE_LOG_PREFIX = "[TMOB:engine]";
+
 function createReferenceBreakoutExitTrailingAtrEngine(
   allCandles: ICandleInfo[],
   cfg: TMOBRefStrategyConfig,
+  runTag: string,
 ): {
   step: (candle: ICandleInfo, i: number) => void;
   closeAtEnd: (lastCandle: ICandleInfo) => void;
@@ -181,6 +205,9 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     signalParams,
     tradeStartMs,
   } = cfg;
+
+  const log = (msg: string, ...args: unknown[]) =>
+    debugLog(`${ENGINE_LOG_PREFIX} [${runTag}] ${msg}`, ...args);
 
   const minTrailConfirmBars = Math.max(1, trailConfirmBars);
 
@@ -318,12 +345,16 @@ function createReferenceBreakoutExitTrailingAtrEngine(
       return;
     }
 
+    const prevTrailingStop = trailingStop;
     if (current_position.side === "long") {
       // For long positions: track highest close, stop below price, ratchet upward
       const highestClose = maxCloseDeque.length ? maxCloseDeque[0].value : numericClose;
       const candidateStop = highestClose - atrValue * trailMultiplier;
       if (candidateStop > 0 && (trailingStop === null || candidateStop > trailingStop)) {
         trailingStop = _quantizeToTick(candidateStop, "up");
+        log(
+          `TRAILING long: close=${numericClose} atr=${atrValue} highestClose=${highestClose} candidateStop=${candidateStop} prevTrailingStop=${prevTrailingStop} newTrailingStop=${trailingStop}`
+        );
       }
     } else {
       // For short positions: track lowest close, stop above price, ratchet downward
@@ -331,6 +362,9 @@ function createReferenceBreakoutExitTrailingAtrEngine(
       const candidateStop = lowestClose + atrValue * trailMultiplier;
       if (candidateStop > 0 && (trailingStop === null || candidateStop < trailingStop)) {
         trailingStop = _quantizeToTick(candidateStop, "down");
+        log(
+          `TRAILING short: close=${numericClose} atr=${atrValue} lowestClose=${lowestClose} candidateStop=${candidateStop} prevTrailingStop=${prevTrailingStop} newTrailingStop=${trailingStop}`
+        );
       }
     }
   };
@@ -363,9 +397,14 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     current_position = { side, entryPrice: entryFill };
     baseAmt = new bn(margin).times(leverage).div(entryFill).toNumber();
 
+    log(
+      `ENTER: side=${side} currentPrice=${currentPrice} entryFill=${entryFill} baseAmt=${baseAmt} liquidationPrice=${liquidationPrice} trade#=${numberOfTrades} time=${time.toISOString()}`
+    );
+
     // Apply entry fee (based on notional value: margin * leverage)
     const entryNotional = new bn(margin).times(leverage).toNumber();
     _applyFee(entryNotional);
+    log(`ENTER: after entry fee totalFeesPaid=${totalFeesPaid} currentTotalPnl=${currentTotalPnl}`);
 
     lastEntryTsMs = time.getTime();
     lastEntryFillPrice = entryFill;
@@ -385,6 +424,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     if (!current_position) return;
 
     const closeSide = current_position.side;
+    const pnlBeforeClose = currentTotalPnl;
     numberOfTrades++;
     const slippageValue = new bn(slippageUnit).times(tickSize).toNumber();
     const bufferedExitPrice =
@@ -403,11 +443,16 @@ function createReferenceBreakoutExitTrailingAtrEngine(
       current_position.side === "long" ? exitValue.minus(entryValue) : entryValue.minus(exitValue);
     const pnlNumber = pnl.toNumber();
 
+    log(
+      `CLOSE (reason=${reason}): side=${closeSide} currentPrice=${currentPrice} exitFill=${exitFill} entryFill=${lastEntryFillPrice} baseAmt=${baseAmt} tradePnL=${pnlNumber} currentTotalPnl before=${pnlBeforeClose} time=${endDate.toISOString()}`
+    );
+
     currentTotalPnl = new bn(currentTotalPnl).plus(pnl).toNumber();
 
     // Apply exit fee (based on notional value: baseAmt * exitPrice)
     const exitNotional = exitValue.toNumber();
     _applyFee(exitNotional);
+    log(`CLOSE: after exit fee totalFeesPaid=${totalFeesPaid} currentTotalPnl=${currentTotalPnl}`);
 
     pnlHistory.push({
       timestamp: endDate,
@@ -474,8 +519,12 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     const isLiquidation = position.side === "long" ? candle.lowPrice <= liquidationPrice : candle.highPrice >= liquidationPrice;
 
     if (isLiquidation) {
+      log(
+        `LIQUIDATION: side=${position.side} liquidationPrice=${liquidationPrice} candle.low=${candle.lowPrice} candle.high=${candle.highPrice} currentTotalPnl before=${currentTotalPnl}`
+      );
       const liquidationPnl = -margin;
       currentTotalPnl = new bn(currentTotalPnl).plus(liquidationPnl).toNumber();
+      log(`LIQUIDATION: liquidationPnl=${liquidationPnl} currentTotalPnl after=${currentTotalPnl}`);
       pnlHistory.push({
         timestamp: currentTime,
         side: position.side,
@@ -637,16 +686,25 @@ function createReferenceBreakoutExitTrailingAtrEngine(
 
         if (isStopBreached) {
           trailingStopBreachCount++;
+          log(
+            `STEP bar=${i} ts=${currentTime.toISOString()} TRAIL_BREACH: close=${candle.closePrice} trailingStop=${trailingStop} confirmCount=${trailingStopBreachCount}/${minTrailConfirmBars}`
+          );
         } else {
           trailingStopBreachCount = 0;
         }
 
         if (trailingStopBreachCount >= minTrailConfirmBars) {
+          log(`STEP bar=${i} TRAIL_CONFIRMED: closing at atr_trailing close=${candle.closePrice}`);
           _closePositionIfAny(candle.closePrice, currentTime, "atr_trailing");
         }
       } else {
         trailingStopBreachCount = 0;
       }
+
+      // Per-bar state when in position (for matching numbers)
+      log(
+        `STEP bar=${i} IN_POSITION: side=${current_position?.side} close=${candle.closePrice} currentTotalPnl=${currentTotalPnl} trailingStop=${trailingStop} atr=${currentAtr}`
+      );
     }
 
     // Entry logic based on breakout detection
@@ -660,6 +718,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
       // Breakout above resistance
       const entrySide: Side = isFlippedMode ? "short" : "long";
       if (!current_position) {
+        log(`STEP bar=${i} BREAKOUT_UP: high=${candle.highPrice} resistance=${currentResistance} -> entering ${entrySide}`);
         // No position, enter at resistance
         _enterPosition(entrySide, currentResistance, currentTime);
         enteredThisBar = true;
@@ -676,6 +735,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
       // Breakout below support
       const entrySide: Side = isFlippedMode ? "long" : "short";
       if (!current_position) {
+        log(`STEP bar=${i} BREAKOUT_DN: low=${candle.lowPrice} support=${currentSupport} -> entering ${entrySide}`);
         // No position, enter at support
         _enterPosition(entrySide, currentSupport, currentTime);
         enteredThisBar = true;
@@ -726,7 +786,10 @@ function createReferenceBreakoutExitTrailingAtrEngine(
 
   const closeAtEnd = (lastCandle: ICandleInfo): void => {
     if (current_position && lastCandle) {
+      log(`closeAtEnd: closing position at end closePrice=${lastCandle.closePrice} closeTime=${new Date(lastCandle.closeTime).toISOString()}`);
       _closePositionIfAny(lastCandle.closePrice, new Date(lastCandle.closeTime), "end");
+    } else {
+      log(`closeAtEnd: no position to close (current_position=${!!current_position})`);
     }
   };
 
@@ -765,7 +828,7 @@ export function calculateBreakoutSignal(
   params: TMOBSignalParams = {}
 ): TMOBSignalResult {
   if (!candles || candles.length === 0) {
-    console.log("[tmob-backtest] calculateBreakoutSignal: No candles provided");
+    debugLog("[tmob-backtest] calculateBreakoutSignal: No candles provided");
     return {
       signal: "Kangaroo",
       resistance: null,
@@ -790,9 +853,9 @@ export function calculateBreakoutSignal(
   // Need enough candles for calculations
   const minRequired = Math.max(N + 1, atr_len, K, ema_period);
   if (candles.length < minRequired) {
-    console.log("[tmob-backtest] calculateBreakoutSignal: Not enough candles provided");
-    console.log("[tmob-backtest] calculateBreakoutSignal: Candles length: ", candles.length);
-    console.log("[tmob-backtest] calculateBreakoutSignal: Min required: ", minRequired);
+    debugLog("[tmob-backtest] calculateBreakoutSignal: Not enough candles provided");
+    debugLog("[tmob-backtest] calculateBreakoutSignal: Candles length: ", candles.length);
+    debugLog("[tmob-backtest] calculateBreakoutSignal: Min required: ", minRequired);
     return {
       signal: "Kangaroo",
       resistance: null,

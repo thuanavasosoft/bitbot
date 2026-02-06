@@ -14,6 +14,7 @@ import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import { FeeAwarePnLOptions, formatFeeAwarePnLLine, getPositionDetailMsg } from "@/utils/strings.util";
 import { getRunDuration } from "@/utils/maths.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
+import { toIsoMinutePlusOneSecond } from "../auto-adjust-bot/candle-utils";
 
 export interface TMOBState {
   onEnter: () => Promise<void>;
@@ -53,7 +54,6 @@ class TrailMultiplierOptimizationBot {
   trailingStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number; updatedAt: number };
   trailConfirmBars: number;
   trailingAtrLength: number;
-  trailingHighestLookback: number;
   trailingStopMultiplier: number = 0;
   trailingAtrWindow: ICandleInfo[] = [];
   trailingCloseWindow: number[] = [];
@@ -65,9 +65,6 @@ class TrailMultiplierOptimizationBot {
   nSignal: number;
 
   isOpeningPosition: boolean = false;
-
-  currTrailMultiplier?: number;
-  lastCurrTrailMultiplierUpdateTs?: number;
 
   trailBoundStepSize: number;
   trailMultiplierBounds: { min: number; max: number };
@@ -85,6 +82,7 @@ class TrailMultiplierOptimizationBot {
   lastCloseClientOrderId?: string;
 
   // Optimization loop
+  currTrailMultiplier?: number;
   private optimizationLoopAbort = false;
   private optimizationLoopPromise?: Promise<void>;
   lastOptimizationAtMs: number = 0;
@@ -128,7 +126,6 @@ class TrailMultiplierOptimizationBot {
     this.margin = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_MARGIN!);
     this.triggerBufferPercentage = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRIGGER_BUFFER_PERCENTAGE! || 0);
     this.trailingAtrLength = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_N_SIGNAL_AND_ATR_LENGTH!);
-    this.trailingHighestLookback = this.trailingAtrLength;
     this.updateIntervalMinutes = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_UPDATE_INTERVAL_MINUTES!);
     this.optimizationWindowMinutes = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_OPTIMIZATION_WINDOW_MINUTES!);
     this.nSignal = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_N_SIGNAL_AND_ATR_LENGTH!);
@@ -294,8 +291,6 @@ ${lastTradeSummary}`;
         ? new BigNumber(currQuoteBalance).minus(startQuoteBalance).toNumber().toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
         : "N/A";
 
-      const bestMultiplier = this.currTrailMultiplier ?? "N/A";
-
       const msg = `
 === GENERAL ===
 Symbol: ${this.symbol}
@@ -304,14 +299,13 @@ Margin size: ${this.margin} USDT
 Buffer percentage: ${this.triggerBufferPercentage}%
 Trail confirm bars: ${this.trailConfirmBars}
 
+=== OPTIMIZED PARAMS ===
 Optimization window: ${this.optimizationWindowMinutes} minutes
 Update interval: ${this.updateIntervalMinutes} minutes
-
-=== OPTIMIZED PARAMS ===
 Current trailing ATR Length: ${this.trailingAtrLength} (fixed)
-Current trailing lookback: ${this.trailingHighestLookback}
-Current trailing multiplier: ${this.trailingStopMultiplier}
-Best multiplier: ${bestMultiplier}
+Current trailing multiplier: ${this.currTrailMultiplier}
+Last optimized at: ${this.lastOptimizationAtMs > 0 ? toIsoMinutePlusOneSecond(this.lastOptimizationAtMs) : "N/A"}
+Next optimization at: ${this.lastOptimizationAtMs > 0 ? toIsoMinutePlusOneSecond(this.lastOptimizationAtMs + this.updateIntervalMinutes * 60_000) : "N/A"}
 
 === DETAILS ===
 ${await this._getFullUpdateDetailsMsg()}
@@ -792,27 +786,42 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
 
   private async _runOptimizationLoop() {
     while (!this.optimizationLoopAbort) {
-      try {
-        await this.optimizeLiveParams();
-      } catch (error) {
-        console.error("[TMOB] Live optimization loop error:", error);
+      const now = Date.now();
+      const intervalMs = this.updateIntervalMinutes * 60_000;
+      const elapsedSinceLastMs = this.lastOptimizationAtMs > 0 ? now - this.lastOptimizationAtMs : Infinity;
+      const shouldRunOptimization = this.lastOptimizationAtMs === 0 || elapsedSinceLastMs >= intervalMs;
+
+      if (shouldRunOptimization) {
+        try {
+          await this.optimizeLiveParams();
+        } catch (error) {
+          console.error("[TMOB] Live optimization loop error:", error);
+        }
       }
+
       if (this.optimizationLoopAbort) break;
-      const waitMs = this._msUntilNextOptimization();
+      const rawNextDueMs =
+        this.lastOptimizationAtMs > 0
+          ? this.lastOptimizationAtMs + intervalMs
+          : now + intervalMs;
+      //  Make it exactly one second after the minute
+      const nextDueMs = Math.floor(rawNextDueMs / 1000) * 1000 + 1000;
+      const waitMs = Math.max(200, nextDueMs - now);
+      console.log("waitMs: ", waitMs);
+
       await new Promise(resolve => setTimeout(resolve, waitMs));
     }
     this.optimizationLoopPromise = undefined;
   }
 
-  private _msUntilNextOptimization(): number {
-    const nowMs = Date.now();
-    const intervalMs = this.updateIntervalMinutes * 60_000;
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return 200;
-    const nextMs = Math.ceil(nowMs / intervalMs) * intervalMs;
-    return Math.max(200, nextMs - nowMs);
-  }
-
   async optimizeLiveParams() {
+    const intervalMs = this.updateIntervalMinutes * 60_000;
+    const elapsedSinceLastMs = this.lastOptimizationAtMs > 0 ? Date.now() - this.lastOptimizationAtMs : Infinity;
+    if (elapsedSinceLastMs < intervalMs) {
+      console.log(`Not optimizing live params because it's been less than the update interval: ${elapsedSinceLastMs}ms < ${intervalMs}ms`);
+      return;
+    }
+
     if (this.currActivePosition) {
       const activePosition = this.currActivePosition;
       TelegramService.queueMsg(
@@ -829,18 +838,20 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
       });
     }
 
-    // Use TMOB's 1D for-loop optimization
     await this.tmobUtils.updateCurrTrailMultiplier();
-    
+
     // Update the trailingStopMultiplier from currTrailMultiplier
     if (this.currTrailMultiplier !== undefined) {
       this.trailingStopMultiplier = this.currTrailMultiplier;
-      this.lastOptimizationAtMs = Date.now();
-      
+
+      const intervalMs = this.updateIntervalMinutes * 60_000;
+      const nextOptimizationMs = this.lastOptimizationAtMs + intervalMs;
+
       TelegramService.queueMsg(
         `✅ Optimization updated\n` +
         `Trailing ATR Length: ${this.trailingAtrLength} (fixed)\n` +
-        `Trailing Multiplier: ${this.trailingStopMultiplier}`
+        `Trailing Multiplier: ${this.trailingStopMultiplier}\n` +
+        `Next optimization: ${toIsoMinutePlusOneSecond(nextOptimizationMs)}`
       );
     }
   }
