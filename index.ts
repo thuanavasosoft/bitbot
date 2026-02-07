@@ -53,7 +53,7 @@ async function runProgram() {
       console.log(`Error: ${error.message}`);
       TelegramService.queueMsg(`Error: ${error.message}`);
     } else {
-      TelegramService.queueMsg(`An unknown error occurred. ${error instanceof Error ? error.message : String(error)}`);
+      TelegramService.queueMsg(`An unknown error occurred. ${typeof error === "string" ? error : JSON.stringify(error)}`);
       console.log(`An unknown error occurred.: `, error);
     }
     await new Promise(resolve => setTimeout(resolve, 10000)); // Wait for 10 seconds
