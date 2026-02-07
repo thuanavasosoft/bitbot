@@ -82,7 +82,7 @@ class TMOBUtils {
         requestedEndTime: endFetchCandles.toISOString(),
         candles: filteredCandles,
         trailingAtrLength: this.bot.trailingAtrLength,
-        highestLookback: this.bot.trailingAtrLength,
+        highestLookback: this.bot.trailingHighestLookback,
         trailMultiplier: trailMultiplier,
         trailConfirmBars: this.bot.trailConfirmBars,
         signalParams: { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal },
