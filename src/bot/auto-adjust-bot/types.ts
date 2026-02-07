@@ -11,7 +11,7 @@ export type Candle = {
 };
 
 export type SignalParams = {
-  N?: number;
+  N: number;
   atr_len?: number;
   K?: number;
   eps?: number;

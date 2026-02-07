@@ -73,7 +73,7 @@ export type TMOBRunBacktestArgs = {
 };
 
 export interface TMOBSignalParams {
-  N?: number;
+  N: number;
   atr_len?: number;
   K?: number;
   eps?: number;

@@ -825,7 +825,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
  */
 export function calculateBreakoutSignal(
   candles: ICandleInfo[],
-  params: TMOBSignalParams = {}
+  params: TMOBSignalParams,
 ): TMOBSignalResult {
   if (!candles || candles.length === 0) {
     debugLog("[tmob-backtest] calculateBreakoutSignal: No candles provided");

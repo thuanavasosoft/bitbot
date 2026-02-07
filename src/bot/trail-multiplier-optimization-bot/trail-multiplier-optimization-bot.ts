@@ -71,7 +71,6 @@ class TrailMultiplierOptimizationBot {
 
   // Symbol info
   symbolInfo?: ISymbolInfo;
-  basePrecisiion!: number;
   pricePrecision!: number;
   tickSize: number = 0;
 
