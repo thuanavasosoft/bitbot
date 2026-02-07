@@ -1,5 +1,5 @@
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
-import { Side, SignalParams } from "../auto-adjust-bot/types";
+import { Side } from "../auto-adjust-bot/types";
 
 export type TMOBRefTracePoint = {
   i: number;
@@ -73,7 +73,7 @@ export type TMOBRunBacktestArgs = {
 };
 
 export interface TMOBSignalParams {
-  N?: number;
+  N: number;
   atr_len?: number;
   K?: number;
   eps?: number;
@@ -145,4 +145,16 @@ export type TMOBRefStrategyConfig = {
   trailConfirmBars: number;
   signalParams: SignalParams;
   tradeStartMs: number;
+};
+
+export type SignalParams = {
+  N: number;
+  atr_len?: number;
+  K?: number;
+  eps?: number;
+  m_atr?: number;
+  roc_min?: number;
+  ema_period?: number;
+  need_two_closes?: boolean;
+  vol_mult?: number;
 };

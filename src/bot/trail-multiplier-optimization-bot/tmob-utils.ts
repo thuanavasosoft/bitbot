@@ -7,9 +7,9 @@ import { TMOBSignalParams } from "./tmob-types";
 import BigNumber from "bignumber.js";
 import { formatFeeAwarePnLLine } from "@/utils/strings.util";
 import { debugLog } from "./tmob-debug";
+import { toIso } from "../auto-adjust-bot/candle-utils";
 
-export const TMOB_DEFAULT_SIGNAL_PARAMS: TMOBSignalParams = {
-  N: 2880,
+export const TMOB_DEFAULT_SIGNAL_PARAMS: Omit<TMOBSignalParams, 'N'> = {
   atr_len: 14,
   K: 5,
   eps: 0.0005,
@@ -27,22 +27,23 @@ class TMOBUtils {
   async updateCurrTrailMultiplier() {
     const logPrefix = "[TMOB:updateCurrTrailMultiplier]";
     debugLog(`${logPrefix} Starting update of current trail multiplier`);
-    TelegramService.queueMsg(`🚂 Updating current trail multiplier...`);
 
-    const now = new Date();
-    this.bot.lastOptimizationAtMs = now.getTime();
-    now.setSeconds(0);
-    now.setMilliseconds(0);
-    const optimizationWindowStartDate = new Date(now.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000);
+    const startOptimizationDate = new Date();
+    const endFetchCandles = new Date();
+    TelegramService.queueMsg(`🚂 Updating current trail multiplier... at ${toIso(startOptimizationDate.getTime())}`);
+    this.bot.lastOptimizationAtMs = endFetchCandles.getTime();
+    endFetchCandles.setSeconds(0);
+    endFetchCandles.setMilliseconds(0);
+    const optimizationWindowStartDate = new Date(endFetchCandles.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000);
 
-    debugLog(`${logPrefix} optimizationWindowStartDate=${optimizationWindowStartDate.toISOString()}, now=${now.toISOString()}`);
+    debugLog(`${logPrefix} optimizationWindowStartDate=${optimizationWindowStartDate.toISOString()}, now=${endFetchCandles.toISOString()}`);
     debugLog(`${logPrefix} optimizationWindowMinutes=${this.bot.optimizationWindowMinutes}, nSignal=${this.bot.nSignal}`);
     debugLog(`${logPrefix} trailMultiplierBounds=[${this.bot.trailMultiplierBounds.min}, ${this.bot.trailMultiplierBounds.max}]`);
     debugLog(`${logPrefix} trailingAtrLength=${this.bot.trailingAtrLength}, trailConfirmBars=${this.bot.trailConfirmBars}`);
 
     debugLog(`${logPrefix} Getting candles...`);
     const candles = await withRetries(
-      () => ExchangeService.getCandles(this.bot.symbol, optimizationWindowStartDate, now, "1Min"),
+      () => ExchangeService.getCandles(this.bot.symbol, optimizationWindowStartDate, endFetchCandles, "1Min"),
       {
         label: "[TMOBUtils] getCandles",
         retries: 5,
@@ -57,7 +58,7 @@ class TMOBUtils {
       debugLog(`${logPrefix} candles[last] openTime=${candles[candles.length - 1].openTime} (${new Date(candles[candles.length - 1].openTime).toISOString()})`);
     }
 
-    const filteredCandles = candles.filter((candle) => candle.timestamp >= optimizationWindowStartDate.getTime() && candle.timestamp < now.getTime());
+    const filteredCandles = candles.filter((candle) => candle.timestamp >= optimizationWindowStartDate.getTime() && candle.timestamp < endFetchCandles.getTime());
 
 
     debugLog(`${logPrefix} filteredCandles count=${filteredCandles.length}`);
@@ -66,26 +67,32 @@ class TMOBUtils {
       debugLog(`${logPrefix} filteredCandles[last] openTime=${filteredCandles[filteredCandles.length - 1].openTime} (${new Date(filteredCandles[filteredCandles.length - 1].openTime).toISOString()})`);
     }
 
-    let bestTrailMultiplier = this.bot.trailMultiplierBounds.min;
-    let bestTotalPnL = Number.NEGATIVE_INFINITY;
-    debugLog(`${logPrefix} Starting backtest loop over trail multipliers [${this.bot.trailMultiplierBounds.min}, ${this.bot.trailMultiplierBounds.max}]`);
+    const { min: multMin, max: multMax } = this.bot.trailMultiplierBounds;
+    const step = Number.isFinite(this.bot.trailBoundStepSize) && this.bot.trailBoundStepSize > 0
+      ? this.bot.trailBoundStepSize
+      : 1;
+    const numSteps = Math.max(1, Math.floor((multMax - multMin) / step) + 1);
 
-    for (let i = this.bot.trailMultiplierBounds.min; i <= this.bot.trailMultiplierBounds.max; i++) {
-      const trailMultiplier = i;
+    let bestTrailMultiplier = multMin;
+    let bestTotalPnL = Number.NEGATIVE_INFINITY;
+    debugLog(`${logPrefix} Starting backtest loop over trail multipliers [${multMin}, ${multMax}] step=${step} (${numSteps} evaluations)`);
+
+    for (let i = 0; i < numSteps; i++) {
+      const trailMultiplier = Math.min(multMin + i * step, multMax);
       debugLog(`${logPrefix} ---- Running backtest for trailMultiplier=${trailMultiplier} ----`);
 
       const backtestResult = tmobRunBacktest({
         symbol: this.bot.symbol,
         interval: "1m",
         requestedStartTime: optimizationWindowStartDate.toISOString(),
-        requestedEndTime: now.toISOString(),
+        requestedEndTime: endFetchCandles.toISOString(),
         candles: filteredCandles,
         trailingAtrLength: this.bot.trailingAtrLength,
-        highestLookback: this.bot.trailingAtrLength,
+        highestLookback: this.bot.trailingHighestLookback,
         trailMultiplier: trailMultiplier,
         trailConfirmBars: this.bot.trailConfirmBars,
-        signalParams: TMOB_DEFAULT_SIGNAL_PARAMS,
-        tickSize: this.bot.basePrecisiion,
+        signalParams: { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal },
+        tickSize: this.bot.tickSize,
         pricePrecision: this.bot.pricePrecision,
       });
 
@@ -105,14 +112,15 @@ class TMOBUtils {
 
     this.bot.currTrailMultiplier = bestTrailMultiplier;
 
-    const finishedTs = new Date();
-    debugLog(`${logPrefix} Done. currTrailMultiplier set to ${this.bot.currTrailMultiplier}. Optimization took ${finishedTs.getTime() - now.getTime()} ms`);
-    TelegramService.queueMsg(`🚇 Updated Current Trail Multiplier: 
-      New trail multiplier: ${this.bot.currTrailMultiplier} 
-      Total pnl: ${bestTotalPnL.toFixed(3)} USDT
-      Candles used: ${filteredCandles.length}
-      Optimization duration: ${(finishedTs.getTime() - now.getTime()).toLocaleString()} ms
-      `);
+    const finishedOptimizationDate = new Date();
+
+    debugLog(`${logPrefix} Done. currTrailMultiplier set to ${this.bot.currTrailMultiplier}. Optimization took ${finishedOptimizationDate.getTime() - endFetchCandles.getTime()} ms`);
+    TelegramService.queueMsg(`🚇 Updated Current Trail Multiplier at ${toIso(finishedOptimizationDate.getTime())}:
+New trail multiplier: ${this.bot.currTrailMultiplier} 
+Total pnl: ${bestTotalPnL.toFixed(3)} USDT
+Candles used: ${filteredCandles.length}
+Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimizationDate.getTime()).toLocaleString()} ms
+`);
   }
 
   public async getExchFreeUsdtBalance(): Promise<BigNumber> {
