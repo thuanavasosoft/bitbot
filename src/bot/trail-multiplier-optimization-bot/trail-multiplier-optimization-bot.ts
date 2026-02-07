@@ -131,7 +131,7 @@ class TrailMultiplierOptimizationBot {
     this.optimizationWindowMinutes = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_OPTIMIZATION_WINDOW_MINUTES!);
     this.nSignal = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_N_SIGNAL_AND_ATR_LENGTH!);
     this.trailConfirmBars = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRAIL_CONFIRM_BARS! || 1);
-    this.trailBoundStepSize = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRAIL_BOUND_STEP_SIZE!);
+    this.trailBoundStepSize = Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRAIL_BOUND_STEP_SIZE! || 1);
     this.trailMultiplierBounds = {
       min: Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRAIL_MULTIPLIER_BOUNDS_MIN!),
       max: Number(process.env.TRAIL_MULTIPLIER_OPTIMIZATION_BOT_TRAIL_MULTIPLIER_BOUNDS_MAX!),

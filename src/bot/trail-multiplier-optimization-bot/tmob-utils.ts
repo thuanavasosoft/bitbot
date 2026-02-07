@@ -67,12 +67,18 @@ class TMOBUtils {
       debugLog(`${logPrefix} filteredCandles[last] openTime=${filteredCandles[filteredCandles.length - 1].openTime} (${new Date(filteredCandles[filteredCandles.length - 1].openTime).toISOString()})`);
     }
 
-    let bestTrailMultiplier = this.bot.trailMultiplierBounds.min;
-    let bestTotalPnL = Number.NEGATIVE_INFINITY;
-    debugLog(`${logPrefix} Starting backtest loop over trail multipliers [${this.bot.trailMultiplierBounds.min}, ${this.bot.trailMultiplierBounds.max}]`);
+    const { min: multMin, max: multMax } = this.bot.trailMultiplierBounds;
+    const step = Number.isFinite(this.bot.trailBoundStepSize) && this.bot.trailBoundStepSize > 0
+      ? this.bot.trailBoundStepSize
+      : 1;
+    const numSteps = Math.max(1, Math.floor((multMax - multMin) / step) + 1);
 
-    for (let i = this.bot.trailMultiplierBounds.min; i <= this.bot.trailMultiplierBounds.max; i++) {
-      const trailMultiplier = i;
+    let bestTrailMultiplier = multMin;
+    let bestTotalPnL = Number.NEGATIVE_INFINITY;
+    debugLog(`${logPrefix} Starting backtest loop over trail multipliers [${multMin}, ${multMax}] step=${step} (${numSteps} evaluations)`);
+
+    for (let i = 0; i < numSteps; i++) {
+      const trailMultiplier = Math.min(multMin + i * step, multMax);
       debugLog(`${logPrefix} ---- Running backtest for trailMultiplier=${trailMultiplier} ----`);
 
       const backtestResult = tmobRunBacktest({
