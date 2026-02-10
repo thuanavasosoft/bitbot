@@ -44,15 +44,15 @@ class TMOBCandleWatcher {
         } else {
           const currCandles = this.candleBuffer.toArray();
           const lastCurrCandle = currCandles[currCandles.length - 1];
-          const lastCandleCloseTimeTime = new Date(lastCurrCandle.openTime);
+          const lastCandleOpen = new Date(lastCurrCandle.openTime);
 
-          const timeDiff = now.getTime() - lastCandleCloseTimeTime.getTime();
+          const timeDiff = now.getTime() - lastCandleOpen.getTime();
           const waitTime = 60_000 - timeDiff;
           if (timeDiff < 60_000 && waitTime > 0) await new Promise(r => setTimeout(r, waitTime));
 
           // Add the new candle via ring buffer (O(1), overwrites oldest)
           const newLastCandles = await withRetries(
-            () => ExchangeService.getCandles(this.bot.symbol, lastCandleCloseTimeTime, now, "1Min"),
+            () => ExchangeService.getCandles(this.bot.symbol, new Date(lastCandleOpen.getTime() + 1000), new Date(), "1Min"),
             {
               label: "[TMOBCandleWatcher] getCandles (update)",
               retries: 5,
@@ -63,7 +63,6 @@ class TMOBCandleWatcher {
               },
             }
           );
-
           const newCandle = newLastCandles.filter((c): c is ICandleInfo => c != null && c.openTime != null).pop();
           if (newCandle) this.candleBuffer.push(newCandle);
         }
