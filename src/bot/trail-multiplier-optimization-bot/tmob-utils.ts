@@ -31,9 +31,9 @@ class TMOBUtils {
     const startOptimizationDate = new Date();
     const endFetchCandles = new Date();
     TelegramService.queueMsg(`🚂 Updating current trail multiplier... at ${toIso(startOptimizationDate.getTime())}`);
-    this.bot.lastOptimizationAtMs = endFetchCandles.getTime();
     endFetchCandles.setSeconds(0);
     endFetchCandles.setMilliseconds(0);
+    this.bot.lastOptimizationAtMs = endFetchCandles.getTime();
     const optimizationWindowStartDate = new Date(endFetchCandles.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000);
 
     debugLog(`${logPrefix} optimizationWindowStartDate=${optimizationWindowStartDate.toISOString()}, now=${endFetchCandles.toISOString()}`);

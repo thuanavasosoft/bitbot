@@ -8,7 +8,6 @@ import { TMOB_DEFAULT_SIGNAL_PARAMS } from "./tmob-utils";
 import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
-import { toIso } from "../auto-adjust-bot/candle-utils";
 
 class TMOBCandleWatcher {
   isCandleWatcherStarted: boolean = false;
@@ -26,8 +25,6 @@ class TMOBCandleWatcher {
     while (true) {
       try {
         const now = new Date();
-        console.log("this.candleBuffer: ", this.candleBuffer);
-
         if (!this.candleBuffer) {
           const rawCandles = await withRetries(
             () => ExchangeService.getCandles(this.bot.symbol, new Date(now.getTime() - 60_000 - this.bot.nSignal * 60 * 1000), now, "1Min"),
@@ -41,30 +38,17 @@ class TMOBCandleWatcher {
               },
             }
           );
-          console.log("rawCandles: ", rawCandles[rawCandles.length - 1]);
-          console.log("rawCandles[rawCandles.length - 1].openTime: ", toIso(rawCandles[rawCandles.length - 1].openTime));
-          console.log("rawCandles[rawCandles.length - 1].closeTime: ", toIso(rawCandles[rawCandles.length - 1].closeTime));
-
-
           const candles = rawCandles.filter((c): c is ICandleInfo => c != null && c.openTime != null);
           if (candles.length === 0) throw new Error("getCandles returned no valid candles");
-          console.log("candles length: ", candles.length);
-          console.log("candles[0]: ", candles[0]);
           this.candleBuffer = RingBuffer.fromArray(candles);
         } else {
           const currCandles = this.candleBuffer.toArray();
           const lastCurrCandle = currCandles[currCandles.length - 1];
-          const lastCandleCloseTimeTime = new Date(lastCurrCandle.closeTime);
+          const lastCandleCloseTimeTime = new Date(lastCurrCandle.openTime);
 
           const timeDiff = now.getTime() - lastCandleCloseTimeTime.getTime();
-          console.log("lastCandleCloseTimeTime: ", lastCandleCloseTimeTime);
-          console.log("now: ", now);
-          console.log("timeDiff: ", timeDiff);
-
           const waitTime = 60_000 - timeDiff;
-          console.log("waitTime: ", waitTime);
-
-          if (timeDiff < 60_000) await new Promise(r => setTimeout(r, waitTime));
+          if (timeDiff < 60_000 && waitTime > 0) await new Promise(r => setTimeout(r, waitTime));
 
           // Add the new candle via ring buffer (O(1), overwrites oldest)
           const newLastCandles = await withRetries(
@@ -79,15 +63,11 @@ class TMOBCandleWatcher {
               },
             }
           );
-          console.log("newLastCandles: ", newLastCandles);
 
           const newCandle = newLastCandles.filter((c): c is ICandleInfo => c != null && c.openTime != null).pop();
           if (newCandle) this.candleBuffer.push(newCandle);
         }
         const currCandles = this.candleBuffer.toArray();
-        console.log("currCandles length: ", currCandles.length);
-        console.log("currCandles[currCandles.length - 1].timestamp: ", currCandles[currCandles.length - 1].closeTime);
-        console.log("=======================================");
         const signalParams = { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal };
         const signalResult = calculateBreakoutSignal(currCandles, signalParams);
         if (signalResult.support === null && signalResult.resistance === null) continue;
@@ -161,11 +141,13 @@ class TMOBCandleWatcher {
         const trailingMsg = trailingStopRaw !== null || trailingStopBuffered !== null
           ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw.toFixed(4) : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered.toFixed(4) : "N/A"}`
           : "";
+
         const optimizationAgeMsg = this.bot.lastOptimizationAtMs > 0
           ? (() => {
-            const totalMinutes = Math.floor((Date.now() - this.bot.lastOptimizationAtMs) / 60000);
-            const hours = Math.floor(totalMinutes / 60);
-            const minutes = totalMinutes % 60;
+            const elapsedMs = now.getTime() - this.bot.lastOptimizationAtMs;
+            const totalSeconds = Math.floor(elapsedMs / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
             return `\nLast optimized: ${hours}h${minutes}m`;
           })()
           : `\nLast optimized: N/A`;

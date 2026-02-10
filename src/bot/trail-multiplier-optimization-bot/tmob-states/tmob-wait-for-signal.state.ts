@@ -9,7 +9,7 @@ import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 class TMOBWaitForSignalState implements TMOBState {
   private priceListenerRemover?: () => void;
 
-  constructor(private bot: TrailMultiplierOptimizationBot) {}
+  constructor(private bot: TrailMultiplierOptimizationBot) { }
 
   async onEnter() {
     TelegramService.queueMsg(`🔜 Waiting for entry signal - monitoring price for breakout...`);
