@@ -52,7 +52,7 @@ class TMOBCandleWatcher {
 
           // Add the new candle via ring buffer (O(1), overwrites oldest)
           const newLastCandles = await withRetries(
-            () => ExchangeService.getCandles(this.bot.symbol, new Date(lastCandleOpen.getTime() + 1000), new Date(), "1Min"),
+            () => ExchangeService.getCandles(this.bot.symbol, new Date(lastCandleOpen.getTime()), new Date(), "1Min"),
             {
               label: "[TMOBCandleWatcher] getCandles (update)",
               retries: 5,
