@@ -891,7 +891,8 @@ class KrakenExchange implements IExchangeInstance {
         currency: order.feeCurrency ?? "USD",
         amt: Number(order.fee ?? 0),
       },
-      createdTs: new Date(order.receivedTime ?? order.timestamp ?? Date.now()).getTime(),
+      createdTs: new Date(order.createTime ?? order.receivedTime ?? order.timestamp ?? Date.now()).getTime(),
+      updateTs: new Date(order.updateTime ?? order.lastUpdateTime ?? order.timestamp ?? Date.now()).getTime(),
     };
   }
 

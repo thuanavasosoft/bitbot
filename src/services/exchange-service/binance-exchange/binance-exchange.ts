@@ -53,6 +53,7 @@ class BinanceExchange implements IExchangeInstance {
   private _client: USDMClient;
   private _wsClient: WebsocketClient;
   private _symbols: string[];
+  private _isTestnet: boolean;
 
   private _prices: Record<string, number> = {};
   private _subscribedSymbols: Record<string, boolean> = {};
@@ -71,10 +72,12 @@ class BinanceExchange implements IExchangeInstance {
 
   constructor(apiKey: string, secretKey: string, symbols: string[]) {
     this._symbols = symbols;
+    this._isTestnet = process.env.IS_TESTNET === "true";
 
     this._client = new USDMClient({
-      api_key: apiKey,
-      api_secret: secretKey,
+      api_key: this._isTestnet ? process.env.TESTNET_API_KEY : apiKey,
+      api_secret: this._isTestnet ? process.env.TESTNET_API_SECRET : secretKey,
+      testnet: this._isTestnet,
     });
 
     this._wsClient = new WebsocketClient({
@@ -82,6 +85,10 @@ class BinanceExchange implements IExchangeInstance {
       api_secret: secretKey,
       beautify: true,
     });
+
+    if (this._isTestnet) {
+      console.log("[BinanceExchange] Using Binance Futures TESTNET (IS_TESTNET=true)");
+    }
 
     this._mapWsEvents();
   }
@@ -106,9 +113,10 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   async prepare(): Promise<void> {
+    const wsMarket = this._isTestnet ? "usdmTestnet" : "usdm";
     await Promise.all([
       ...this._symbols.map((symbol) => this._subscribeMarkPrice(symbol)),
-      this._wsClient.subscribeUsdFuturesUserDataStream("usdm"),
+      this._wsClient.subscribeUsdFuturesUserDataStream(wsMarket),
     ]);
   }
 
@@ -574,7 +582,8 @@ class BinanceExchange implements IExchangeInstance {
         currency: order.commissionAsset || "USDT",
         amt: Number(order.commission || 0),
       },
-      createdTs: order.updateTime || order.time || Date.now(),
+      createdTs: order.createTime || order.updateTime || order.time || Date.now(),
+      updateTs: order.updateTime || order.time || Date.now(),
     };
   }
 

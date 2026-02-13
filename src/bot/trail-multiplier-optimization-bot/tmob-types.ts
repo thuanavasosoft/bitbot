@@ -1,6 +1,11 @@
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import { Side } from "../auto-adjust-bot/types";
 
+export interface TMOBState {
+  onEnter: () => Promise<void>;
+  onExit: () => Promise<void>;
+}
+
 export type TMOBRefTracePoint = {
   i: number;
   tsMs: number;

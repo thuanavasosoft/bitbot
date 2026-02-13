@@ -30,6 +30,7 @@ export interface IOrder {
   execValue: number;
   fee: IFee;
   createdTs: number;
+  updateTs: number;
 }
 
 export interface ITrade {

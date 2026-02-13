@@ -3,7 +3,7 @@ import TrailMultiplierOptimizationBot, { TMOBState } from "../trail-multiplier-o
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import TelegramService from "@/services/telegram.service";
-import { toIso, toIsoMinutePlusOneSecond } from "@/bot/auto-adjust-bot/candle-utils";
+import { toIso } from "@/bot/auto-adjust-bot/candle-utils";
 
 class TMOBStartingState implements TMOBState {
   constructor(private bot: TrailMultiplierOptimizationBot) { }
@@ -58,12 +58,13 @@ class TMOBStartingState implements TMOBState {
         this.bot.trailingStopMultiplier = this.bot.currTrailMultiplier;
 
         const intervalMs = this.bot.updateIntervalMinutes * 60_000;
-        const nextOptimizationMs = this.bot.lastOptimizationAtMs + intervalMs;
+        // This is will be 1 second more of the minute mark handled on tmob optimization loop
+        const nextOptimizationMs = this.bot.lastOptimizationAtMs + intervalMs + 1000;
         TelegramService.queueMsg(
           `🧠 Initial optimization complete\n` +
           `Trailing ATR Length: ${this.bot.trailingAtrLength} (fixed)\n` +
           `Trailing Multiplier: ${this.bot.trailingStopMultiplier}\n` +
-          `Next optimization: ${toIsoMinutePlusOneSecond(nextOptimizationMs)}`
+          `Next optimization: ${toIso(nextOptimizationMs)}`
         );
       }
     }
