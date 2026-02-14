@@ -1,50 +1,52 @@
 {
-  "name": "bitbot",
-  "version": "1.0.0",
-  "description": "This bot will make each of us have Bugatti",
-  "module": "index.ts",
-  "type": "module",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "npm run build && npm run start:prod",
-    "build": "rm -rf dist && npx tsc && npx tsc-alias -p tsconfig.json && node fix-imports.js",
-    "start:prod": "node dist/index.js",
-    "drizzle-db-pull": "drizzle-kit introspect",
-    "test-kraken": "npm run build && node dist/src/scripts/test-kraken.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/thuanavasosoft/bitbot.git"
-  },
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/thuanavasosoft/bitbot/issues"
-  },
-  "homepage": "https://github.com/thuanavasosoft/bitbot#readme",
-  "devDependencies": {
-    "@types/bignumber.js": "^4.0.3",
-    "@types/moment": "^2.11.29",
-    "@types/node": "^24.7.2",
-    "@types/ws": "^8.18.1",
-    "ts-node": "^10.9.2",
-    "tsc-alias": "^1.8.16",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "bignumber.js": "^9.3.1",
-    "binance": "^3.1.5",
-    "canvas": "^3.1.0",
-    "chart.js": "^4.4.9",
-    "chartjs-plugin-annotation": "^3.1.0",
-    "dotenv": "^17.2.3",
-    "drizzle-kit": "^0.31.5",
-    "drizzle-orm": "^0.44.6",
-    "moment": "^2.30.1",
-    "mysql2": "^3.15.2",
-    "telegraf": "^4.16.3",
-    "tsconfig-paths": "^4.2.0",
-    "ws": "^8.18.3"
-  },
-  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+	"name": "bitbot",
+	"version": "1.0.0",
+	"description": "This bot will make each of us have Bugatti",
+	"module": "index.ts",
+	"type": "module",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"start": "npm run build && npm run start:prod",
+		"build": "rm -rf dist && npx tsc && npx tsc-alias -p tsconfig.json && node fix-imports.js",
+		"start:prod": "node dist/index.js",
+		"db:init": "npx tsx db/dbInit.ts",
+		"drizzle-db-pull": "drizzle-kit introspect",
+		"test-kraken": "npm run build && node dist/src/scripts/test-kraken.js"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/thuanavasosoft/bitbot.git"
+	},
+	"author": "",
+	"license": "ISC",
+	"bugs": {
+		"url": "https://github.com/thuanavasosoft/bitbot/issues"
+	},
+	"homepage": "https://github.com/thuanavasosoft/bitbot#readme",
+	"devDependencies": {
+		"@types/bignumber.js": "^4.0.3",
+		"@types/moment": "^2.11.29",
+		"@types/node": "^24.7.2",
+		"@types/ws": "^8.18.1",
+		"ts-node": "^10.9.2",
+		"tsc-alias": "^1.8.16",
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"bignumber.js": "^9.3.1",
+		"binance": "^3.1.5",
+		"canvas": "^3.1.0",
+		"chart.js": "^4.4.9",
+		"chartjs-plugin-annotation": "^3.1.0",
+		"dotenv": "^17.2.3",
+		"drizzle-kit": "^0.31.5",
+		"drizzle-orm": "^0.44.6",
+		"moment": "^2.30.1",
+		"mysql2": "^3.15.2",
+		"pg": "^8.18.0",
+		"telegraf": "^4.16.3",
+		"tsconfig-paths": "^4.2.0",
+		"ws": "^8.18.3"
+	},
+	"packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

@@ -1,17 +1,15 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import TelegramService from "@/services/telegram.service";
 import { generateImageOfCandlesWithSupportResistance } from "@/utils/image-generator.util";
-import { RingBuffer } from "@/utils/ring-buffer.util";
 import { withRetries, isTransientError } from "../breakout-bot/bb-retry";
 import { calculateBreakoutSignal } from "./tmob-backtest";
 import { TMOB_DEFAULT_SIGNAL_PARAMS } from "./tmob-utils";
 import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
-import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
+import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 
 class TMOBCandleWatcher {
   isCandleWatcherStarted: boolean = false;
-  private candleBuffer: RingBuffer<ICandleInfo> | null = null;
 
   constructor(private bot: TrailMultiplierOptimizationBot) { }
 
@@ -25,51 +23,44 @@ class TMOBCandleWatcher {
     while (true) {
       try {
         const now = new Date();
-        if (!this.candleBuffer) {
-          const rawCandles = await withRetries(
-            () => ExchangeService.getCandles(this.bot.symbol, new Date(now.getTime() - 60_000 - this.bot.nSignal * 60 * 1000), now, "1Min"),
-            {
-              label: "[TMOBCandleWatcher] getCandles (initial)",
-              retries: 5,
-              minDelayMs: 5000,
-              isTransientError,
-              onRetry: ({ attempt, delayMs, error, label }) => {
-                console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
-              },
-            }
-          );
-          const candles = rawCandles.filter((c): c is ICandleInfo => c != null && c.openTime != null);
-          if (candles.length === 0) throw new Error("getCandles returned no valid candles");
-          this.candleBuffer = RingBuffer.fromArray(candles);
-        } else {
-          const currCandles = this.candleBuffer.toArray();
-          const lastCurrCandle = currCandles[currCandles.length - 1];
-          const lastCandleOpen = new Date(lastCurrCandle.openTime);
+        await this.bot.tmobCandles.ensurePopulated();
 
-          const timeDiff = now.getTime() - lastCandleOpen.getTime();
-          const waitTime = 60_000 - timeDiff;
-          if (timeDiff < 60_000 && waitTime > 0) await new Promise(r => setTimeout(r, waitTime));
-
-          // Add the new candle via ring buffer (O(1), overwrites oldest)
-          const newLastCandles = await withRetries(
-            () => ExchangeService.getCandles(this.bot.symbol, new Date(lastCandleOpen.getTime()), new Date(), "1Min"),
-            {
-              label: "[TMOBCandleWatcher] getCandles (update)",
-              retries: 5,
-              minDelayMs: 5000,
-              isTransientError,
-              onRetry: ({ attempt, delayMs, error, label }) => {
-                console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
-              },
-            }
-          );
-          const newCandle = newLastCandles.filter((c): c is ICandleInfo => c != null && c.openTime != null).pop();
-          if (newCandle) this.candleBuffer.push(newCandle);
+        now.setSeconds(0);
+        now.setMilliseconds(0);
+        const currCandles = await this.bot.tmobCandles.getCandles(new Date(now.getTime() - (this.bot.nSignal + (1)) * 60 * 1000), now);
+        if (currCandles.length <= this.bot.nSignal) {
+          console.log("Not enough candles to calculate signal, sometimes the exchange not returning correct candles like comment on the next line of this console log line:");
+          /**
+           * Sometimes this is happened
+           * ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+           *  [BINANCE] serverTime:  2026-02-13T12:58:00.134Z
+           *  [BINANCE] candles fetchStart:  2026-02-13T12:55:00.000Z
+           *  [BINANCE] candles endTime:  2026-02-13T12:58:00.002Z
+           *  [BINANCE] fetched candles:  2
+           *  [BINANCE] fetched candles[0].openTime:  2026-02-13T12:55:00.000Z
+           *  [BINANCE] fetched candles[last].openTime:  2026-02-13T12:56:00.000Z // 12:57 not returned by binance
+           * ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+           */
+          console.log("Hacky fix is using curr mark price as candle, this is extremely rarely happened, but it's a valid fix for now, next minute will be fixed");
+          const currMarkPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+          const hackCandle: ICandleInfo = {
+            timestamp: now.getTime(),
+            openTime: now.getTime(),
+            closeTime: now.getTime(),
+            openPrice: currMarkPrice,
+            highPrice: currMarkPrice,
+            lowPrice: currMarkPrice,
+            closePrice: currMarkPrice,
+            volume: 0,
+          }
+          currCandles.push(hackCandle);
         }
-        const currCandles = this.candleBuffer.toArray();
+
         const signalParams = { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal };
         const signalResult = calculateBreakoutSignal(currCandles, signalParams);
-        if (signalResult.support === null && signalResult.resistance === null) continue;
+        if (signalResult.support === null && signalResult.resistance === null) {
+          process.exit(0);
+        }
 
         const rawSupport = signalResult.support;
         const rawResistance = signalResult.resistance;

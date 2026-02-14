@@ -5,6 +5,9 @@ import { getPositionDetailMsg } from "@/utils/strings.util";
 import TrailMultiplierOptimizationBot, { TMOBState } from "../trail-multiplier-optimization-bot";
 import BigNumber from "bignumber.js";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
+import { persistTMOBAction } from "../tmob-persistence";
+import { TMOB_ACTION_TYPE, orderToSnapshot, positionToSnapshot } from "../tmob-action-types";
+import { getTMOBBotStateSnapshot } from "../trail-multiplier-optimization-bot";
 
 class TMOBWaitForSignalState implements TMOBState {
   private priceListenerRemover?: () => void;
@@ -12,6 +15,11 @@ class TMOBWaitForSignalState implements TMOBState {
   constructor(private bot: TrailMultiplierOptimizationBot) { }
 
   async onEnter() {
+    await persistTMOBAction(this.bot.runId, TMOB_ACTION_TYPE.WAITING_FOR_SIGNAL, {
+      symbol: this.bot.symbol,
+      longTrigger: this.bot.longTrigger,
+      shortTrigger: this.bot.shortTrigger,
+    }, getTMOBBotStateSnapshot(this.bot));
     TelegramService.queueMsg(`🔜 Waiting for entry signal - monitoring price for breakout...`);
     this._watchForBreakout();
   }
@@ -68,6 +76,11 @@ class TMOBWaitForSignalState implements TMOBState {
       TelegramService.queueMsg(
         `⚠️ Entry price listener error: ${error instanceof Error ? error.message : String(error)}`
       );
+      await persistTMOBAction(this.bot.runId, TMOB_ACTION_TYPE.ERROR, {
+        message: error instanceof Error ? error.message : String(error),
+        context: "TMOBWaitForSignalState._handlePriceUpdate",
+        stack: error instanceof Error ? error.stack : undefined,
+      }, getTMOBBotStateSnapshot(this.bot));
     }
   }
 
@@ -124,6 +137,15 @@ ${getPositionDetailMsg(position)}
 Time Diff: ${timeDiffMs} ms
 Price Diff(pips): ${icon} ${priceDiff}
 `);
+
+    const openOrder = await ExchangeService.getOrderDetail(this.bot.symbol, this.bot.lastOpenClientOrderId ?? "");
+    await persistTMOBAction(this.bot.runId, TMOB_ACTION_TYPE.ENTERED_POSITION, {
+      order: orderToSnapshot(openOrder ?? undefined),
+      position: positionToSnapshot(position),
+      entryWsPrice: this.bot.entryWsPrice
+        ? { price: this.bot.entryWsPrice.price, time: this.bot.entryWsPrice.time.toISOString() }
+        : undefined,
+    }, getTMOBBotStateSnapshot(this.bot));
   }
 
   async onExit() {

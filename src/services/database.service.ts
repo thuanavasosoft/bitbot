@@ -1,33 +1,26 @@
-import * as schema from "db/drizzle/schema"
-
-import { MySql2Database, drizzle } from "drizzle-orm/mysql2";
-import mysql from "mysql2/promise";
+import * as schema from "db/drizzle/schema";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 
 class DatabaseService {
-  static db: MySql2Database<typeof schema>;
-  static pool: mysql.Pool;
+  static db: ReturnType<typeof drizzle<typeof schema>>;
+  static pool: Pool;
 
-  static async configure(isMigration?: boolean) {
+  static async configure() {
     try {
-      this.pool = mysql.createPool({
-        host: process.env.DATABASE_HOST,
-        user: process.env.DATABASE_USER,
-        password: process.env.DATABASE_PASSWORD,
-        port: Number(process.env.DATABASE_PORT),
-        ...(isMigration ? {} : { database: process.env.DATABASE_NAME }),
-        waitForConnections: true, // Queue connection requests when no connections are available
-        connectionLimit: 10, // Allows up to 10 simultaneous connections
-        queueLimit: 0, // Unlimited queue size
+      const connectionString = process.env.DATABASE_URL;
+      if (!connectionString) {
+        throw new Error("DATABASE_URL is required");
+      }
+
+      this.pool = new Pool({
+        connectionString,
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
       });
 
-      // Create a temporary connection to execute the database creation and selection
-      const tempConnection = await this.pool.getConnection();
-      await tempConnection.query(`CREATE DATABASE IF NOT EXISTS \`${process.env.DATABASE_NAME}\``);
-      await tempConnection.query(`USE \`${process.env.DATABASE_NAME}\``);
-      tempConnection.release();
-
-      // Initialize drizzle with the selected database
-      this.db = drizzle(this.pool, { schema, mode: "default" });
+      this.db = drizzle(this.pool, { schema });
     } catch (error) {
       console.error("Error on configuring database: ", error);
       throw error;

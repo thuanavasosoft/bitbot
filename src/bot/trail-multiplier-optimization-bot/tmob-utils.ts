@@ -31,16 +31,8 @@ class TMOBUtils {
     this.bot.lastOptimizationAtMs = endFetchCandles.getTime();
     const optimizationWindowStartDate = new Date(endFetchCandles.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000);
 
-    const candles = await withRetries(
-      () => ExchangeService.getCandles(this.bot.symbol, optimizationWindowStartDate, endFetchCandles, "1Min"),
-      {
-        label: "[TMOBUtils] getCandles",
-        retries: 5,
-        minDelayMs: 5000,
-        isTransientError,
-      }
-    );
-    const filteredCandles = candles.filter((candle) => candle.timestamp >= optimizationWindowStartDate.getTime() && candle.timestamp < endFetchCandles.getTime());
+    await this.bot.tmobCandles.ensurePopulated();
+    const filteredCandles = await this.bot.tmobCandles.getCandles(optimizationWindowStartDate, endFetchCandles);
 
     const { min: multMin, max: multMax } = this.bot.trailMultiplierBounds;
     const step = Number.isFinite(this.bot.trailBoundStepSize) && this.bot.trailBoundStepSize > 0

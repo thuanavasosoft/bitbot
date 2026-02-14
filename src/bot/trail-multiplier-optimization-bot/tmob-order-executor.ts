@@ -1,8 +1,9 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { IOrder, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import TMOBOrderWatcher from "./tmob-order-watcher";
+import TelegramService from "@/services/telegram.service";
 
 export interface ITMOBOrderBot {
   symbol: string;
@@ -70,6 +71,23 @@ class TMOBOrderExecutor {
     }
     const baseQty = new BigNumber(quoteAmt).div(price).toNumber();
     return this.sanitizeBaseQty(baseQty);
+  }
+
+  private formatOrderDetailMsg(order: IOrder, label: string): string {
+    const created = new Date(order.createdTs).toISOString();
+    const updated = new Date(order.updateTs).toISOString();
+    const feeStr = order.fee ? `${order.fee.currency} ${order.fee.amt}` : "—";
+    return (
+      `📋 ${label}\n` +
+      `Order ID: ${order.id}\n` +
+      `Client Order ID: ${order.clientOrderId}\n` +
+      `Symbol: ${order.symbol} | Side: ${order.side.toUpperCase()} | Type: ${order.type}\n` +
+      `Status: ${order.status}\n` +
+      `Avg Price: ${order.avgPrice} | Qty: ${order.orderQuantity} | Exec Qty: ${order.execQty}\n` +
+      `Exec Value: ${order.execValue} | Fee: ${feeStr}\n` +
+      `Created: ${created}\n` +
+      `Updated: ${updated}`
+    );
   }
 
   async ensureSymbolInfoLoaded(): Promise<void> {
@@ -218,6 +236,12 @@ class TMOBOrderExecutor {
       const fillPrice = fillUpdate?.executionPrice ?? openedPosition.avgPrice;
       const fillTime = fillUpdate?.updateTime ? new Date(fillUpdate.updateTime) : new Date();
       bot.entryWsPrice = { price: fillPrice, time: fillTime };
+
+      const openOrderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
+      if (openOrderDetail) {
+        TelegramService.queueMsg(this.formatOrderDetailMsg(openOrderDetail, "OPEN ORDER"));
+      }
+
       return openedPosition;
     } catch (error) {
       orderHandle?.cancel();
@@ -332,6 +356,12 @@ class TMOBOrderExecutor {
       const resolvePrice = fillUpdate?.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice;
       const resolveTime = fillUpdate?.updateTime ? new Date(fillUpdate.updateTime) : new Date();
       bot.resolveWsPrice = { price: resolvePrice, time: resolveTime };
+
+      const closeOrderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
+      if (closeOrderDetail) {
+        TelegramService.queueMsg(this.formatOrderDetailMsg(closeOrderDetail, "CLOSE ORDER"));
+      }
+
       return closedPosition;
     } catch (error) {
       orderHandle?.cancel();
