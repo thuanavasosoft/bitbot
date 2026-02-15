@@ -3,6 +3,7 @@ import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot"
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { withRetries, isTransientError } from "../breakout-bot/bb-retry";
+import { toIso } from "../auto-adjust-bot/candle-utils";
 
 /**
  * Async mutex to serialize access to the shared candle buffer and prevent races
@@ -104,6 +105,9 @@ class TMOBCandles {
       const candles = rawCandles.filter(
         (c): c is ICandleInfo => c != null && c.openTime != null
       );
+      console.log("candles.length:", candles.length);
+      console.log("candles[0].openTime:", toIso(candles[0].openTime));
+      console.log("candles[last].openTime:", toIso(candles[candles.length - 1].openTime));
 
       if (isRefresh) {
         const existingLastOpenTime = lastOpenTime!;

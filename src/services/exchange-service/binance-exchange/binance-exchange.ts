@@ -31,7 +31,6 @@ import type {
 } from "../exchange-type";
 import { generateRandomString } from "@/utils/strings.util";
 import type { IExchangeInstance } from "../exchange-service";
-import { toIso } from "@/bot/auto-adjust-bot/candle-utils";
 
 type TPriceListener = (price: number) => void;
 type TPriceTimestampListener = (price: number, timestamp: number) => void;
@@ -160,7 +159,6 @@ class BinanceExchange implements IExchangeInstance {
        */
       const maxAttempts = 10;
       for (let i = 0; i < maxAttempts; i++) {
-        const serverTime = await this._client.getServerTime();
         if (i >= maxAttempts - 10) {
           fetchStart = fetchStart - (100 * 60 * 1000);
         }
@@ -208,10 +206,10 @@ class BinanceExchange implements IExchangeInstance {
         // If last mapped chunk reaches the minute boundary (0s 0ms) of endTime, break the loop
         const endTimeMinuteBoundary = Math.floor(endTime / intervalMs) * intervalMs;
         if (!!lastChunk && lastChunk.timestamp + intervalMs >= endTimeMinuteBoundary) break;
-        console.log("Server time: ", toIso(serverTime));
-        console.log("Start time: ", toIso(fetchStart));
-        console.log("End time: ", toIso(endTime));
-        console.log(`[BINANCE] (${i}/${maxAttempts}) Waiting for 1 second because last chunk is not the exact minute ${lastChunk ? toIso(lastChunk?.timestamp) : null} or 1 minute before endTime: ${toIso(endTime)}...`);
+        // console.log("Server time: ", toIso(serverTime));
+        // console.log("Start time: ", toIso(fetchStart));
+        // console.log("End time: ", toIso(endTime));
+        // console.log(`[BINANCE] (${i}/${maxAttempts}) Waiting for 1 second because last chunk is not the exact minute ${lastChunk ? toIso(lastChunk?.timestamp) : null} or 1 minute before endTime: ${toIso(endTime)}...`);
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
 

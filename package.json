@@ -27,6 +27,7 @@
 		"@types/bignumber.js": "^4.0.3",
 		"@types/moment": "^2.11.29",
 		"@types/node": "^24.7.2",
+		"@types/pg": "^8.16.0",
 		"@types/ws": "^8.18.1",
 		"ts-node": "^10.9.2",
 		"tsc-alias": "^1.8.16",

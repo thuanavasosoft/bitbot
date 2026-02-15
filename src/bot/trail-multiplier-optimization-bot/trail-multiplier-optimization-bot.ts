@@ -15,6 +15,7 @@ import TelegramService from "@/services/telegram.service";
 import BigNumber from "bignumber.js";
 import { TMOBState } from "./tmob-types";
 import { randomUUID } from "crypto";
+import { TMOBBotStateSnapshot } from "./tmob-action-types";
 
 export type { TMOBState } from "./tmob-types";
 
