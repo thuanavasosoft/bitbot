@@ -9,14 +9,18 @@ import TMOBOptimizationLoop from "./tmob-optimization-loop";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
 import TMOBCandleWatcher from "./tmob-candle-watcher";
+import TMOBCandles from "./tmob-candles";
 import TMOBOrderWatcher from "./tmob-order-watcher";
 import TelegramService from "@/services/telegram.service";
 import BigNumber from "bignumber.js";
 import { TMOBState } from "./tmob-types";
+import { randomUUID } from "crypto";
+import { TMOBBotStateSnapshot } from "./tmob-action-types";
 
 export type { TMOBState } from "./tmob-types";
 
 class TrailMultiplierOptimizationBot {
+  runId: string;
   runStartTs?: Date;
 
   symbol: string;
@@ -96,6 +100,7 @@ class TrailMultiplierOptimizationBot {
   }> = [];
 
   tmobCandleWatcher: TMOBCandleWatcher;
+  tmobCandles: TMOBCandles;
   tmobUtils: TMOBUtils;
   telegramHandler: TMOBTelegramHandler;
   orderExecutor: TMOBOrderExecutor;
@@ -108,6 +113,7 @@ class TrailMultiplierOptimizationBot {
 
   constructor() {
     console.log("INITIATING TRAIL MULTIPLIER OPTIMIZATION BOT");
+    this.runId = randomUUID();
 
     this.symbol = process.env.SYMBOL!;
     this.leverage = Number(process.env.LEVERAGE!);
@@ -131,6 +137,7 @@ class TrailMultiplierOptimizationBot {
     });
 
     this.tmobUtils = new TMOBUtils(this);
+    this.tmobCandles = new TMOBCandles(this);
     this.tmobCandleWatcher = new TMOBCandleWatcher(this);
     this.telegramHandler = new TMOBTelegramHandler(this);
     this.orderExecutor = new TMOBOrderExecutor(this);
@@ -168,7 +175,11 @@ class TrailMultiplierOptimizationBot {
       await this.currentState.onEnter();
     });
 
-    await this.currentState.onEnter();
+    try {
+      await this.currentState.onEnter();
+    } catch (error) {
+      throw error;
+    }
   }
 
   async loadSymbolInfo() {
@@ -355,6 +366,35 @@ class TrailMultiplierOptimizationBot {
       this.botCloseOrderIds.delete(clientOrderId);
     }
   }
+}
+
+/**
+ * Builds a serializable snapshot of the current bot state for persistence.
+ * Used so each persisted action has the exact bot state at that moment.
+ */
+export function getTMOBBotStateSnapshot(bot: TrailMultiplierOptimizationBot): TMOBBotStateSnapshot {
+  const currentStateName = bot.currentState?.constructor?.name ?? "Unknown";
+  return {
+    currentState: currentStateName,
+    runId: bot.runId,
+    runStartTs: bot.runStartTs?.toISOString(),
+    symbol: bot.symbol,
+    leverage: bot.leverage,
+    margin: bot.margin,
+    startQuoteBalance: bot.startQuoteBalance,
+    currQuoteBalance: bot.currQuoteBalance,
+    totalActualCalculatedProfit: bot.totalActualCalculatedProfit,
+    numberOfTrades: bot.numberOfTrades,
+    trailingStopMultiplier: bot.trailingStopMultiplier,
+    currTrailMultiplier: bot.currTrailMultiplier,
+    longTrigger: bot.longTrigger,
+    shortTrigger: bot.shortTrigger,
+    lastEntryTime: bot.lastEntryTime,
+    lastExitTime: bot.lastExitTime,
+    currActivePositionId: bot.currActivePosition?.id,
+    hasEntryWsPrice: !!bot.entryWsPrice,
+    hasResolveWsPrice: !!bot.resolveWsPrice,
+  };
 }
 
 export default TrailMultiplierOptimizationBot;

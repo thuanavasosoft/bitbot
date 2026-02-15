@@ -145,41 +145,73 @@ class BinanceExchange implements IExchangeInstance {
     const candles: ICandleInfo[] = [];
 
     while (fetchStart < endTime) {
-      const klines = (await this._client.getKlines({
-        symbol: normalizedSymbol,
-        interval,
-        startTime: fetchStart,
-        endTime,
-        limit,
-      })) as Kline[];
-
-      if (!klines.length) break;
-
-      const mappedChunk = klines.map(([openTime, openPrice, highPrice, lowPrice, closePrice, volume, closeTime]) => ({
-        timestamp: openTime,
-        openTime: openTime,
-        closeTime: closeTime,
-        openPrice: Number(openPrice),
-        highPrice: Number(highPrice),
-        lowPrice: Number(lowPrice),
-        closePrice: Number(closePrice),
-        volume: Number(volume),
-      }));
-
-      let chunkStartIdx = 0;
-      if (candles.length > 0) {
-        const lastTs = candles[candles.length - 1].timestamp;
-        while (chunkStartIdx < mappedChunk.length && mappedChunk[chunkStartIdx].timestamp <= lastTs) {
-          chunkStartIdx++;
+      let klines: Kline[] = [];
+      /**
+       * Sometimes this is happened
+       * ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+       *  [BINANCE] serverTime:  2026-02-13T12:58:00.134Z
+       *  [BINANCE] candles fetchStart:  2026-02-13T12:55:00.000Z
+       *  [BINANCE] candles endTime:  2026-02-13T12:58:00.002Z
+       *  [BINANCE] fetched candles:  2
+       *  [BINANCE] fetched candles[0].openTime:  2026-02-13T12:55:00.000Z
+       *  [BINANCE] fetched candles[last].openTime:  2026-02-13T12:56:00.000Z // 12:57 not returned by binance
+       * ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+       */
+      const maxAttempts = 10;
+      for (let i = 0; i < maxAttempts; i++) {
+        if (i >= maxAttempts - 10) {
+          fetchStart = fetchStart - (100 * 60 * 1000);
         }
-      }
+        klines = (await this._client.getKlines({
+          symbol: normalizedSymbol,
+          interval,
+          startTime: fetchStart,
+          endTime,
+          limit,
+        })) as Kline[];
 
-      if (chunkStartIdx < mappedChunk.length) {
-        candles.push(...mappedChunk.slice(chunkStartIdx));
-      }
+        let lastChunk: ICandleInfo | undefined;
+        if (!!klines.length) {
+          const mappedChunk = klines.map(([openTime, openPrice, highPrice, lowPrice, closePrice, volume, closeTime]) => ({
+            timestamp: openTime,
+            openTime: openTime,
+            closeTime: closeTime,
+            openPrice: Number(openPrice),
+            highPrice: Number(highPrice),
+            lowPrice: Number(lowPrice),
+            closePrice: Number(closePrice),
+            volume: Number(volume),
+          }));
 
-      const lastChunk = mappedChunk[mappedChunk.length - 1];
-      fetchStart = lastChunk.timestamp + intervalMs;
+          let chunkStartIdx = 0;
+          if (candles.length > 0) {
+            const lastTs = candles[candles.length - 1].timestamp;
+            while (chunkStartIdx < mappedChunk.length && mappedChunk[chunkStartIdx].timestamp <= lastTs) {
+              chunkStartIdx++;
+            }
+          }
+
+          if (chunkStartIdx < mappedChunk.length) {
+            const existingOpenTimes = new Set(candles.map((c) => c.openTime));
+            const newCandles = mappedChunk
+              .slice(chunkStartIdx)
+              .filter((c) => !existingOpenTimes.has(c.openTime));
+            candles.push(...newCandles);
+          }
+
+          lastChunk = mappedChunk[mappedChunk.length - 1];
+          fetchStart = lastChunk.timestamp + intervalMs;
+        }
+
+        // If last mapped chunk reaches the minute boundary (0s 0ms) of endTime, break the loop
+        const endTimeMinuteBoundary = Math.floor(endTime / intervalMs) * intervalMs;
+        if (!!lastChunk && lastChunk.timestamp + intervalMs >= endTimeMinuteBoundary) break;
+        // console.log("Server time: ", toIso(serverTime));
+        // console.log("Start time: ", toIso(fetchStart));
+        // console.log("End time: ", toIso(endTime));
+        // console.log(`[BINANCE] (${i}/${maxAttempts}) Waiting for 1 second because last chunk is not the exact minute ${lastChunk ? toIso(lastChunk?.timestamp) : null} or 1 minute before endTime: ${toIso(endTime)}...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
 
       if (klines.length < limit) break;
     }

@@ -2,7 +2,6 @@ import dotenv from 'dotenv';
 import TelegramService from "@/services/telegram.service";
 import BudgetingBot from '@/bot/budgeting-bot/budgeting-bot';
 import ExchangeService from '@/services/exchange-service/exchange-service';
-// import DatabaseService from '@/services/database.service';
 import ComboBot from '@/bot/combo-bot/combo-bot';
 import BreakoutBot from '@/bot/breakout-bot/breakout-bot';
 import AutoAdjustBot from '@/bot/auto-adjust-bot/auto-adjust-bot';
@@ -13,7 +12,6 @@ async function runProgram() {
     dotenv.config();
 
     await TelegramService.initialize();
-    // await DatabaseService.configure();
 
     const symbols = process.env.SYMBOLS?.split(",") || []
     const symbol = process.env.SYMBOL;

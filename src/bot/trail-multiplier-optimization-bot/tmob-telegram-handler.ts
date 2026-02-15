@@ -1,61 +1,15 @@
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IPosition } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import { FeeAwarePnLOptions, formatFeeAwarePnLLine, getPositionDetailMsg } from "@/utils/strings.util";
 import { getRunDuration } from "@/utils/maths.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
-import { TMOBState } from "./tmob-types";
 import { toIso } from "../auto-adjust-bot/candle-utils";
-
-export interface ITMOBTelegramBot {
-  symbol: string;
-  leverage: number;
-  margin: number;
-  startQuoteBalance?: string;
-  currQuoteBalance?: string;
-  totalActualCalculatedProfit: number;
-  slippageAccumulation: number;
-  numberOfTrades: number;
-  triggerBufferPercentage: number;
-  trailConfirmBars: number;
-  optimizationWindowMinutes: number;
-  updateIntervalMinutes: number;
-  trailingAtrLength: number;
-  currTrailMultiplier?: number;
-  lastOptimizationAtMs: number;
-  runStartTs?: Date;
-  currentState: TMOBState;
-  startingState: TMOBState;
-  waitForSignalState: TMOBState;
-  waitForResolveState: TMOBState;
-  currActivePosition?: IPosition;
-  getLastTradeMetrics(): {
-    closedPositionId?: number;
-    grossPnl?: number;
-    balanceDelta?: number;
-    feeEstimate?: number;
-    netPnl?: number;
-  };
-  pnlHistory: Array<{
-    timestamp: string;
-    timestampMs: number;
-    side: "long" | "short";
-    totalPnL: number;
-    entryTimestamp: string | null;
-    entryTimestampMs: number | null;
-    entryFillPrice: number | null;
-    exitTimestamp: string;
-    exitTimestampMs: number;
-    exitFillPrice: number;
-    tradePnL: number;
-    exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
-  }>;
-}
+import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
 
 class TMOBTelegramHandler {
-  constructor(private bot: ITMOBTelegramBot) { }
+  constructor(private bot: TrailMultiplierOptimizationBot) { }
 
   private getFeeSummaryForDisplay(): FeeAwarePnLOptions | undefined {
     const metrics = this.bot.getLastTradeMetrics();
@@ -170,6 +124,7 @@ ${lastTradeSummary}`;
 
       const msg = `
 === GENERAL ===
+Run ID: ${this.bot.runId}
 Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
 Margin size: ${this.bot.margin} USDT
