@@ -14,10 +14,7 @@ import TMOBOrderWatcher from "./tmob-order-watcher";
 import TelegramService from "@/services/telegram.service";
 import BigNumber from "bignumber.js";
 import { TMOBState } from "./tmob-types";
-import { persistTMOBAction } from "./tmob-persistence";
-import { TMOB_ACTION_TYPE, orderToSnapshot, positionToSnapshot, type TMOBBotStateSnapshot } from "./tmob-action-types";
 import { randomUUID } from "crypto";
-import ExchangeService from "@/services/exchange-service/exchange-service";
 
 export type { TMOBState } from "./tmob-types";
 
@@ -155,8 +152,6 @@ class TrailMultiplierOptimizationBot {
   }
 
   async startMakeMoney() {
-    await persistTMOBAction(this.runId, TMOB_ACTION_TYPE.RESTARTING, { message: "Run started" }, getTMOBBotStateSnapshot(this));
-
     eventBus.addListener(EEventBusEventType.StateChange, async (nextState: TMOBState) => {
       console.log("State change triggered, changing state");
 
@@ -182,11 +177,6 @@ class TrailMultiplierOptimizationBot {
     try {
       await this.currentState.onEnter();
     } catch (error) {
-      await persistTMOBAction(this.runId, TMOB_ACTION_TYPE.ERROR, {
-        message: error instanceof Error ? error.message : String(error),
-        context: "startMakeMoney.initialOnEnter",
-        stack: error instanceof Error ? error.stack : undefined,
-      }, getTMOBBotStateSnapshot(this));
       throw error;
     }
   }
@@ -307,19 +297,6 @@ class TrailMultiplierOptimizationBot {
       tradePnL: Number.isFinite(closedPosition.realizedPnl) ? closedPosition.realizedPnl : 0,
       exitReason,
     });
-
-    const closeOrder = await ExchangeService.getOrderDetail(this.symbol, this.lastCloseClientOrderId ?? "");
-    await persistTMOBAction(this.runId, TMOB_ACTION_TYPE.CLOSED_POSITION, {
-      order: orderToSnapshot(closeOrder ?? undefined),
-      position: positionToSnapshot(closedPosition),
-      exitReason,
-      isLiquidation: options.isLiquidation,
-      triggerTimestamp,
-      fillTimestamp,
-      entryWsPrice: entryFill
-        ? { price: entryFill.price, time: entryFill.time.toISOString() }
-        : undefined,
-    }, getTMOBBotStateSnapshot(this));
 
     eventBus.emit(EEventBusEventType.StateChange);
   }

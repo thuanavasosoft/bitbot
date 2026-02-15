@@ -6,14 +6,12 @@ import ComboBot from '@/bot/combo-bot/combo-bot';
 import BreakoutBot from '@/bot/breakout-bot/breakout-bot';
 import AutoAdjustBot from '@/bot/auto-adjust-bot/auto-adjust-bot';
 import TrailMultiplierOptimizationBot from '@/bot/trail-multiplier-optimization-bot/trail-multiplier-optimization-bot';
-import DatabaseService from '@/services/database.service';
 
 async function runProgram() {
   try {
     dotenv.config();
 
     await TelegramService.initialize();
-    await DatabaseService.configure();
 
     const symbols = process.env.SYMBOLS?.split(",") || []
     const symbol = process.env.SYMBOL;
