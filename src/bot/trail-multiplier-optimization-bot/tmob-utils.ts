@@ -2,7 +2,7 @@ import TelegramService from "@/services/telegram.service";
 import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
 import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { tmobRunBacktest } from "./tmob-backtest";
+import { runBacktestPool } from "./tmob-backtest-worker-pool";
 import { TMOBSignalParams } from "./tmob-types";
 import BigNumber from "bignumber.js";
 import { formatFeeAwarePnLLine } from "@/utils/strings.util";
@@ -39,29 +39,31 @@ class TMOBUtils {
       ? this.bot.trailBoundStepSize
       : 1;
     const numSteps = Math.max(1, Math.floor((multMax - multMin) / step) + 1);
+    const trailMultipliers = Array.from({ length: numSteps }, (_, i) =>
+      Math.min(multMin + i * step, multMax)
+    );
+
+    const sharedArgs = {
+      symbol: this.bot.symbol,
+      interval: "1m" as const,
+      requestedStartTime: optimizationWindowStartDate.toISOString(),
+      requestedEndTime: endFetchCandles.toISOString(),
+      candles: filteredCandles,
+      trailingAtrLength: this.bot.trailingAtrLength,
+      highestLookback: this.bot.trailingHighestLookback,
+      trailConfirmBars: this.bot.trailConfirmBars,
+      signalParams: { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal },
+      tickSize: this.bot.tickSize,
+      pricePrecision: this.bot.pricePrecision,
+    };
+
+    const results = await runBacktestPool(sharedArgs, trailMultipliers);
 
     let bestTrailMultiplier = multMin;
     let bestTotalPnL = Number.NEGATIVE_INFINITY;
-
-    for (let i = 0; i < numSteps; i++) {
-      const trailMultiplier = Math.min(multMin + i * step, multMax);
-      const backtestResult = tmobRunBacktest({
-        symbol: this.bot.symbol,
-        interval: "1m",
-        requestedStartTime: optimizationWindowStartDate.toISOString(),
-        requestedEndTime: endFetchCandles.toISOString(),
-        candles: filteredCandles,
-        trailingAtrLength: this.bot.trailingAtrLength,
-        highestLookback: this.bot.trailingHighestLookback,
-        trailMultiplier: trailMultiplier,
-        trailConfirmBars: this.bot.trailConfirmBars,
-        signalParams: { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal },
-        tickSize: this.bot.tickSize,
-        pricePrecision: this.bot.pricePrecision,
-      });
-
-      if (backtestResult.summary.totalPnL > bestTotalPnL) {
-        bestTotalPnL = backtestResult.summary.totalPnL;
+    for (const { trailMultiplier, totalPnL } of results) {
+      if (totalPnL > bestTotalPnL) {
+        bestTotalPnL = totalPnL;
         bestTrailMultiplier = trailMultiplier;
       }
     }
