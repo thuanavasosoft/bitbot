@@ -10,8 +10,10 @@ class TMOBWaitForResolveState implements TMOBState {
   private orderUpdateRemover?: () => void;
   private trailingUpdaterAbort = false;
   private trailingUpdaterPromise?: Promise<void>;
+  private liquidationCheckInProgress = false;
+  private liquidationAlertAlreadySent = false;
 
-  constructor(private bot: TrailMultiplierOptimizationBot) {}
+  constructor(private bot: TrailMultiplierOptimizationBot) { }
 
   async onEnter() {
     if (!this.bot.currActivePosition) {
@@ -62,6 +64,41 @@ class TMOBWaitForResolveState implements TMOBState {
         return;
       }
 
+      const position = this.bot.currActivePosition;
+
+      // Watch for liquidation by price: if mark price has crossed liquidation price, position may be liquidated
+      if (
+        !this.liquidationCheckInProgress &&
+        Number.isFinite(position.liquidationPrice) &&
+        position.liquidationPrice > 0
+      ) {
+        const priceBn = new BigNumber(price);
+        const liqBn = new BigNumber(position.liquidationPrice);
+        const priceCrossedLiquidation =
+          (position.side === "long" && priceBn.lte(liqBn)) ||
+          (position.side === "short" && priceBn.gte(liqBn));
+        if (priceCrossedLiquidation) {
+          if (!this.liquidationAlertAlreadySent) {
+            TelegramService.queueMsg(
+              `⚠️ Mark price crossed liquidation threshold!\nSymbol: ${this.bot.symbol}\nCurrent price: ${price}\nLiquidation price: ${position.liquidationPrice}\nPosition side: ${position.side}\n\nChecking if position is liquidated via REST API.`
+            );
+          }
+          this.liquidationCheckInProgress = true;
+          const finalized = await this._checkAndFinalizeLiquidationByPrice(price);
+          this.liquidationCheckInProgress = false;
+          if (finalized) {
+            this._stopAllWatchers();
+            return;
+          }
+          if (!this.liquidationAlertAlreadySent) {
+            TelegramService.queueMsg(
+              `⚠️ Position is not liquidated via REST API.\nSymbol: ${this.bot.symbol}\nCurrent price: ${price}\nLiquidation price: ${position.liquidationPrice}\nPosition side: ${position.side}\nWill try again in silence.`
+            );
+            this.liquidationAlertAlreadySent = true;
+          }
+        }
+      }
+
       if (!this.bot.currentSupport || !this.bot.currentResistance) {
         return;
       }
@@ -70,7 +107,6 @@ class TMOBWaitForResolveState implements TMOBState {
         return;
       }
 
-      const position = this.bot.currActivePosition;
       let shouldExit = false;
       let exitReason = "";
       const priceBn = new BigNumber(price);
@@ -170,6 +206,57 @@ class TMOBWaitForResolveState implements TMOBState {
     this.orderUpdateRemover = this.bot.orderWatcher?.onOrderUpdate((update) => {
       void this._handleExternalOrderUpdate(update);
     });
+  }
+
+  /**
+   * When mark price has crossed liquidation price, check if position was closed by liquidation via REST
+   * and finalize so we catch liquidations even when ORDER_TRADE_UPDATE is not received.
+   */
+  private async _checkAndFinalizeLiquidationByPrice(lastPrice: number): Promise<boolean> {
+    const activePosition = this.bot.currActivePosition;
+    if (!activePosition) return false;
+
+    try {
+      const positionHistory = await ExchangeService.getPositionsHistory({ symbol: activePosition.symbol });
+      if (!positionHistory.length) return false;
+
+      const closedPosition = positionHistory.find((p) => {
+        const isCorrectSize = p.size === activePosition.size;
+        const isCorrectSide = p.side === activePosition.side;
+        const isCorrectSymbol = p.symbol === activePosition.symbol;
+
+        return isCorrectSize && isCorrectSide && isCorrectSymbol;
+      });
+      if (!closedPosition) return false;
+      closedPosition.avgPrice = activePosition.avgPrice;
+      closedPosition.liquidationPrice = activePosition.liquidationPrice;
+      closedPosition.notional = activePosition.notional;
+      closedPosition.leverage = activePosition.leverage;
+      closedPosition.initialMargin = activePosition.initialMargin;
+      closedPosition.maintenanceMargin = activePosition.maintenanceMargin;
+
+      if (!this._isLiquidationClose(closedPosition)) return false;
+
+      const resolvePrice = closedPosition.closePrice ?? closedPosition.avgPrice ?? lastPrice;
+      this.bot.resolveWsPrice = {
+        price: resolvePrice,
+        time: new Date(),
+      };
+
+      TelegramService.queueMsg(this._formatLiquidationMessage(closedPosition));
+
+      await this.bot.finalizeClosedPosition(closedPosition, {
+        activePosition,
+        triggerTimestamp: closedPosition.createTime ?? Date.now(),
+        fillTimestamp: closedPosition.updateTime ?? Date.now(),
+        isLiquidation: true,
+        exitReason: "liquidation_exit",
+      });
+      return true;
+    } catch (error) {
+      console.error("[TMOBWaitForResolveState] Failed to check/finalize liquidation by price:", error);
+      return false;
+    }
   }
 
   private _calculateAtrValue(candles: ICandleInfo[], period: number): number | null {
@@ -324,15 +411,7 @@ class TMOBWaitForResolveState implements TMOBState {
 
       const isLiquidation = this._isLiquidationClose(closedPosition);
       if (isLiquidation) {
-        TelegramService.queueMsg(`
-🤯 Position just got liquidated
-Pos ID: ${closedPosition.id}
-Avg price: ${closedPosition.avgPrice}
-Liquidation price: ${closedPosition.liquidationPrice}
-Close price: ${closedPosition.closePrice}
-
-Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
-`);
+        TelegramService.queueMsg(this._formatLiquidationMessage(closedPosition));
       } else {
         const msg = `⚠️ Active position ${activePosition.id} closed outside bot (order: ${update.clientOrderId || "N/A"}). Recording outcome...`;
         console.warn(msg);
@@ -349,6 +428,18 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     } catch (error) {
       console.error("[TMOBWaitForResolveState] Failed to process external order update:", error);
     }
+  }
+
+  private _formatLiquidationMessage(closedPosition: IPosition): string {
+    return `
+🤯 Position just got liquidated
+Pos ID: ${closedPosition.id}
+Avg price: ${closedPosition.avgPrice}
+Liquidation price: ${closedPosition.liquidationPrice}
+Close price: ${closedPosition.closePrice}
+
+Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
+`;
   }
 
   private _isLiquidationClose(position: IPosition): boolean {

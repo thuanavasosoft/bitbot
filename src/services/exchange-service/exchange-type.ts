@@ -121,6 +121,7 @@ export interface ISymbolInfo {
 }
 
 export interface IGetPositionHistoryParams {
+  symbol?: string;
   page?: number, // Better not pass this from outside this meant to used as recursive helper
   limit?: number, // Better not pass this from outside this meant to used as recursive helper
   positionId?: number,
@@ -141,4 +142,18 @@ export interface IWSOrderUpdate {
   realizedPnl?: number;
   executionPrice?: number;
   updateTime?: number;
+}
+
+/** Force order (liquidation or ADL auto-close) */
+export interface IForceOrder {
+  orderId: number;
+  symbol: string;
+  status: TOrderStatus;
+  clientOrderId: string;
+  side: TOrderSide;
+  avgPrice: number;
+  executedQty: number;
+  cumQuote: number;
+  time: number;
+  updateTime: number;
 }
