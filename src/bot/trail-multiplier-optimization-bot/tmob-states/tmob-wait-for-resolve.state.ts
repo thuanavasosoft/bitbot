@@ -416,6 +416,7 @@ class TMOBWaitForResolveState implements TMOBState {
 
   private async _handleExternalOrderUpdate(update: IWSOrderUpdate) {
     if (!this.bot.currActivePosition) return;
+    if (this.liquidationCheckInProgress) return;
     if (update.orderStatus !== "filled") return;
 
     const activePosition = this.bot.currActivePosition;
@@ -428,6 +429,7 @@ class TMOBWaitForResolveState implements TMOBState {
 
     if (this.bot.isBotGeneratedCloseOrder(update.clientOrderId)) return;
 
+    this.liquidationCheckInProgress = true;
     try {
       const closedPosition = await this.bot.fetchClosedPositionSnapshot(activePosition.id);
       if (!closedPosition) {
@@ -458,8 +460,14 @@ class TMOBWaitForResolveState implements TMOBState {
         isLiquidation,
         exitReason: isLiquidation ? "liquidation_exit" : "signal_change",
       });
+      if (isLiquidation) {
+        this._clearLiquidationCheckInterval();
+        this._stopAllWatchers();
+      }
     } catch (error) {
       console.error("[TMOBWaitForResolveState] Failed to process external order update:", error);
+    } finally {
+      this.liquidationCheckInProgress = false;
     }
   }
 
