@@ -280,11 +280,11 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   async getForceOrders(symbol: string): Promise<IForceOrder[]> {
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
 
     const raw = await this._client.getForceOrders({
       symbol,
-      startTime: sevenDaysAgo,
+      startTime: threeDaysAgo,
       autoCloseType: "LIQUIDATION",
     });
     return raw.map((o) => ({
@@ -302,8 +302,7 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   async getPositionsHistory(params: IGetPositionHistoryParams): Promise<IPosition[]> {
-    const { positionId, symbol: paramSymbol } = params;
-    const symbol = paramSymbol;
+    const { positionId, symbol } = params;
 
     if (positionId) {
       const cached = this._recentClosedPositions.get(positionId);
