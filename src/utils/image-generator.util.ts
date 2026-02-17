@@ -315,7 +315,7 @@ export async function generateImageOfCandlesWithSupportResistance(
     liqPrice != null &&
     Number.isFinite(liqPrice) &&
     liqPrice > 0 &&
-    ((resistance !== null && liqPrice < resistance) || (support !== null && liqPrice > support));
+    ((resistance !== null && liqPrice < resistance) && (support !== null && liqPrice > support));
   if (showLiquidation && currOpenedPos) {
     const liqColor = currOpenedPos.side === "long" ? redColor : greenColor;
     annotations.liquidationPrice = {
