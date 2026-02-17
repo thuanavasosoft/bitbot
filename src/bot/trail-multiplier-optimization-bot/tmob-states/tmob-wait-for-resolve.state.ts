@@ -227,7 +227,10 @@ class TMOBWaitForResolveState implements TMOBState {
   }
 
   private async _runLiquidationCheck(): Promise<void> {
-    if (this.liquidationCheckInProgress || !this.bot.currActivePosition) return;
+    if (this.liquidationCheckInProgress || !this.bot.currActivePosition) {
+      console.log("Liquidation check in progress by order update listener or no active position, skipping _runLiquidationCheck...");
+      return;
+    }
     this.liquidationCheckInProgress = true;
     try {
       const finalized = await this._checkAndFinalizeLiquidationByPrice(this.lastPrice);
@@ -247,7 +250,6 @@ class TMOBWaitForResolveState implements TMOBState {
   private async _checkAndFinalizeLiquidationByPrice(lastPrice: number): Promise<boolean> {
     const activePosition = this.bot.currActivePosition;
     if (!activePosition) return false;
-
     try {
       const positionHistory = await ExchangeService.getPositionsHistory({ symbol: activePosition.symbol });
       if (!positionHistory.length) return false;
@@ -416,7 +418,6 @@ class TMOBWaitForResolveState implements TMOBState {
 
   private async _handleExternalOrderUpdate(update: IWSOrderUpdate) {
     if (!this.bot.currActivePosition) return;
-    if (this.liquidationCheckInProgress) return;
     if (update.orderStatus !== "filled") return;
 
     const activePosition = this.bot.currActivePosition;
@@ -429,11 +430,16 @@ class TMOBWaitForResolveState implements TMOBState {
 
     if (this.bot.isBotGeneratedCloseOrder(update.clientOrderId)) return;
 
+    if (this.liquidationCheckInProgress) {
+      console.log("Liquidation check in progress, skipping _handleExternalOrderUpdate...");
+      return;
+    }
     this.liquidationCheckInProgress = true;
     try {
       const closedPosition = await this.bot.fetchClosedPositionSnapshot(activePosition.id);
       if (!closedPosition) {
         console.warn(`[TMOBWaitForResolveState] Closed position snapshot missing for id ${activePosition.id}`);
+        TelegramService.queueMsg(`[TMOBWaitForResolveState] Closed position snapshot missing for id ${activePosition.id} waiting for next update...`);
         return;
       }
 
@@ -460,10 +466,8 @@ class TMOBWaitForResolveState implements TMOBState {
         isLiquidation,
         exitReason: isLiquidation ? "liquidation_exit" : "signal_change",
       });
-      if (isLiquidation) {
-        this._clearLiquidationCheckInterval();
-        this._stopAllWatchers();
-      }
+      this._clearLiquidationCheckInterval();
+      this._stopAllWatchers();
     } catch (error) {
       console.error("[TMOBWaitForResolveState] Failed to process external order update:", error);
     } finally {
