@@ -832,7 +832,7 @@ class BinanceExchange implements IExchangeInstance {
 
     const incomeByTime = incomeList;
 
-    const MATCH_MS = 120_000; // 2 min window to match income to force order
+    const MATCH_MS = 120_000; // 2 min window to match income to force order otherwise it's too far
     const positions: IPosition[] = forceOrders.map((fo) => {
       const foTime = fo.time;
       const matchedIncome = incomeByTime.filter(
@@ -860,8 +860,8 @@ class BinanceExchange implements IExchangeInstance {
         liquidationPrice: 0,
         maintenanceMargin: 0,
         initialMargin: 0,
-        marginMode: "cross",
-        createTime: foTime - 3600_000,
+        marginMode: "isolated",
+        createTime: foTime,
         updateTime: fo.updateTime ?? foTime,
       } satisfies IPosition;
     });
