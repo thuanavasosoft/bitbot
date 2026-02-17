@@ -4,6 +4,7 @@ import TrailMultiplierOptimizationBot, { TMOBState } from "../trail-multiplier-o
 import TelegramService from "@/services/telegram.service";
 import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../../breakout-bot/bb-retry";
+import { toIso } from "@/bot/auto-adjust-bot/candle-utils";
 
 class TMOBWaitForResolveState implements TMOBState {
   private priceListenerRemover?: () => void;
@@ -12,6 +13,9 @@ class TMOBWaitForResolveState implements TMOBState {
   private trailingUpdaterPromise?: Promise<void>;
   private liquidationCheckInProgress = false;
   private liquidationAlertAlreadySent = false;
+  private liquidationCheckIntervalId: ReturnType<typeof setInterval> | null = null;
+  private lastPrice = 0;
+  private static readonly LIQUIDATION_CHECK_INTERVAL_MS = 5_000;
 
   constructor(private bot: TrailMultiplierOptimizationBot) { }
 
@@ -45,9 +49,17 @@ class TMOBWaitForResolveState implements TMOBState {
     }
   }
 
+  private _clearLiquidationCheckInterval() {
+    if (this.liquidationCheckIntervalId != null) {
+      clearInterval(this.liquidationCheckIntervalId);
+      this.liquidationCheckIntervalId = null;
+    }
+  }
+
   private _stopAllWatchers() {
     this._clearPriceListener();
     this._clearOrderUpdateListener();
+    this._clearLiquidationCheckInterval();
     this._stopTrailingUpdater();
   }
 
@@ -59,42 +71,49 @@ class TMOBWaitForResolveState implements TMOBState {
 
   private async _handleExitPriceUpdate(price: number) {
     try {
+      this.lastPrice = price;
       if (!this.bot.currActivePosition) {
         this._clearPriceListener();
+        this._clearLiquidationCheckInterval();
         return;
       }
 
       const position = this.bot.currActivePosition;
+      const hasValidLiquidationPrice = Number.isFinite(position.liquidationPrice) && position.liquidationPrice > 0;
 
-      // Watch for liquidation by price: if mark price has crossed liquidation price, position may be liquidated
-      if (
-        !this.liquidationCheckInProgress &&
-        Number.isFinite(position.liquidationPrice) &&
-        position.liquidationPrice > 0
-      ) {
-        const priceBn = new BigNumber(price);
-        const liqBn = new BigNumber(position.liquidationPrice);
-        const priceCrossedLiquidation =
-          (position.side === "long" && priceBn.lte(liqBn)) ||
-          (position.side === "short" && priceBn.gte(liqBn));
-        if (priceCrossedLiquidation) {
-          if (!this.liquidationAlertAlreadySent) {
-            TelegramService.queueMsg(
-              `⚠️ Mark price crossed liquidation threshold!\nSymbol: ${this.bot.symbol}\nCurrent price: ${price}\nLiquidation price: ${position.liquidationPrice}\nPosition side: ${position.side}\n\nChecking if position is liquidated via REST API.`
-            );
-          }
-          this.liquidationCheckInProgress = true;
-          const finalized = await this._checkAndFinalizeLiquidationByPrice(price);
-          this.liquidationCheckInProgress = false;
-          if (finalized) {
-            this._stopAllWatchers();
-            return;
-          }
-          if (!this.liquidationAlertAlreadySent) {
-            TelegramService.queueMsg(
-              `⚠️ Position is not liquidated via REST API.\nSymbol: ${this.bot.symbol}\nCurrent price: ${price}\nLiquidation price: ${position.liquidationPrice}\nPosition side: ${position.side}\nWill try again in silence.`
-            );
-            this.liquidationAlertAlreadySent = true;
+      const priceBn = new BigNumber(price);
+      const liqBn = new BigNumber(position.liquidationPrice);
+      const priceInLiquidationZone =
+        hasValidLiquidationPrice &&
+        ((position.side === "long" && priceBn.lte(liqBn)) || (position.side === "short" && priceBn.gte(liqBn)));
+
+      if (priceInLiquidationZone) {
+        if (!this.liquidationAlertAlreadySent) {
+          TelegramService.queueMsg(
+            `⚠️ Mark price crossed liquidation threshold!\nSymbol: ${this.bot.symbol}\nCurrent price: ${price}\nLiquidation price: ${position.liquidationPrice}\nPosition side: ${position.side}\n\nChecking if position is liquidated via REST API every ${TMOBWaitForResolveState.LIQUIDATION_CHECK_INTERVAL_MS / 1000}s.`
+          );
+          this.liquidationAlertAlreadySent = true;
+        }
+        if (!this.liquidationCheckIntervalId) {
+          void this._runLiquidationCheck();
+          this.liquidationCheckIntervalId = setInterval(() => {
+            void this._runLiquidationCheck();
+          }, TMOBWaitForResolveState.LIQUIDATION_CHECK_INTERVAL_MS);
+        }
+      } else {
+        if (this.liquidationCheckIntervalId != null) {
+          this._clearLiquidationCheckInterval();
+          if (!this.liquidationCheckInProgress) {
+            this.liquidationCheckInProgress = true;
+            try {
+              const finalized = await this._checkAndFinalizeLiquidationByPrice(price);
+              if (finalized) {
+                this._stopAllWatchers();
+                return;
+              }
+            } finally {
+              this.liquidationCheckInProgress = false;
+            }
           }
         }
       }
@@ -109,7 +128,6 @@ class TMOBWaitForResolveState implements TMOBState {
 
       let shouldExit = false;
       let exitReason = "";
-      const priceBn = new BigNumber(price);
       const one = new BigNumber(1);
       const bufferPct = new BigNumber(this.bot.triggerBufferPercentage || 0).div(100);
       const resistanceBn = this.bot.currentResistance !== null ? new BigNumber(this.bot.currentResistance) : null;
@@ -208,6 +226,20 @@ class TMOBWaitForResolveState implements TMOBState {
     });
   }
 
+  private async _runLiquidationCheck(): Promise<void> {
+    if (this.liquidationCheckInProgress || !this.bot.currActivePosition) return;
+    this.liquidationCheckInProgress = true;
+    try {
+      const finalized = await this._checkAndFinalizeLiquidationByPrice(this.lastPrice);
+      if (finalized) {
+        this._clearLiquidationCheckInterval();
+        this._stopAllWatchers();
+      }
+    } finally {
+      this.liquidationCheckInProgress = false;
+    }
+  }
+
   /**
    * When mark price has crossed liquidation price, check if position was closed by liquidation via REST
    * and finalize so we catch liquidations even when ORDER_TRADE_UPDATE is not received.
@@ -234,6 +266,7 @@ class TMOBWaitForResolveState implements TMOBState {
       closedPosition.leverage = activePosition.leverage;
       closedPosition.initialMargin = activePosition.initialMargin;
       closedPosition.maintenanceMargin = activePosition.maintenanceMargin;
+      closedPosition.marginMode = activePosition.marginMode;
 
       if (!this._isLiquidationClose(closedPosition)) return false;
 
@@ -409,7 +442,7 @@ class TMOBWaitForResolveState implements TMOBState {
         time: resolveTime,
       };
 
-      const isLiquidation = this._isLiquidationClose(closedPosition);
+      const isLiquidation = this._isLiquidationClose(closedPosition) || ["auto-close-", "autoclose"].some(prefix => update.clientOrderId?.toLowerCase().startsWith(prefix));
       if (isLiquidation) {
         TelegramService.queueMsg(this._formatLiquidationMessage(closedPosition));
       } else {
@@ -432,7 +465,7 @@ class TMOBWaitForResolveState implements TMOBState {
 
   private _formatLiquidationMessage(closedPosition: IPosition): string {
     return `
-🤯 Position just got liquidated
+🤯 Position just got liquidated at ${toIso(closedPosition.updateTime ?? closedPosition.createTime)}
 Pos ID: ${closedPosition.id}
 Avg price: ${closedPosition.avgPrice}
 Liquidation price: ${closedPosition.liquidationPrice}
