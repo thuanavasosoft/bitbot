@@ -133,7 +133,7 @@ export async function generateImageOfCandlesWithSupportResistance(
   resistance: number | null,
   writeFile: boolean = false,
   endDate?: Date,
-  currOpenedPos?: { avgPrice: number, side: TPositionSide },
+  currOpenedPos?: { avgPrice: number, side: TPositionSide, liquidationPrice: number },
   longTrigger?: number | null,
   shortTrigger?: number | null,
   trailingStopRaw?: number | null,
@@ -309,6 +309,40 @@ export async function generateImageOfCandlesWithSupportResistance(
     };
   }
 
+  // Add liquidation price line only if it falls within the S/R range (below resistance or above support)
+  const liqPrice = currOpenedPos?.liquidationPrice;
+  const showLiquidation =
+    liqPrice != null &&
+    Number.isFinite(liqPrice) &&
+    liqPrice > 0 &&
+    ((resistance !== null && liqPrice < resistance) || (support !== null && liqPrice > support));
+  if (showLiquidation && currOpenedPos) {
+    const liqColor = currOpenedPos.side === "long" ? redColor : greenColor;
+    annotations.liquidationPrice = {
+      type: 'line' as any,
+      yMin: liqPrice,
+      yMax: liqPrice,
+      borderColor: liqColor,
+      borderWidth: 2,
+      borderDash: [2, 2],
+      label: {
+        display: true,
+        content: [`Liq: ${liqPrice.toFixed(4)}`],
+        position: "start",
+        backgroundColor: liqColor,
+        color: "#FFFFFF",
+        xAdjust: -4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
   // Add position line if active
   if (!!currOpenedPos) {
     const avgPriceColor = currOpenedPos.side === "long" ? greenColor : redColor;
@@ -380,7 +414,7 @@ export async function generateImageOfCandlesWithSupportResistance(
         datasets,
       },
       options: {
-        plugins: { 
+        plugins: {
           annotation: {
             annotations
           }
@@ -454,7 +488,7 @@ export async function generatePnLProgressionChart(
           },
           tooltip: {
             callbacks: {
-              label: function(context) {
+              label: function (context) {
                 return `PnL: ${context.parsed?.y?.toFixed(4) ?? 0.0000} USDT`;
               },
             },
@@ -469,7 +503,7 @@ export async function generatePnLProgressionChart(
             ticks: {
               maxRotation: 45,
               minRotation: 45,
-              callback: function(value, index) {
+              callback: function (value, index) {
                 // Show every nth label to avoid overcrowding
                 const step = Math.max(1, Math.floor(labels.length / 10));
                 if (index % step === 0 || index === labels.length - 1) {
@@ -485,7 +519,7 @@ export async function generatePnLProgressionChart(
               text: 'Total PnL (USDT)',
             },
             ticks: {
-              callback: function(value) {
+              callback: function (value) {
                 return Number(value).toFixed(2);
               },
             },

@@ -14,6 +14,7 @@ import type {
   ICancelOrderResponse,
   ICandleInfo,
   IFeeRate,
+  IForceOrder,
   IGetPositionHistoryParams,
   IOrder,
   IPlaceOrderParams,
@@ -278,8 +279,30 @@ class BinanceExchange implements IExchangeInstance {
     return mapped;
   }
 
+  async getForceOrders(symbol: string): Promise<IForceOrder[]> {
+    const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+
+    const raw = await this._client.getForceOrders({
+      symbol,
+      startTime: threeDaysAgo,
+      autoCloseType: "LIQUIDATION",
+    });
+    return raw.map((o) => ({
+      orderId: o.orderId,
+      symbol: o.symbol,
+      status: this._mapOrderStatus(o.status),
+      clientOrderId: o.clientOrderId,
+      side: (o.side?.toLowerCase() || "buy") as TOrderSide,
+      avgPrice: Number(o.avgPrice ?? 0),
+      executedQty: Number(o.executedQty ?? 0),
+      cumQuote: Number(o.cumQuote ?? 0),
+      time: o.time,
+      updateTime: o.updateTime,
+    }));
+  }
+
   async getPositionsHistory(params: IGetPositionHistoryParams): Promise<IPosition[]> {
-    const { positionId } = params;
+    const { positionId, symbol } = params;
 
     if (positionId) {
       const cached = this._recentClosedPositions.get(positionId);
@@ -288,7 +311,22 @@ class BinanceExchange implements IExchangeInstance {
       return reconstructed ? [reconstructed] : [];
     }
 
-    return Array.from(this._recentClosedPositions.values()).sort((a, b) => b.updateTime - a.updateTime);
+    const reconstructedFromIncomeAndForceOrders = !!symbol ? await this._reconstructPositionHistoryFromIncomeAndForceOrders(symbol) : [];
+    const cached = Array.from(this._recentClosedPositions.values());
+
+    const DEDUPE_MS = 60_000;
+    const merged = [...cached];
+    for (const pos of reconstructedFromIncomeAndForceOrders) {
+      const isDuplicate = merged.some(
+        (c) =>
+          c.symbol === pos.symbol &&
+          c.side === pos.side &&
+          c.size === pos.size &&
+          Math.abs(c.updateTime - pos.updateTime) <= DEDUPE_MS
+      );
+      if (!isDuplicate) merged.push(pos);
+    }
+    return merged.sort((a, b) => b.updateTime - a.updateTime);
   }
 
   async getMarkPrice(symbol: string): Promise<number> {
@@ -767,6 +805,67 @@ class BinanceExchange implements IExchangeInstance {
     const cached = this._symbolInfoCache.get(normalizedSymbol);
     if (!cached) throw new Error(`No exchange info found for ${symbol}`);
     return cached;
+  }
+
+  /**
+   * Reconstruct position history from income (REALIZED_PNL) and force orders (liquidations).
+   * Force orders provide size, close price, side; income provides realized PnL.
+   */
+  private async _reconstructPositionHistoryFromIncomeAndForceOrders(symbol: string): Promise<IPosition[]> {
+    const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const normalizedSymbol = this._normalizeSymbol(symbol);
+
+    const [forceOrders, incomeList] = await Promise.all([
+      this._client.getForceOrders({
+        symbol: normalizedSymbol,
+        startTime: threeDaysAgo,
+        autoCloseType: "LIQUIDATION",
+      }),
+      this._client.getIncomeHistory({
+        symbol: normalizedSymbol,
+        incomeType: "REALIZED_PNL",
+        startTime: threeDaysAgo,
+        limit: 1000,
+      }),
+    ]);
+
+    const incomeByTime = incomeList;
+
+    const MATCH_MS = 120_000; // 2 min window to match income to force order otherwise it's too far
+    const positions: IPosition[] = forceOrders.map((fo) => {
+      const foTime = fo.time;
+      const matchedIncome = incomeByTime.filter(
+        (i) => Math.abs((i.time as number) - foTime) <= MATCH_MS
+      );
+      const realizedPnl = matchedIncome.reduce((sum, i) => sum + Number(i.income ?? 0), 0);
+
+      // Force order SELL closes a LONG; BUY closes a SHORT
+      const side: TPositionSide = (fo.side?.toUpperCase() === "SELL" ? "long" : "short") as TPositionSide;
+      const executedQty = Number(fo.executedQty ?? 0);
+      const avgPrice = Number(fo.avgPrice ?? 0);
+      const cumQuote = Number(fo.cumQuote ?? 0);
+
+      return {
+        id: fo.orderId,
+        symbol: this._toOriginalSymbol(fo.symbol),
+        size: executedQty,
+        side,
+        notional: cumQuote,
+        leverage: 0,
+        unrealizedPnl: 0,
+        realizedPnl,
+        avgPrice,
+        closePrice: avgPrice,
+        liquidationPrice: 0,
+        maintenanceMargin: 0,
+        initialMargin: 0,
+        marginMode: "isolated",
+        createTime: foTime,
+        updateTime: fo.updateTime ?? foTime,
+      } satisfies IPosition;
+    });
+
+    return positions.sort((a, b) => b.updateTime - a.updateTime);
   }
 
   private async _buildClosedPositionFromRest(positionId: number): Promise<IPosition | undefined> {

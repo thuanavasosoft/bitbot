@@ -64,7 +64,7 @@ Bot are in wait for entry state, waiting for breakout signal (Up/Down)`.trim();
       );
       if (!position) {
         const closedPositions = await withRetries(
-          () => ExchangeService.getPositionsHistory({ positionId: this.bot.currActivePosition?.id! }),
+          () => ExchangeService.getPositionsHistory({ symbol: this.bot.symbol, positionId: this.bot.currActivePosition?.id! }),
           {
             label: "[TMOB] getPositionsHistory",
             retries: 5,
