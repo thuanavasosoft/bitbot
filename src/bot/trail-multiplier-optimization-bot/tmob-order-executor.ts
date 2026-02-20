@@ -1,24 +1,9 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IOrder, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { IOrder, IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
-import TMOBOrderWatcher from "./tmob-order-watcher";
 import TelegramService from "@/services/telegram.service";
-
-export interface ITMOBOrderBot {
-  symbol: string;
-  symbolInfo?: ISymbolInfo;
-  pricePrecision: number;
-  tickSize: number;
-  currActivePosition?: IPosition;
-  orderWatcher?: TMOBOrderWatcher;
-  entryWsPrice?: { price: number; time: Date };
-  resolveWsPrice?: { price: number; time: Date };
-  lastOpenClientOrderId?: string;
-  lastCloseClientOrderId?: string;
-  trackCloseOrderId(clientOrderId: string): void;
-  untrackCloseOrderId(clientOrderId: string): void;
-}
+import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
 
 export interface IOrderFillUpdate {
   updateTime: number;
@@ -26,7 +11,7 @@ export interface IOrderFillUpdate {
 }
 
 class TMOBOrderExecutor {
-  constructor(private bot: ITMOBOrderBot) { }
+  constructor(private bot: TrailMultiplierOptimizationBot) { }
 
   private formatWithPrecision(value: number, precision?: number): number {
     if (!Number.isFinite(value) || precision === undefined) return value;
@@ -90,31 +75,8 @@ class TMOBOrderExecutor {
     );
   }
 
-  async ensureSymbolInfoLoaded(): Promise<void> {
-    if (this.bot.symbolInfo) return;
-    await this.loadSymbolInfo();
-  }
-
-  async loadSymbolInfo(): Promise<void> {
-    const bot = this.bot as ITMOBOrderBot & { symbolInfo?: ISymbolInfo; pricePrecision: number; tickSize: number };
-    bot.symbolInfo = await withRetries(
-      () => ExchangeService.getSymbolInfo(this.bot.symbol),
-      {
-        label: "[TMOB] getSymbolInfo",
-        retries: 5,
-        minDelayMs: 5000,
-        isTransientError,
-        onRetry: ({ attempt, delayMs, error, label }) => {
-          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
-        },
-      }
-    );
-    bot.pricePrecision = bot.symbolInfo?.pricePrecision ?? 0;
-    bot.tickSize = Math.pow(10, -bot.pricePrecision);
-  }
-
   async triggerOpenSignal(posDir: TPositionSide, openBalanceAmt: string): Promise<IPosition> {
-    await this.ensureSymbolInfoLoaded();
+    await this.bot.ensureSymbolInfoLoaded();
 
     const quoteAmt = Number(openBalanceAmt);
     if (!Number.isFinite(quoteAmt) || quoteAmt <= 0) {
@@ -143,8 +105,7 @@ class TMOBOrderExecutor {
 
     const orderSide = posDir === "long" ? "buy" : "sell";
     const clientOrderId = await ExchangeService.generateClientOrderId();
-    const bot = this.bot as ITMOBOrderBot & { lastOpenClientOrderId?: string; entryWsPrice?: { price: number; time: Date } };
-    bot.lastOpenClientOrderId = clientOrderId;
+    this.bot.lastOpenClientOrderId = clientOrderId;
     const orderHandle = this.bot.orderWatcher?.preRegister(clientOrderId);
     try {
       console.log(
@@ -235,7 +196,7 @@ class TMOBOrderExecutor {
 
       const fillPrice = fillUpdate?.executionPrice ?? openedPosition.avgPrice;
       const fillTime = fillUpdate?.updateTime ? new Date(fillUpdate.updateTime) : new Date();
-      bot.entryWsPrice = { price: fillPrice, time: fillTime };
+      this.bot.entryWsPrice = { price: fillPrice, time: fillTime };
 
       const openOrderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
       if (openOrderDetail) {
@@ -250,7 +211,7 @@ class TMOBOrderExecutor {
   }
 
   async triggerCloseSignal(position?: IPosition): Promise<IPosition> {
-    await this.ensureSymbolInfoLoaded();
+    await this.bot.ensureSymbolInfoLoaded();
     const targetPosition = position || this.bot.currActivePosition || (await withRetries(
       () => ExchangeService.getPosition(this.bot.symbol),
       {
@@ -274,8 +235,7 @@ class TMOBOrderExecutor {
 
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";
     const clientOrderId = await ExchangeService.generateClientOrderId();
-    const bot = this.bot as ITMOBOrderBot & { lastCloseClientOrderId?: string; resolveWsPrice?: { price: number; time: Date } };
-    bot.lastCloseClientOrderId = clientOrderId;
+    this.bot.lastCloseClientOrderId = clientOrderId;
     const orderHandle = this.bot.orderWatcher?.preRegister(clientOrderId);
     this.bot.trackCloseOrderId(clientOrderId);
     try {
@@ -355,7 +315,7 @@ class TMOBOrderExecutor {
 
       const resolvePrice = fillUpdate?.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice;
       const resolveTime = fillUpdate?.updateTime ? new Date(fillUpdate.updateTime) : new Date();
-      bot.resolveWsPrice = { price: resolvePrice, time: resolveTime };
+      this.bot.resolveWsPrice = { price: resolvePrice, time: resolveTime };
 
       const closeOrderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
       if (closeOrderDetail) {

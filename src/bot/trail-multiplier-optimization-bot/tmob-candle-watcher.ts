@@ -126,10 +126,10 @@ class TMOBCandleWatcher {
         // Enhanced messaging with all details
         const currentPrice = currCandles[currCandles.length - 1].closePrice;
         const triggerMsg = this.bot.longTrigger !== null || this.bot.shortTrigger !== null
-          ? `\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger.toFixed(4) : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger.toFixed(4) : "N/A"}`
+          ? `\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}`
           : "";
         const trailingMsg = trailingStopRaw !== null || trailingStopBuffered !== null
-          ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw.toFixed(4) : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered.toFixed(4) : "N/A"}`
+          ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
           : "";
 
         const optimizationAgeMsg = this.bot.lastOptimizationAtMs > 0
@@ -146,9 +146,9 @@ class TMOBCandleWatcher {
           `\nTrailing Multiplier: ${this.bot.trailingStopMultiplier}`;
 
         TelegramService.queueMsg(
-          `ℹ️ Price: ${currentPrice.toFixed(4)}\n` +
-          `Support: ${rawSupport !== null ? rawSupport.toFixed(4) : "N/A"}\n` +
-          `Resistance: ${rawResistance !== null ? rawResistance.toFixed(4) : "N/A"}${triggerMsg}${trailingMsg}${paramsMsg}${optimizationAgeMsg}`
+          `ℹ️ Price: ${currentPrice}\n` +
+          `Support: ${rawSupport !== null ? rawSupport : "N/A"}\n` +
+          `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}${triggerMsg}${trailingMsg}${paramsMsg}${optimizationAgeMsg}`
         );
 
         this.bot.lastSRUpdateTime = Date.now();

@@ -8,6 +8,8 @@ import TMOBOrderExecutor from "./tmob-order-executor";
 import TMOBOptimizationLoop from "./tmob-optimization-loop";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 import { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
+import ExchangeService from "@/services/exchange-service/exchange-service";
+import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import TMOBCandleWatcher from "./tmob-candle-watcher";
 import TMOBCandles from "./tmob-candles";
 import TMOBOrderWatcher from "./tmob-order-watcher";
@@ -182,8 +184,26 @@ class TrailMultiplierOptimizationBot {
     }
   }
 
-  async loadSymbolInfo() {
-    return this.orderExecutor.loadSymbolInfo();
+  async ensureSymbolInfoLoaded(): Promise<void> {
+    if (this.symbolInfo) return;
+    await this.loadSymbolInfo();
+  }
+
+  async loadSymbolInfo(): Promise<void> {
+    this.symbolInfo = await withRetries(
+      () => ExchangeService.getSymbolInfo(this.symbol),
+      {
+        label: "[TMOB] getSymbolInfo",
+        retries: 5,
+        minDelayMs: 5000,
+        isTransientError,
+        onRetry: ({ attempt, delayMs, error, label }) => {
+          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
+        },
+      }
+    );
+    this.pricePrecision = this.symbolInfo?.pricePrecision ?? 0;
+    this.tickSize = Math.pow(10, -this.pricePrecision);
   }
 
   async triggerOpenSignal(posDir: TPositionSide, openBalanceAmt: string): Promise<IPosition> {

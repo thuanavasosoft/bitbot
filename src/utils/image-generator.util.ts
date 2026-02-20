@@ -314,10 +314,9 @@ export async function generateImageOfCandlesWithSupportResistance(
   const showLiquidation =
     liqPrice != null &&
     Number.isFinite(liqPrice) &&
-    liqPrice > 0 &&
-    ((resistance !== null && liqPrice < resistance) || (support !== null && liqPrice > support));
-  if (showLiquidation && currOpenedPos) {
-    const liqColor = currOpenedPos.side === "long" ? redColor : greenColor;
+    liqPrice > 0
+  if (showLiquidation) {
+    const liqColor = "#FFA500"; // Orange
     annotations.liquidationPrice = {
       type: 'line' as any,
       yMin: liqPrice,
@@ -327,7 +326,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [2, 2],
       label: {
         display: true,
-        content: [`Liq: ${liqPrice.toFixed(4)}`],
+        content: [`Liquidation: ${liqPrice.toFixed(4)}`],
         position: "start",
         backgroundColor: liqColor,
         color: "#FFFFFF",
