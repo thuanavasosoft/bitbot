@@ -6,6 +6,7 @@ import ComboBot from '@/bot/combo-bot/combo-bot';
 import BreakoutBot from '@/bot/breakout-bot/breakout-bot';
 import AutoAdjustBot from '@/bot/auto-adjust-bot/auto-adjust-bot';
 import TrailMultiplierOptimizationBot from '@/bot/trail-multiplier-optimization-bot/trail-multiplier-optimization-bot';
+import CombinationBot from '@/bot/combination-bot/combination-bot';
 
 async function runProgram() {
   try {
@@ -13,19 +14,29 @@ async function runProgram() {
 
     await TelegramService.initialize();
 
-    const symbols = process.env.SYMBOLS?.split(",") || []
-    const symbol = process.env.SYMBOL;
-
-    if (!symbol && !symbols.length) throw "PLEASE SPECIFY EITHER SYMBOL OR SYMBOLS ACCORDING TO THE BOT";
-    await ExchangeService.configure(
-      process.env.API_KEY!,
-      process.env.API_SECRET!,
-      !!symbol ? [symbol] : symbols,
-    );
-
     const botMode = process.env.BOT_MODE;
     console.log("BOT MODE: ", botMode);
 
+    let symbols: string[];
+    if (botMode === "combination_bot") {
+      symbols = [];
+      for (let i = 1; process.env[`COMB_BOT_${i}_SYMBOL`]; i++) {
+        const s = (process.env[`COMB_BOT_${i}_SYMBOL`] || "").trim();
+        if (s) symbols.push(s);
+      }
+      if (symbols.length === 0) throw "At least one bot required. Set COMB_BOT_1_SYMBOL (and optionally COMB_BOT_2_SYMBOL, ...).";
+    } else {
+      const symbol = process.env.SYMBOL;
+      const symbolsEnv = process.env.SYMBOLS?.split(",") || [];
+      if (!symbol && !symbolsEnv.length) throw "PLEASE SPECIFY EITHER SYMBOL OR SYMBOLS ACCORDING TO THE BOT";
+      symbols = symbol ? [symbol] : symbolsEnv;
+    }
+
+    await ExchangeService.configure(
+      process.env.API_KEY!,
+      process.env.API_SECRET!,
+      symbols,
+    );
 
     if (botMode === "combo_bot") {
       const bot = new ComboBot();
@@ -41,6 +52,9 @@ async function runProgram() {
       await bot.startMakeMoney();
     } else if (botMode === "trail_multiplier_optimization_bot") {
       const bot = new TrailMultiplierOptimizationBot();
+      await bot.startMakeMoney();
+    } else if (botMode === "combination_bot" || botMode === "comb_bot") {
+      const bot = new CombinationBot();
       await bot.startMakeMoney();
     }
 
