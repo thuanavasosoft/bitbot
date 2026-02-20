@@ -360,10 +360,6 @@ class CombinationBot {
       console.log(`[COMB] General bot startQuoteBalance=${this.startQuoteBalance} USDT`);
     }
 
-    const summary = this.instances
-      .map((inst, i) => `BOT_${i + 1} (${inst.symbol})`)
-      .join(", ");
-
     for (const instance of this.instances) {
       instance.stateBus.addListener(EEventBusEventType.StateChange, async (nextState: CombState | null) => {
         await instance.currentState.onExit();
@@ -379,7 +375,16 @@ class CombinationBot {
       await instance.currentState.onEnter();
     }
 
-    this.queueGeneralMessage(`[COMB] Combination bot started. Running ${this.instances.length} instance(s): ${summary}.`);
+    const fullMessage = await this.getGeneralFullUpdateMessage();
+    const botListLines = this.instances.map((inst, i) => `Bot ${i + 1}: ${inst.symbol}`).join("\n");
+    const accountEnd = fullMessage.indexOf("\n\n", fullMessage.indexOf("=== ACCOUNT ==="));
+    const startupMessage =
+      fullMessage.slice(0, accountEnd + 2) +
+      "=== BOTS ===\n" +
+      botListLines +
+      "\n\n" +
+      fullMessage.slice(accountEnd + 2);
+    this.queueGeneralMessage(startupMessage);
   }
 }
 

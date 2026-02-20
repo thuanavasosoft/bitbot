@@ -82,6 +82,7 @@ class CombOrderExecutor {
         { label: "[COMB] placeOrder (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) }
       );
       if (!orderResp) throw new Error("[COMB] Failed to place order");
+      console.log("[COMB] orderResp: ", orderResp);
 
       let fillUpdate: IOrderFillUpdate | undefined;
       try {
@@ -89,6 +90,7 @@ class CombOrderExecutor {
         fillUpdate = { updateTime: fillUpdateResp?.updateTime ?? 0, executionPrice: fillUpdateResp?.executionPrice ?? 0 };
       } catch {
         const orderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
+        console.log("[COMB] Order Detail: ", orderDetail);
         fillUpdate = { updateTime: orderDetail?.updateTs ?? 0, executionPrice: orderDetail?.avgPrice ?? 0 };
       }
 
@@ -120,10 +122,10 @@ class CombOrderExecutor {
     this.bot.trackCloseOrderId(clientOrderId);
     try {
       console.log(`[COMB] Placing ${orderSide.toUpperCase()} market order (base: ${baseAmt}) to close position ${targetPosition.id}`);
-      await withRetries(
+      const orderResp = await withRetries(
         async () => {
           try {
-            await ExchangeService.placeOrder({ symbol: targetPosition.symbol, orderType: "market", orderSide, baseAmt, clientOrderId });
+            return await ExchangeService.placeOrder({ symbol: targetPosition.symbol, orderType: "market", orderSide, baseAmt, clientOrderId });
           } catch (err) {
             const existing = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
             if (existing) { console.warn(`[COMB] close placeOrder failed but order exists`); return; }
@@ -132,12 +134,14 @@ class CombOrderExecutor {
         },
         { label: "[COMB] placeOrder (close)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) }
       );
+      console.log("[COMB] orderResp: ", orderResp);
       let fillUpdate: IOrderFillUpdate | undefined;
       try {
         const fillUpdateResp = await orderHandle?.wait();
         fillUpdate = { updateTime: fillUpdateResp?.updateTime ?? 0, executionPrice: fillUpdateResp?.executionPrice ?? 0 };
       } catch {
         const orderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
+        console.log("[COMB] Order Detail: ", orderDetail);
         fillUpdate = { updateTime: orderDetail?.updateTs ?? 0, executionPrice: orderDetail?.avgPrice ?? 0 };
       }
       const closedPosition = await this.fetchClosedPositionSnapshot(targetPosition.id);
