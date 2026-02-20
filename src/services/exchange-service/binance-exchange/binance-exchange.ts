@@ -2,7 +2,13 @@ import { USDMClient, WebsocketClient } from "binance";
 import { generateNewOrderId as binanceGenerateNewOrderId } from "binance/lib/util/requestUtils.js";
 
 type BinanceNetworkKey = Parameters<typeof binanceGenerateNewOrderId>[0];
-import type { Kline, KlineInterval, SymbolLotSizeFilter, SymbolMarketLotSizeFilter } from "binance/lib/types/shared";
+import type {
+  Kline,
+  KlineInterval,
+  SymbolLotSizeFilter,
+  SymbolMarketLotSizeFilter,
+  SymbolPriceFilter,
+} from "binance/lib/types/shared";
 import type {
   FuturesSymbolExchangeInfo,
   FuturesSymbolMinNotionalFilter,
@@ -339,8 +345,24 @@ class BinanceExchange implements IExchangeInstance {
     return this._prices[symbol];
   }
 
+  /**
+   * Derives price precision (decimal places) from PRICE_FILTER.tickSize.
+   * e.g. tickSize "0.000010" → 5 (the significant digit 1 is at the 5th decimal place).
+   */
+  private parsePricePrecisionFromFilters(filters: FuturesSymbolExchangeInfo["filters"]): number {
+    const priceFilter = filters.find((f): f is SymbolPriceFilter => f.filterType === "PRICE_FILTER");
+    const tickSizeStr = priceFilter?.tickSize;
+    if (typeof tickSizeStr !== "string" || !tickSizeStr) {
+      throw new Error("Missing PRICE_FILTER.tickSize in Binance Futures exchangeInfo");
+    }
+    const afterDecimal = tickSizeStr.split(".")[1] ?? "";
+    const trimmed = afterDecimal.replace(/0+$/, "");
+    return trimmed.length;
+  }
+
   async getSymbolInfo(symbol: string): Promise<ISymbolInfo> {
     const info = await this._getSymbolExchangeInfo(symbol);
+    const pricePrecision = this.parsePricePrecisionFromFilters(info.filters);
     const lotSizeFilter = info.filters.find((filter): filter is SymbolLotSizeFilter => filter.filterType === "LOT_SIZE");
     const marketLotSizeFilter = info.filters.find(
       (filter): filter is SymbolMarketLotSizeFilter => filter.filterType === "MARKET_LOT_SIZE"
@@ -350,7 +372,7 @@ class BinanceExchange implements IExchangeInstance {
     );
 
     return {
-      pricePrecision: info.pricePrecision,
+      pricePrecision,
       basePrecision: info.quantityPrecision,
       quotePrecision: info.quotePrecision,
       minNotionalValue: Number(minNotionalFilter?.notional || 0),
