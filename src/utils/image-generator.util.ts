@@ -160,7 +160,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [5, 5],
       label: {
         display: true,
-        content: [`Support: ${support.toFixed(4)}`],
+        content: [`Support: ${support}`],
         position: "start",
         backgroundColor: supportColor,
         color: "#FFFFFF",
@@ -187,7 +187,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [5, 5],
       label: {
         display: true,
-        content: [`Resistance: ${resistance.toFixed(4)}`],
+        content: [`Resistance: ${resistance}`],
         position: "end",
         backgroundColor: resistanceColor,
         color: "#FFFFFF",
@@ -214,7 +214,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [3, 3],
       label: {
         display: true,
-        content: [`Long Trigger: ${longTrigger.toFixed(4)}`],
+        content: [`Long Trigger: ${longTrigger}`],
         position: "end",
         backgroundColor: "#32CD32",
         color: "#FFFFFF",
@@ -241,7 +241,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [3, 3],
       label: {
         display: true,
-        content: [`Short Trigger: ${shortTrigger.toFixed(4)}`],
+        content: [`Short Trigger: ${shortTrigger}`],
         position: "start",
         backgroundColor: "#FF6347",
         color: "#FFFFFF",
@@ -267,7 +267,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [6, 2],
       label: {
         display: true,
-        content: [`Trail Stop: ${trailingStopRaw.toFixed(4)}`],
+        content: [`Trail Stop: ${trailingStopRaw}`],
         position: "start",
         backgroundColor: "#1E90FF",
         color: "#FFFFFF",
@@ -293,7 +293,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [3, 3],
       label: {
         display: true,
-        content: [`Trail Stop Buf: ${trailingStopBuffered.toFixed(4)}`],
+        content: [`Trail Stop Buf: ${trailingStopBuffered}`],
         position: "end",
         backgroundColor: "#00BFFF",
         color: "#FFFFFF",
@@ -326,7 +326,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [2, 2],
       label: {
         display: true,
-        content: [`Liquidation: ${liqPrice.toFixed(4)}`],
+        content: [`Liquidation: ${liqPrice}`],
         position: "start",
         backgroundColor: liqColor,
         color: "#FFFFFF",
@@ -354,7 +354,7 @@ export async function generateImageOfCandlesWithSupportResistance(
       borderDash: [6, 6],
       label: {
         display: true,
-        content: [currOpenedPos.side.toUpperCase(), currOpenedPos.avgPrice.toFixed(4)],
+        content: [currOpenedPos.side.toUpperCase(), currOpenedPos.avgPrice],
         position: "start",
         backgroundColor: avgPriceColor,
         color: "#FFFFFF",
