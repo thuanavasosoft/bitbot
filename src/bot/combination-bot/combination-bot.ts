@@ -90,8 +90,8 @@ class CombinationBot {
   private instances: CombBotInstance[] = [];
   private chatIdToInstance: Map<string, CombBotInstance> = new Map();
   private generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
-  /** Account free USDT balance when the general bot run started (for wallet delta). */
-  private startQuoteBalance: string | undefined;
+  /** Account total USDT balance (free + frozen) when the general bot run started (for wallet delta). */
+  private startQuoteBalanceBn?: BigNumber;
 
   constructor() {
     const count = discoverCombBotCount();
@@ -136,13 +136,25 @@ class CombinationBot {
       const pnlStr = `${netPnl >= 0 ? "🟩" : "🟥"} ${netPnl.toFixed(4)} USDT`;
       if (exitReason === "liquidation_exit") {
         this.queueGeneralMessage(
-          `${prefix} 🤯 Liquidated | Close: ${closedPosition.closePrice ?? closedPosition.avgPrice} | Net PnL: ${pnlStr}`
+          `${prefix} 🤯 Liquidated | Close: ${closedPosition.closePrice ?? closedPosition.avgPrice} | Exit net PnL: ${pnlStr}`
         );
       } else {
         const reasonStr = exitReason === "atr_trailing" ? "Trailing stop" : exitReason === "signal_change" ? "Signal/close" : exitReason;
         this.queueGeneralMessage(
-          `${prefix} ✅ Position closed (${reasonStr}) | Net PnL: ${pnlStr}`
+          `${prefix} ✅ Position closed (${reasonStr}) | Exit net PnL: ${pnlStr}`
         );
+      }
+
+      // Auto-send a general /full_update after every close.
+      if (this.generalChatId) {
+        void this.getGeneralFullUpdateMessage()
+          .then((msg) => TelegramService.queueMsg(msg, this.generalChatId!))
+          .catch((err) =>
+            TelegramService.queueMsg(
+              `Failed to auto-send full update: ${err instanceof Error ? err.message : String(err)}`,
+              this.generalChatId!
+            )
+          );
       }
     }
   }
@@ -165,15 +177,19 @@ class CombinationBot {
       this.instances.length > 0
         ? await this.instances[0].tmobUtils.getExchTotalUsdtBalance()
         : new BigNumber(0);
-    const currQuoteBalance = currBalanceBn.toFixed(4);
-    const startQuote = this.startQuoteBalance != null ? new BigNumber(this.startQuoteBalance) : null;
+    const currQuoteBalance = currBalanceBn.decimalPlaces(4, BigNumber.ROUND_HALF_UP).toFixed(4);
+    const startQuote = this.startQuoteBalanceBn ?? null;
+    const startQuoteDisplay =
+      startQuote != null ? startQuote.decimalPlaces(4, BigNumber.ROUND_HALF_UP).toFixed(4) : "N/A";
     const walletDelta = startQuote != null ? currBalanceBn.minus(startQuote) : null;
 
     lines.push("=== ACCOUNT ===");
-    lines.push(`Start balance (100%): ${this.startQuoteBalance ?? "N/A"} USDT`);
+    lines.push(`Start balance (100%): ${startQuoteDisplay} USDT`);
     lines.push(`Current balance (100%): ${currQuoteBalance} USDT`);
     if (walletDelta != null) {
-      lines.push(`Wallet delta: ${walletDelta.gte(0) ? "🟩" : "🟥"} ${walletDelta.toFixed(4)} USDT`);
+      lines.push(
+        `Wallet delta: ${walletDelta.gte(0) ? "🟩" : "🟥"} ${walletDelta.decimalPlaces(4, BigNumber.ROUND_HALF_UP).toFixed(4)} USDT`
+      );
     }
     lines.push("");
 
@@ -190,6 +206,7 @@ class CombinationBot {
       mergedPnL += pnl;
       const avgSlippage =
         inst.numberOfTrades > 0 ? (inst.slippageAccumulation / inst.numberOfTrades).toFixed(5) : "0";
+      const slippageIcon = new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩";
 
       lines.push(`--- BOT_${i + 1} (${inst.symbol}) ---`);
       lines.push(`Run ID: ${inst.runId}`);
@@ -206,21 +223,23 @@ class CombinationBot {
         `Trail ATR: ${inst.trailingAtrLength} | Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
       );
       lines.push(
-        `Triggers: Long ${inst.longTrigger != null ? inst.longTrigger.toFixed(4) : "N/A"} | Short ${inst.shortTrigger != null ? inst.shortTrigger.toFixed(4) : "N/A"}`
+        `Triggers: Long ${inst.longTrigger != null ? inst.longTrigger : "N/A"} | Short ${inst.shortTrigger != null ? inst.shortTrigger : "N/A"}`
       );
       if (inst.currActivePosition) {
         const pos = inst.currActivePosition;
-        lines.push(
-          `Position: ${pos.side} @ ${pos.avgPrice} | Size: ${pos.size} | Liq: ${pos.liquidationPrice ?? "N/A"}`
-        );
+        lines.push("Position:");
+        lines.push(`Side: ${pos.side.toUpperCase()} | Entry: ${pos.avgPrice} | Size: ${pos.size}`);
+        lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
       } else {
-        lines.push("Position: No position");
+        lines.push("Position: No open position");
       }
       lines.push("");
       lines.push(
-        `Calculated PnL: ${pnl >= 0 ? "🟩" : "🟥"} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
+        `Total symbol calculated PnL: ${pnl >= 0 ? "🟩" : "🟥"} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
       );
-      lines.push(`Trades: ${inst.numberOfTrades} | Slippage accum: ${inst.slippageAccumulation} | Avg slippage: ${avgSlippage}`);
+      lines.push(
+        `Trades: ${inst.numberOfTrades} | Slippage accum: ${inst.slippageAccumulation} | Avg slippage: ${slippageIcon} ${avgSlippage}`
+      );
       const lastTrade = inst.getLastTradeMetrics();
       const feeSummary =
         [lastTrade.grossPnl, lastTrade.feeEstimate, lastTrade.netPnl].some(
@@ -229,7 +248,7 @@ class CombinationBot {
           ? formatFeeAwarePnLLine({
             grossPnl: lastTrade.grossPnl,
             feeEstimate: lastTrade.feeEstimate,
-            netPnl: lastTrade.netPnl ?? lastTrade.balanceDelta,
+            netPnl: lastTrade.netPnl,
           })
           : null;
       lines.push(`Last trade: ${lastTrade.closedPositionId ?? "N/A"}${feeSummary ? ` | ${feeSummary}` : ""}`);
@@ -242,15 +261,40 @@ class CombinationBot {
       lines.push(`Overall run time: ${runDurationDisplay}`);
     }
     lines.push(
-      `Total calculated PnL: ${mergedPnL >= 0 ? "🟩" : "🟥"} ${mergedPnL.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
+      `Total merged calculated PnL: ${mergedPnL >= 0 ? "🟩" : "🟥"} ${mergedPnL.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
     );
+    if (earliestRunStart && startQuote != null && startQuote.isFinite() && startQuote.gt(0)) {
+      const elapsedMs = Date.now() - earliestRunStart.getTime();
+      const msPerYear = 365 * 24 * 60 * 60 * 1000;
+      const startQuoteBalance = startQuote;
+      const totalProfit = new BigNumber(mergedPnL);
+      const { runDurationDisplay } = getRunDuration(earliestRunStart);
 
-    if (walletDelta != null) {
-      const pnlVsWalletGap = walletDelta.toNumber() - mergedPnL;
+      const roiPct = startQuoteBalance.lte(0) ? new BigNumber(0) : totalProfit.div(startQuoteBalance).times(100);
+      const stratEstimatedYearlyProfit =
+        elapsedMs > 0 ? totalProfit.div(elapsedMs).times(msPerYear) : new BigNumber(0);
+      const stratEstimatedROI =
+        startQuoteBalance.lte(0) ? new BigNumber(0) : stratEstimatedYearlyProfit.div(startQuoteBalance).times(100);
+
+      lines.push("");
+      lines.push("=== ROI ===");
+      lines.push(`Run time: ${runDurationDisplay}`);
       lines.push(
-        `PnL vs Wallet gap: ${pnlVsWalletGap >= 0 ? "🟩" : "🟥"} ${pnlVsWalletGap.toFixed(4)} USDT (Wallet delta − Calculated PnL)`
+        `Total profit till now: ${totalProfit.isGreaterThanOrEqualTo(0) ? "🟩" : "🟥"} ${totalProfit
+          .toNumber()
+          .toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })} USDT (${roiPct
+            .toNumber()
+            .toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })}%) / ${runDurationDisplay}`
+      );
+      lines.push(
+        `Estimated yearly profit: ${stratEstimatedYearlyProfit
+          .toNumber()
+          .toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })} USDT (${stratEstimatedROI
+            .toNumber()
+            .toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })}%)`
       );
     }
+    lines.push("Note: Entry fee not yet calculated until position is closed. and also Funding fees/interest are ignored, so wallet balance can differ even with correct fees.");
     return lines.join("\n");
   }
 
@@ -356,8 +400,17 @@ class CombinationBot {
 
     if (this.instances.length > 0) {
       const startBal = await this.instances[0].tmobUtils.getExchTotalUsdtBalance();
-      this.startQuoteBalance = startBal.decimalPlaces(4, BigNumber.ROUND_DOWN).toString();
-      console.log(`[COMB] General bot startQuoteBalance=${this.startQuoteBalance} USDT`);
+      this.startQuoteBalanceBn = startBal;
+      console.log(
+        `[COMB] General bot startQuoteBalance=${startBal.decimalPlaces(8, BigNumber.ROUND_HALF_UP).toFixed(8)} USDT`
+      );
+      for (let i = 0; i < this.instances.length; i++) {
+        const inst = this.instances[i];
+        const posInfo = inst.currActivePosition
+          ? `${inst.currActivePosition.side} @ ${inst.currActivePosition.avgPrice} size=${inst.currActivePosition.size} liq=${inst.currActivePosition.liquidationPrice ?? "N/A"}`
+          : "no position";
+        console.log(`[COMB] Bot ${i + 1} (${inst.symbol}) position: ${posInfo}`);
+      }
     }
 
     for (const instance of this.instances) {

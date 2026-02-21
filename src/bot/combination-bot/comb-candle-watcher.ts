@@ -58,16 +58,18 @@ class CombCandleWatcher {
         if (rawResistance !== null) {
           const bufferMultiplier = new BigNumber(1).minus(this.bot.triggerBufferPercentage / 100);
           const longTriggerRaw = new BigNumber(rawResistance).times(bufferMultiplier);
-          const multiplier = Math.pow(10, this.bot.pricePrecision);
-          this.bot.longTrigger = Math.floor(longTriggerRaw.times(multiplier).toNumber()) / multiplier;
+          this.bot.longTrigger = longTriggerRaw
+            .decimalPlaces(this.bot.pricePrecision, BigNumber.ROUND_DOWN)
+            .toNumber();
         } else {
           this.bot.longTrigger = null;
         }
         if (rawSupport !== null) {
           const bufferMultiplier = new BigNumber(1).plus(this.bot.triggerBufferPercentage / 100);
           const shortTriggerRaw = new BigNumber(rawSupport).times(bufferMultiplier);
-          const multiplier = Math.pow(10, this.bot.pricePrecision);
-          this.bot.shortTrigger = Math.ceil(shortTriggerRaw.times(multiplier).toNumber()) / multiplier;
+          this.bot.shortTrigger = shortTriggerRaw
+            .decimalPlaces(this.bot.pricePrecision, BigNumber.ROUND_UP)
+            .toNumber();
         } else {
           this.bot.shortTrigger = null;
         }
@@ -100,32 +102,28 @@ class CombCandleWatcher {
         this.bot.queueMsg(signalImageData);
 
         const currentPrice = currCandles[currCandles.length - 1].closePrice;
-        const triggerMsg =
-          this.bot.longTrigger !== null || this.bot.shortTrigger !== null
-            ? `\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger.toFixed(4) : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger.toFixed(4) : "N/A"}`
-            : "";
         const trailingMsg =
           trailingStopRaw !== null || trailingStopBuffered !== null
-            ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw.toFixed(4) : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered.toFixed(4) : "N/A"}`
+            ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
             : "";
         const optimizationAgeMsg =
           this.bot.lastOptimizationAtMs > 0
             ? (() => {
-                const elapsedMs = now.getTime() - this.bot.lastOptimizationAtMs;
-                const totalSeconds = Math.floor(elapsedMs / 1000);
-                const hours = Math.floor(totalSeconds / 3600);
-                const minutes = Math.floor((totalSeconds % 3600) / 60);
-                return `\nLast optimized: ${hours}h${minutes}m`;
-              })()
+              const elapsedMs = now.getTime() - this.bot.lastOptimizationAtMs;
+              const totalSeconds = Math.floor(elapsedMs / 1000);
+              const hours = Math.floor(totalSeconds / 3600);
+              const minutes = Math.floor((totalSeconds % 3600) / 60);
+              return `\nLast optimized: ${hours}h${minutes}m`;
+            })()
             : "\nLast optimized: N/A";
         const paramsMsg =
           `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
           `\nTrailing Multiplier: ${this.bot.trailingStopMultiplier}`;
 
         this.bot.queueMsg(
-          `ℹ️ Price: ${currentPrice.toFixed(4)}\n` +
-            `Support: ${rawSupport !== null ? rawSupport.toFixed(4) : "N/A"}\n` +
-            `Resistance: ${rawResistance !== null ? rawResistance.toFixed(4) : "N/A"}${triggerMsg}${trailingMsg}${paramsMsg}${optimizationAgeMsg}`
+          `ℹ️ Price: ${currentPrice}\n` +
+          `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
+          `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}`
         );
 
         this.bot.lastSRUpdateTime = Date.now();

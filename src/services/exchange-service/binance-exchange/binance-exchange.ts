@@ -312,7 +312,9 @@ class BinanceExchange implements IExchangeInstance {
 
     if (positionId) {
       const cached = this._recentClosedPositions.get(positionId);
-      if (cached) return [cached];
+      if (cached) {
+        return [cached];
+      }
       const reconstructed = await this._buildClosedPositionFromRest(positionId);
       return reconstructed ? [reconstructed] : [];
     }

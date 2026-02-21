@@ -87,6 +87,7 @@ class CombOrderExecutor {
       let fillUpdate: IOrderFillUpdate | undefined;
       try {
         const fillUpdateResp = await orderHandle?.wait();
+        console.log("[COMB] fillUpdateResp: ", fillUpdateResp);
         fillUpdate = { updateTime: fillUpdateResp?.updateTime ?? 0, executionPrice: fillUpdateResp?.executionPrice ?? 0 };
       } catch {
         const orderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
@@ -138,6 +139,7 @@ class CombOrderExecutor {
       let fillUpdate: IOrderFillUpdate | undefined;
       try {
         const fillUpdateResp = await orderHandle?.wait();
+        console.log("[COMB] fillUpdateResp: ", fillUpdateResp);
         fillUpdate = { updateTime: fillUpdateResp?.updateTime ?? 0, executionPrice: fillUpdateResp?.executionPrice ?? 0 };
       } catch {
         const orderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);

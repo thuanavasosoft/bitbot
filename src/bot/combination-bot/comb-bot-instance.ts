@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import TelegramService from "@/services/telegram.service";
+import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
 import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
@@ -123,14 +124,6 @@ class CombBotInstance {
     this.onInstanceEvent?.(event);
   }
 
-  async triggerOpenSignal(posDir: "long" | "short", openBalanceAmt: string): Promise<IPosition> {
-    return this.orderExecutor.triggerOpenSignal(posDir, openBalanceAmt);
-  }
-
-  async triggerCloseSignal(position?: IPosition): Promise<IPosition> {
-    return this.orderExecutor.triggerCloseSignal(position);
-  }
-
   resetTrailingStopTracking(): void {
     this.trailingAtrWindow = [];
     this.trailingCloseWindow = [];
@@ -142,19 +135,17 @@ class CombBotInstance {
     return this.orderExecutor.fetchClosedPositionSnapshot(positionId, maxRetries);
   }
 
-  updateLastTradeMetrics(metrics: { closedPositionId?: number; grossPnl?: number; balanceDelta?: number; feeEstimate?: number; netPnl?: number }): void {
+  updateLastTradeMetrics(metrics: { closedPositionId?: number; grossPnl?: number; feeEstimate?: number; netPnl?: number }): void {
     if (metrics.closedPositionId !== undefined) this.lastClosedPositionId = metrics.closedPositionId;
     if (metrics.grossPnl !== undefined) this.lastGrossPnl = metrics.grossPnl;
-    if (metrics.balanceDelta !== undefined) this.lastBalanceDelta = metrics.balanceDelta;
     if (metrics.feeEstimate !== undefined) this.lastFeeEstimate = metrics.feeEstimate;
     if (metrics.netPnl !== undefined) this.lastNetPnl = metrics.netPnl;
   }
 
-  getLastTradeMetrics(): { closedPositionId?: number; grossPnl?: number; balanceDelta?: number; feeEstimate?: number; netPnl?: number } {
+  getLastTradeMetrics(): { closedPositionId?: number; grossPnl?: number; feeEstimate?: number; netPnl?: number } {
     return {
       closedPositionId: this.lastClosedPositionId,
       grossPnl: this.lastGrossPnl,
-      balanceDelta: this.lastBalanceDelta,
       feeEstimate: this.lastFeeEstimate,
       netPnl: this.lastNetPnl ?? this.lastBalanceDelta,
     };
@@ -183,8 +174,59 @@ class CombBotInstance {
     const exitReason = _options?.exitReason ?? "signal_change";
     const activePosition = _options?.activePosition ?? this.currActivePosition;
     const positionSide = activePosition?.side ?? closedPosition.side;
+    const entryFill = this.entryWsPrice;
+    const fillTimestamp =
+      _options?.fillTimestamp ??
+      this.resolveWsPrice?.time?.getTime() ??
+      closedPosition.updateTime ??
+      Date.now();
+    const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
+    const shouldTrackSlippage = !_options?.isLiquidation;
     const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
-    await this.tmobUtils.handlePnL(realizedPnl, false, undefined, undefined, undefined, closedPosition.id);
+
+    const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
+
+    let srLevel: number | null = null;
+    if (positionSide === "long") {
+      srLevel = this.currentSupport;
+    } else if (positionSide === "short") {
+      srLevel = this.currentResistance;
+    }
+
+    let slippage = 0;
+    const timeDiffMs = fillTimestamp - triggerTimestamp;
+
+    if (shouldTrackSlippage) {
+      if (srLevel === null) {
+        this.queueMsg(
+          `⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`
+        );
+      } else {
+        slippage =
+          positionSide === "short"
+            ? new BigNumber(closedPrice).minus(srLevel).toNumber()
+            : new BigNumber(srLevel).minus(closedPrice).toNumber();
+      }
+    }
+
+    const icon = slippage <= 0 ? "🟩" : "🟥";
+    if (shouldTrackSlippage) {
+      if (icon === "🟥") {
+        this.slippageAccumulation += Math.abs(slippage);
+      } else {
+        this.slippageAccumulation -= Math.abs(slippage);
+      }
+      this.numberOfTrades++;
+    }
+
+    await this.tmobUtils.handlePnL(
+      realizedPnl,
+      _options?.isLiquidation ?? false,
+      shouldTrackSlippage ? icon : undefined,
+      shouldTrackSlippage ? slippage : undefined,
+      shouldTrackSlippage ? timeDiffMs : undefined,
+      closedPosition.id
+    );
     this.notifyInstanceEvent({
       type: "position_closed",
       closedPosition,
@@ -204,15 +246,16 @@ class CombBotInstance {
       timestampMs: Date.now(),
       side: positionSide as "long" | "short",
       totalPnL: this.totalActualCalculatedProfit,
-      entryTimestamp: null,
-      entryTimestampMs: null,
-      entryFillPrice: null,
-      exitTimestamp: new Date().toISOString(),
-      exitTimestampMs: Date.now(),
+      entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
+      entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
+      entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
+      exitTimestamp: new Date(fillTimestamp).toISOString(),
+      exitTimestampMs: fillTimestamp,
       exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
       tradePnL: realizedPnl,
       exitReason,
     });
+
     this.stateBus.emit(EEventBusEventType.StateChange);
   }
 }

@@ -36,7 +36,7 @@ class CombOptimizationLoop {
         `⏱️ [${toIso(triggerTs)}] Optimization update due - closing open position before re-optimizing.\n` +
         `Position ID: ${activePosition.id} (${activePosition.side})`
       );
-      this.bot.triggerCloseSignal(activePosition).then((closedPosition) => {
+      this.bot.orderExecutor.triggerCloseSignal(activePosition).then((closedPosition) => {
         const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
         this.bot.finalizeClosedPosition(closedPosition, {
           activePosition,

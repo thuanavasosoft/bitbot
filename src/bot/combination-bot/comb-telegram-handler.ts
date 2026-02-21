@@ -15,7 +15,7 @@ class CombTelegramHandler {
 
   private getFeeSummary() {
     const m = this.bot.getLastTradeMetrics();
-    const net = typeof m.netPnl === "number" ? m.netPnl : m.balanceDelta;
+    const net = m.netPnl;
     if ([m.grossPnl, m.feeEstimate, net].every((v) => typeof v !== "number" || !Number.isFinite(v))) return undefined;
     return { grossPnl: m.grossPnl, feeEstimate: m.feeEstimate, netPnl: net };
   }
@@ -24,8 +24,7 @@ class CombTelegramHandler {
     const m = this.bot.getLastTradeMetrics();
     const fee = this.getFeeSummary();
     const feeLine = fee ? formatFeeAwarePnLLine(fee) : formatFeeAwarePnLLine();
-    const walletDelta = typeof m.balanceDelta === "number" && Number.isFinite(m.balanceDelta) ? m.balanceDelta.toFixed(4) : "N/A";
-    return `Last closed position ID: ${m.closedPositionId ?? "N/A"}\n${feeLine}\nWallet delta: ${walletDelta} USDT`;
+    return `Last closed position ID: ${m.closedPositionId ?? "N/A"}\n${feeLine}`;
   }
 
   async getFullUpdateDetailsMsg(): Promise<string> {
@@ -67,12 +66,15 @@ ${await this.getFullUpdateDetailsMsg()}
 Run time: ${runDurationDisplay}
 Calculated profit: ${this.bot.totalActualCalculatedProfit.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} USDT
 Total profit: ${totalProfit.gte(0) ? "🟩" : "🟥"} ${totalProfit.toNumber().toLocaleString("en-US")} USDT
+Note: Entry fee not yet calculated until position is closed. and also Funding/interest is ignored in calculated profit, so wallet balance can differ even with correct fees.
 
 === LAST TRADE ===
 ${this.formatLastTradeSummary()}
 
 === SLIPPAGE ===
-Slippage: ${this.bot.slippageAccumulation} | Trades: ${this.bot.numberOfTrades} | Avg: ${avgSlippage}
+Slippage accumulation: ${this.bot.slippageAccumulation} pip(s)
+Number of trades: ${this.bot.numberOfTrades}
+Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSlippage} pip(s)
 `;
   }
 

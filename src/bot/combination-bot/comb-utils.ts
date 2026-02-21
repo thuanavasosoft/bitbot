@@ -150,7 +150,8 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
     const tradeFees = (openFees ?? new BigNumber(0)).plus(closeFees ?? new BigNumber(0));
 
     const feeEstimate = tradeFees;
-    const grossPnl = tradePnL.plus(tradeFees);
+    // Exchange "realizedPnl" is treated as realized PnL before fees.
+    const grossPnl = tradePnL;
     const netPnl = tradePnL.minus(tradeFees);
 
     const normalize = (v: BigNumber) =>
@@ -165,7 +166,6 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
       grossPnl: roundedGross,
       feeEstimate: roundedFees,
       netPnl: roundedNet,
-      balanceDelta: roundedNet,
     });
 
     this.bot.totalActualCalculatedProfit = new BigNumber(this.bot.totalActualCalculatedProfit).plus(netPnl).toNumber();
@@ -182,6 +182,7 @@ Total calculated PnL: ${this.bot.totalActualCalculatedProfit >= 0 ? "ðŸŸ©" : "ðŸ
 --
 ${closedPositionId ? `Closed position id: ${closedPositionId}\n` : ""}${feeAwareLine}
 --
+Note: Funding/interest is ignored in calculated PnL.
 ${icon != null && slippage != null && timeDiffMs != null ? `-- Close Slippage: --
 Time Diff: ${timeDiffMs}ms
 Price Diff (pips): ${icon} ${slippage}` : ""}`;

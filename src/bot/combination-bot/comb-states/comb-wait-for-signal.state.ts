@@ -36,12 +36,52 @@ class CombWaitForSignalState {
       if (shouldEnter && posDir) {
         this.priceListenerRemover?.();
         const budget = new BigNumber(this.bot.margin).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
+        const triggerTs = Date.now();
         console.log(`[COMB] waitForSignal entryTrigger symbol=${this.bot.symbol} side=${posDir} price=${price} trigger=${posDir === "long" ? this.bot.longTrigger : this.bot.shortTrigger}`);
         this.bot.queueMsg(`✨️ Opening ${posDir} position`);
-        const position = await this.bot.triggerOpenSignal(posDir, budget);
+        const position = await this.bot.orderExecutor.triggerOpenSignal(posDir, budget);
         this.bot.currActivePosition = position;
         this.bot.resetTrailingStopTracking();
         this.bot.lastEntryTime = Date.now();
+        this.bot.numberOfTrades++;
+
+        const positionAvgPrice = position.avgPrice;
+        const entryFill = this.bot.entryWsPrice;
+        const positionTriggerTs = entryFill?.time ? entryFill.time.getTime() : Date.now();
+        const timeDiffMs = positionTriggerTs - triggerTs;
+
+        let srLevel: number | null = null;
+        if (posDir === "long") {
+          srLevel = this.bot.currentResistance;
+        } else {
+          srLevel = this.bot.currentSupport;
+        }
+
+        if (srLevel === null) {
+          console.warn(`⚠️ Cannot calculate slippage: ${posDir === "long" ? "resistance" : "support"} level is null`);
+          this.bot.queueMsg(
+            `⚠️ Warning: Cannot calculate slippage - ${posDir === "long" ? "resistance" : "support"} level not available`
+          );
+        }
+
+        const priceDiff = srLevel !== null
+          ? posDir === "short"
+            ? new BigNumber(srLevel).minus(positionAvgPrice).toNumber()
+            : new BigNumber(positionAvgPrice).minus(srLevel).toNumber()
+          : 0;
+
+        const icon = priceDiff <= 0 ? "🟩" : "🟥";
+        if (icon === "🟥") {
+          this.bot.slippageAccumulation += Math.abs(priceDiff);
+        } else {
+          this.bot.slippageAccumulation -= Math.abs(priceDiff);
+        }
+
+        this.bot.queueMsg(`
+-- Open Slippage: --
+Time Diff: ${timeDiffMs} ms
+Price Diff(pips): ${icon} ${priceDiff}
+`);
         console.log(`[COMB] waitForSignal positionOpened symbol=${this.bot.symbol} positionId=${position.id} side=${position.side} avgPrice=${position.avgPrice} size=${position.size}`);
         this.bot.notifyInstanceEvent({ type: "position_opened", position, symbol: this.bot.symbol });
         this.bot.queueMsg(`🥳 New position opened\n${getPositionDetailMsg(position)}`);

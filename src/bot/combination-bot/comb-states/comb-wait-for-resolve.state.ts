@@ -158,10 +158,10 @@ class CombWaitForResolveState {
             shouldExit = true;
             exitReason = "atr_trailing";
             console.log(
-              `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=long price=${price} bufferedLevel=${bufferedLevel.toFixed(4)} rawLevel=${rawLevel.toFixed(4)}`
+              `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=long price=${price} bufferedLevel=${bufferedLevel} rawLevel=${rawLevel}`
             );
             this.bot.queueMsg(
-              `🟣 Trailing stop (long) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel.toFixed(4)}\nRaw stop: ${rawLevel.toFixed(4)}`
+              `🟣 Trailing stop (long) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
             );
           }
         } else {
@@ -175,10 +175,10 @@ class CombWaitForResolveState {
             shouldExit = true;
             exitReason = "atr_trailing";
             console.log(
-              `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=short price=${price} bufferedLevel=${bufferedLevel.toFixed(4)} rawLevel=${rawLevel.toFixed(4)}`
+              `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=short price=${price} bufferedLevel=${bufferedLevel} rawLevel=${rawLevel}`
             );
             this.bot.queueMsg(
-              `🟣 Trailing stop (short) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel.toFixed(4)}\nRaw stop: ${rawLevel.toFixed(4)}`
+              `🟣 Trailing stop (short) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
             );
           }
         }
@@ -484,7 +484,7 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
   private async _closeCurrPosition(reason: string = "support_resistance") {
     const triggerTs = Date.now();
     const activePosition = this.bot.currActivePosition;
-    const closedPosition = await this.bot.triggerCloseSignal(activePosition);
+    const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
     const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
 
     await this.bot.finalizeClosedPosition(closedPosition, {
