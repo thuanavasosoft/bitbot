@@ -1,40 +1,13 @@
 import TelegramService from "@/services/telegram.service";
-import { IPosition } from "@/services/exchange-service/exchange-type";
 import { toIso } from "../auto-adjust-bot/candle-utils";
-import TMOBUtils from "./tmob-utils";
+import type TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
 
-export interface ITMOBOptimizationBot {
-  updateIntervalMinutes: number;
-  lastOptimizationAtMs: number;
-  currActivePosition?: IPosition;
-  currTrailMultiplier?: number;
-  trailingStopMultiplier: number;
-  trailingAtrLength: number;
-  tmobUtils: TMOBUtils;
-  resolveWsPrice?: { price: number; time: Date };
-  triggerCloseSignal(position?: IPosition): Promise<IPosition>;
-  finalizeClosedPosition(
-    closedPosition: IPosition,
-    options: {
-      activePosition?: IPosition;
-      triggerTimestamp?: number;
-      fillTimestamp?: number;
-      isLiquidation?: boolean;
-      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
-    }
-  ): Promise<void>;
-}
-
-interface ITMOBOptimizationBotWritable extends ITMOBOptimizationBot {
-  lastOptimizationAtMs: number;
-  trailingStopMultiplier: number;
-}
 
 class TMOBOptimizationLoop {
   private abort = false;
   private loopPromise: Promise<void> | undefined;
 
-  constructor(private bot: ITMOBOptimizationBotWritable) { }
+  constructor(private bot: TrailMultiplierOptimizationBot) { }
 
   start(): void {
     if (this.loopPromise) return;
