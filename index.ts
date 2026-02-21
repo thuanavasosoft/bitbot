@@ -53,7 +53,7 @@ async function runProgram() {
     } else if (botMode === "trail_multiplier_optimization_bot") {
       const bot = new TrailMultiplierOptimizationBot();
       await bot.startMakeMoney();
-    } else if (botMode === "combination_bot" || botMode === "comb_bot") {
+    } else if (botMode === "combination_bot") {
       const bot = new CombinationBot();
       await bot.startMakeMoney();
     }
