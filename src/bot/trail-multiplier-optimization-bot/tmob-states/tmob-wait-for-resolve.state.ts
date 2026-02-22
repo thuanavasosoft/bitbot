@@ -103,18 +103,7 @@ class TMOBWaitForResolveState implements TMOBState {
       } else {
         if (this.liquidationCheckIntervalId != null) {
           this._clearLiquidationCheckInterval();
-          if (!this.liquidationCheckInProgress) {
-            this.liquidationCheckInProgress = true;
-            try {
-              const finalized = await this._checkAndFinalizeLiquidationByPrice(price);
-              if (finalized) {
-                this._stopAllWatchers();
-                return;
-              }
-            } finally {
-              this.liquidationCheckInProgress = false;
-            }
-          }
+          await this._runLiquidationCheck();
         }
       }
 

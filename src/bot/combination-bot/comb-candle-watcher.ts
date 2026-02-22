@@ -121,6 +121,7 @@ class CombCandleWatcher {
           `\nTrailing Multiplier: ${this.bot.trailingStopMultiplier}`;
 
         this.bot.queueMsg(
+          `Candles count: ${currCandles.length}\n` +
           `ℹ️ Price: ${currentPrice}\n` +
           `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
           `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}`
