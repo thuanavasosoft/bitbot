@@ -180,6 +180,7 @@ class CombBotInstance {
       this.resolveWsPrice?.time?.getTime() ??
       closedPosition.updateTime ??
       Date.now();
+    this.lastExitTime = fillTimestamp;
     const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
     const shouldTrackSlippage = !_options?.isLiquidation;
     const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
