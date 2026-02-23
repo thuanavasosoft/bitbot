@@ -7,11 +7,13 @@ import type CombBotInstance from "../comb-bot-instance";
 
 class CombWaitForSignalState {
   private priceListenerRemover?: () => void;
+  private cooldownTriggerNoticeBoundaryMs?: number;
 
   constructor(private bot: CombBotInstance) { }
 
   async onEnter() {
     this.bot.queueMsg(`🔜 Waiting for entry signal - monitoring price for breakout...`);
+    this.cooldownTriggerNoticeBoundaryMs = undefined;
     this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, (price) => {
       void this._handlePriceUpdate(price);
     });
@@ -20,8 +22,32 @@ class CombWaitForSignalState {
   private async _handlePriceUpdate(price: number) {
     try {
       if ((this.bot.longTrigger === null && this.bot.shortTrigger === null) || this.bot.currActivePosition) return;
-      if (this.bot.lastExitTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastExitTime) return;
+      const nowMs = Date.now();
       const priceNum = new BigNumber(price);
+
+      const longCross = this.bot.longTrigger !== null && priceNum.gte(this.bot.longTrigger);
+      const shortCross = this.bot.shortTrigger !== null && priceNum.lte(this.bot.shortTrigger);
+
+      if (this.bot.lastExitTime > 0) {
+        const nextMinuteAfterExitMs = (Math.floor(this.bot.lastExitTime / 60_000) + 1) * 60_000;
+        if (nowMs < nextMinuteAfterExitMs) {
+          if ((longCross || shortCross) && this.cooldownTriggerNoticeBoundaryMs !== nextMinuteAfterExitMs) {
+            this.cooldownTriggerNoticeBoundaryMs = nextMinuteAfterExitMs;
+            const side = longCross ? "LONG" : "SHORT";
+            const trigger = longCross ? this.bot.longTrigger : this.bot.shortTrigger;
+            this.bot.queueMsg(
+              `⏳ Entry blocked until next minute boundary because we just exited a position within the last minute\n` +
+              `Symbol: ${this.bot.symbol}\n` +
+              `Side: ${side}\n` +
+              `Price: ${price}\n` +
+              `Trigger: ${trigger}\n` +
+              `Entry allowed at: ${new Date(nextMinuteAfterExitMs).toISOString()}`
+            );
+          }
+          return;
+        }
+      }
+      if (this.bot.lastExitTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastExitTime) return;
       let shouldEnter = false;
       let posDir: TPositionSide | null = null;
       if (this.bot.longTrigger !== null && priceNum.gte(this.bot.longTrigger)) {

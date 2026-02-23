@@ -12,7 +12,9 @@ class CombWaitForResolveState {
   private priceListenerRemover?: () => void;
   private orderUpdateRemover?: () => void;
   private trailingUpdaterAbort = false;
-  private trailingUpdaterPromise?: Promise<void>;
+  private trailingUpdaterRunId = 0;
+  private trailingSleepTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private trailingSleepWake?: () => void;
   private liquidationCheckInProgress = false;
   private liquidationAlertAlreadySent = false;
   private liquidationCheckIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -34,7 +36,10 @@ class CombWaitForResolveState {
 
     this._watchForPositionExit();
     this._watchForPositionLiquidation();
-    this._startTrailingUpdater();
+    const trailingRunId = this._startTrailingUpdater();
+    void this._updateTrailingStopLevels(trailingRunId).catch((error) => {
+      console.error("[COMB] Failed to update trailing stop levels (onEnter):", error);
+    });
   }
 
   private _clearPriceListener() {
@@ -185,30 +190,68 @@ class CombWaitForResolveState {
     }
   }
 
-  private _startTrailingUpdater() {
-    if (this.trailingUpdaterPromise) return;
+  private _wakeTrailingSleep() {
+    if (this.trailingSleepTimeoutId != null) {
+      clearTimeout(this.trailingSleepTimeoutId);
+      this.trailingSleepTimeoutId = null;
+    }
+    if (this.trailingSleepWake) {
+      const wake = this.trailingSleepWake;
+      this.trailingSleepWake = undefined;
+      wake();
+    }
+  }
+
+  private _startTrailingUpdater(): number {
     this.trailingUpdaterAbort = false;
-    this.trailingUpdaterPromise = this._runTrailingUpdaterLoop();
+    const runId = ++this.trailingUpdaterRunId;
+    this._wakeTrailingSleep();
+    void this._runTrailingUpdaterLoop(runId);
+    return runId;
   }
 
   private _stopTrailingUpdater() {
     this.trailingUpdaterAbort = true;
+    this._wakeTrailingSleep();
   }
 
-  private async _runTrailingUpdaterLoop() {
-    while (!this.trailingUpdaterAbort) {
-      try {
-        await this._updateTrailingStopLevels();
-      } catch (error) {
-        console.error("[COMB] Failed to update trailing stop levels:", error);
+  private async _sleepUntilNextMinuteOrWake(runId: number): Promise<void> {
+    const waitMs = this._msUntilNextMinute();
+    await new Promise<void>((resolve) => {
+      if (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId) {
+        resolve();
+        return;
       }
+      this.trailingSleepWake = resolve;
+      this.trailingSleepTimeoutId = setTimeout(() => {
+        this.trailingSleepTimeoutId = null;
+        this.trailingSleepWake = undefined;
+        resolve();
+      }, waitMs);
+    });
+  }
 
-      if (this.trailingUpdaterAbort) break;
-      const waitMs = this._msUntilNextMinute();
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
+  private async _runTrailingUpdaterLoop(runId: number) {
+    try {
+      while (!this.trailingUpdaterAbort && this.trailingUpdaterRunId === runId) {
+        try {
+          await this._updateTrailingStopLevels(runId);
+        } catch (error) {
+          console.error("[COMB] Failed to update trailing stop levels:", error);
+        }
+
+        if (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId) break;
+        await this._sleepUntilNextMinuteOrWake(runId);
+      }
+    } finally {
+      if (this.trailingSleepTimeoutId != null) {
+        clearTimeout(this.trailingSleepTimeoutId);
+        this.trailingSleepTimeoutId = null;
+      }
+      if (this.trailingSleepWake) {
+        this.trailingSleepWake = undefined;
+      }
     }
-
-    this.trailingUpdaterPromise = undefined;
   }
 
   private _msUntilNextMinute(): number {
@@ -305,7 +348,10 @@ class CombWaitForResolveState {
     return trSum / period;
   }
 
-  private async _updateTrailingStopLevels() {
+  private async _updateTrailingStopLevels(runId?: number) {
+    if (runId !== undefined && (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId)) {
+      return;
+    }
     const position = this.bot.currActivePosition;
     if (!position) {
       this.bot.resetTrailingStopTracking();
@@ -333,6 +379,9 @@ class CombWaitForResolveState {
         onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
       }
     );
+    if (runId !== undefined && (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId)) {
+      return;
+    }
     const cutoffTs = now - 60 * 1000;
     const finishedCandles = candles.filter((c) => c.timestamp <= cutoffTs);
 
@@ -342,8 +391,11 @@ class CombWaitForResolveState {
     this.bot.trailingAtrWindow = finishedCandles.slice(-atrWindowSize);
 
     const entryTime = this.bot.lastEntryTime || 0;
+    // Align entry time to the 1-minute candle boundary so the first finished candle after entry
+    // is eligible, avoiding a common ~2-minute delay when entry occurs mid-minute.
+    const alignedEntryTime = entryTime === 0 ? 0 : Math.floor(entryTime / 60_000) * 60_000;
     const closesSinceEntry = finishedCandles
-      .filter((c) => entryTime === 0 || c.timestamp >= entryTime)
+      .filter((c) => alignedEntryTime === 0 || c.timestamp >= alignedEntryTime)
       .map((c) => c.closePrice);
 
     if (!closesSinceEntry.length) {
