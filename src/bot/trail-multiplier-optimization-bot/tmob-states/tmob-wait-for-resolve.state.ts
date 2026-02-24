@@ -6,7 +6,7 @@ import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../../breakout-bot/bb-retry";
 import { toIso } from "@/bot/auto-adjust-bot/candle-utils";
 
-type TickRoundMode = "up" | "down" | "nearest";
+export type TickRoundMode = "up" | "down" | "nearest";
 
 class TMOBWaitForResolveState implements TMOBState {
   private ltpListenerRemover?: () => void;

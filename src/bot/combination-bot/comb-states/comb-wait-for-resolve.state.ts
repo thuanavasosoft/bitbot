@@ -3,6 +3,7 @@ import { ICandleInfo, IPosition, IWSOrderUpdate } from "@/services/exchange-serv
 import BigNumber from "bignumber.js";
 import { withRetries, isTransientError } from "../comb-retry";
 import type CombBotInstance from "../comb-bot-instance";
+import { TickRoundMode } from "@/bot/trail-multiplier-optimization-bot/tmob-states/tmob-wait-for-resolve.state";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -422,9 +423,17 @@ class CombWaitForResolveState {
     const multiplier = this.bot.trailingStopMultiplier;
     let rawLevel: number | null = null;
     if (position.side === "long") {
-      rawLevel = Math.max(...closesWindow) - atrValue * multiplier;
+      const highestClose = Math.max(...closesWindow);
+      const candidateStop = highestClose - atrValue * multiplier;
+      if (candidateStop > 0) {
+        rawLevel = this._quantizeToTick(candidateStop, "up");
+      }
     } else {
-      rawLevel = Math.min(...closesWindow) + atrValue * multiplier;
+      const lowestClose = Math.min(...closesWindow);
+      const candidateStop = lowestClose + atrValue * multiplier;
+      if (candidateStop > 0) {
+        rawLevel = this._quantizeToTick(candidateStop, "down");
+      }
     }
 
     if (rawLevel === null || !Number.isFinite(rawLevel) || rawLevel <= 0) {
@@ -541,6 +550,24 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     console.log(`[COMB] CombWaitForResolveState onExit symbol=${this.bot.symbol}`);
     this._stopAllWatchers();
   }
+
+  _quantizeToTick(price: number, mode: TickRoundMode, withLogs?: boolean): number {
+    if (!Number.isFinite(price)) return price;
+    const tickSize = this.bot.tickSize;
+    if (!Number.isFinite(tickSize) || tickSize <= 0) return price;
+    const p = new BigNumber(price);
+    const t = new BigNumber(tickSize);
+    const q = p.div(t);
+
+    const rounded =
+      mode === "up"
+        ? q.integerValue(BigNumber.ROUND_CEIL)
+        : mode === "down"
+          ? q.integerValue(BigNumber.ROUND_FLOOR)
+          : q.integerValue(BigNumber.ROUND_HALF_UP);
+    const tick = rounded.times(t).toNumber();
+    return tick;
+  };
 }
 
 export default CombWaitForResolveState;
