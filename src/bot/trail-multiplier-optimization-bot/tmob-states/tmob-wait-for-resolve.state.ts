@@ -405,9 +405,6 @@ class TMOBWaitForResolveState implements TMOBState {
       }
     }
 
-    console.log("rawLevel: ", rawLevel);
-    console.log("bufferedLevel: ", bufferedLevel);
-
     this.bot.trailingStopTargets = {
       side: position.side,
       rawLevel,
