@@ -1,5 +1,4 @@
-import { ICandleInfo } from "@/services/exchange-service/exchange-type";
-import { Side } from "../auto-adjust-bot/types";
+import { Candle, Side } from "../auto-adjust-bot/types";
 
 export interface TMOBState {
   onEnter: () => Promise<void>;
@@ -66,13 +65,14 @@ export type TMOBRunBacktestArgs = {
   requestedEndTime: string;
   margin?: number;
   leverage?: number;
-  candles: ICandleInfo[];
-  endCandle?: ICandleInfo;
+  candles: Candle[];
+  endCandle?: Candle;
   trailingAtrLength: number;
   highestLookback: number;
   trailMultiplier: number;
   trailConfirmBars: number;
   signalParams: SignalParams;
+  triggerBufferPercentage: number;
   tickSize?: number;
   pricePrecision?: number;
 };
@@ -117,7 +117,7 @@ export type TMOBRefPnlPoint = {
   exitTimestampMs: number;
   exitFillPrice: number;
   tradePnL: number;
-  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
+  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "reoptimization";
 };
 
 export type TMOBRefEvent =
@@ -132,7 +132,7 @@ export type TMOBRefEvent =
     side: Side;
     tsMs: number;
     fillPrice: number;
-    reason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
+    reason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "reoptimization";
   };
 
 export type TMOBRefStrategyConfig = {
@@ -150,6 +150,9 @@ export type TMOBRefStrategyConfig = {
   trailConfirmBars: number;
   signalParams: SignalParams;
   tradeStartMs: number;
+  triggerBufferPercentage: number;
+  pricePrecision: number;
+  maintenanceMarginRate: number;
 };
 
 export type SignalParams = {

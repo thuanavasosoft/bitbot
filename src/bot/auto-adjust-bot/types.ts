@@ -61,4 +61,10 @@ export type BacktestRunSummary = {
   apyPercent: number;
   sharpeRatio: number;
   slippageAccumulation?: number;
+  /** When backtest execution started (ISO string). */
+  runStartedAt?: string;
+  /** When backtest execution finished (ISO string). */
+  runFinishedAt?: string;
+  /** Total backtest execution time in milliseconds. */
+  runDurationMs?: number;
 };

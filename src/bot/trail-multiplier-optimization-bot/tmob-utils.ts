@@ -3,7 +3,7 @@ import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot"
 import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import { runBacktestPool } from "./tmob-backtest-worker-pool";
-import { TMOBSignalParams } from "./tmob-types";
+import { TMOBRunBacktestArgs, TMOBSignalParams } from "./tmob-types";
 import BigNumber from "bignumber.js";
 import { formatFeeAwarePnLLine } from "@/utils/strings.util";
 import { toIso } from "../auto-adjust-bot/candle-utils";
@@ -43,18 +43,31 @@ class TMOBUtils {
       Math.min(multMin + i * step, multMax)
     );
 
-    const sharedArgs = {
+    const formattedCandles = filteredCandles.map(c => ({
+      openTime: c.openTime,
+      closeTime: c.closeTime,
+      open: c.openPrice,
+      high: c.highPrice,
+      low: c.lowPrice,
+      close: c.closePrice,
+      volume: c.volume,
+    }));
+    const sharedArgs: Omit<TMOBRunBacktestArgs, "trailMultiplier"> = {
+      margin: this.bot.margin,
+      leverage: this.bot.leverage,
       symbol: this.bot.symbol,
       interval: "1m" as const,
       requestedStartTime: optimizationWindowStartDate.toISOString(),
       requestedEndTime: endFetchCandles.toISOString(),
-      candles: filteredCandles,
+      candles: formattedCandles,
+      endCandle: formattedCandles[formattedCandles.length - 1],
       trailingAtrLength: this.bot.trailingAtrLength,
       highestLookback: this.bot.trailingHighestLookback,
       trailConfirmBars: this.bot.trailConfirmBars,
-      signalParams: { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal },
+      signalParams: { N: this.bot.nSignal, ...TMOB_DEFAULT_SIGNAL_PARAMS },
       tickSize: this.bot.tickSize,
       pricePrecision: this.bot.pricePrecision,
+      triggerBufferPercentage: this.bot.triggerBufferPercentage,
     };
 
     const results = await runBacktestPool(sharedArgs, trailMultipliers);
@@ -75,7 +88,7 @@ class TMOBUtils {
     TelegramService.queueMsg(`🚇 Updated Current Trail Multiplier at ${toIso(finishedOptimizationDate.getTime())}:
 New trail multiplier: ${this.bot.currTrailMultiplier} 
 Total pnl: ${bestTotalPnL.toFixed(3)} USDT
-Candles used: ${filteredCandles.length}
+Candles used: ${filteredCandles.length} (from ${toIso(filteredCandles[0].openTime)} to ${toIso(filteredCandles[filteredCandles.length - 1].openTime)})
 Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimizationDate.getTime()).toLocaleString()} ms
 `);
   }

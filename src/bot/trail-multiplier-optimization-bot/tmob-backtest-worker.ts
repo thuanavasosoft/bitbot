@@ -35,11 +35,12 @@ function runBatch(payload: TMOBWorkerRunPayload): void {
       const backtestResult = tmobRunBacktest({
         ...sharedArgs,
         trailMultiplier,
+        withLogs: true,
       });
       results.push({
         jobId,
         trailMultiplier,
-        totalPnL: backtestResult.summary.totalPnL,
+        totalPnL: backtestResult.totalPnL,
       });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
