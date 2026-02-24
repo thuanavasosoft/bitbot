@@ -506,12 +506,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
   const step = (candle: Candle, i: number, withLog?: boolean): void => {
     // Main loop through candles (reference order & timestamps)
     const currentTime = new Date(candle.openTime);
-    const loggableDates: string[] = [
-      "2026-02-22T00:42",
-      // "2026-02-22T02:57",
-      // "2026-02-22T08:41",
-      // "2026-02-22T08:42",
-    ]
+    const loggableDates: string[] = []
     const withLogs = withLog && loggableDates.some(logable => toIso(currentTime.getTime()).startsWith(logable)) || false;
     withLogs && console.log(`=====================${toIso(currentTime.getTime())}=========================`);
     const isTradable = candle.openTime >= tradeStartMs;
