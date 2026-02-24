@@ -6,11 +6,15 @@ import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../../breakout-bot/bb-retry";
 import { toIso } from "@/bot/auto-adjust-bot/candle-utils";
 
+export type TickRoundMode = "up" | "down" | "nearest";
+
 class TMOBWaitForResolveState implements TMOBState {
-  private priceListenerRemover?: () => void;
+  private ltpListenerRemover?: () => void;
   private orderUpdateRemover?: () => void;
   private trailingUpdaterAbort = false;
-  private trailingUpdaterPromise?: Promise<void>;
+  private trailingUpdaterRunId = 0;
+  private trailingSleepTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private trailingSleepWake?: () => void;
   private liquidationCheckInProgress = false;
   private liquidationAlertAlreadySent = false;
   private liquidationCheckIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -32,13 +36,16 @@ class TMOBWaitForResolveState implements TMOBState {
 
     this._watchForPositionExit();
     this._watchForPositionLiquidation();
-    this._startTrailingUpdater();
+    const trailingRunId = this._startTrailingUpdater();
+    void this._updateTrailingStopLevels(trailingRunId).catch((error) => {
+      console.error("[TMOBWaitForResolveState] Failed to update trailing stop levels (onEnter):", error);
+    });
   }
 
   private _clearPriceListener() {
-    if (this.priceListenerRemover) {
-      this.priceListenerRemover();
-      this.priceListenerRemover = undefined;
+    if (this.ltpListenerRemover) {
+      this.ltpListenerRemover();
+      this.ltpListenerRemover = undefined;
     }
   }
 
@@ -64,8 +71,8 @@ class TMOBWaitForResolveState implements TMOBState {
   }
 
   private async _watchForPositionExit() {
-    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, (price) => {
-      void this._handleExitPriceUpdate(price);
+    this.ltpListenerRemover = ExchangeService.hookTradeListener(this.bot.symbol, (trade) => {
+      void this._handleExitPriceUpdate(trade.price);
     });
   }
 
@@ -174,30 +181,68 @@ class TMOBWaitForResolveState implements TMOBState {
     }
   }
 
-  private _startTrailingUpdater() {
-    if (this.trailingUpdaterPromise) return;
+  private _wakeTrailingSleep() {
+    if (this.trailingSleepTimeoutId != null) {
+      clearTimeout(this.trailingSleepTimeoutId);
+      this.trailingSleepTimeoutId = null;
+    }
+    if (this.trailingSleepWake) {
+      const wake = this.trailingSleepWake;
+      this.trailingSleepWake = undefined;
+      wake();
+    }
+  }
+
+  private _startTrailingUpdater(): number {
     this.trailingUpdaterAbort = false;
-    this.trailingUpdaterPromise = this._runTrailingUpdaterLoop();
+    const runId = ++this.trailingUpdaterRunId;
+    this._wakeTrailingSleep();
+    void this._runTrailingUpdaterLoop(runId);
+    return runId;
   }
 
   private _stopTrailingUpdater() {
     this.trailingUpdaterAbort = true;
+    this._wakeTrailingSleep();
   }
 
-  private async _runTrailingUpdaterLoop() {
-    while (!this.trailingUpdaterAbort) {
-      try {
-        await this._updateTrailingStopLevels();
-      } catch (error) {
-        console.error("[TMOBWaitForResolveState] Failed to update trailing stop levels:", error);
+  private async _sleepUntilNextMinuteOrWake(runId: number): Promise<void> {
+    const waitMs = this._msUntilNextMinute();
+    await new Promise<void>((resolve) => {
+      if (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId) {
+        resolve();
+        return;
       }
+      this.trailingSleepWake = resolve;
+      this.trailingSleepTimeoutId = setTimeout(() => {
+        this.trailingSleepTimeoutId = null;
+        this.trailingSleepWake = undefined;
+        resolve();
+      }, waitMs);
+    });
+  }
 
-      if (this.trailingUpdaterAbort) break;
-      const waitMs = this._msUntilNextMinute();
-      await new Promise(resolve => setTimeout(resolve, waitMs));
+  private async _runTrailingUpdaterLoop(runId: number) {
+    try {
+      while (!this.trailingUpdaterAbort && this.trailingUpdaterRunId === runId) {
+        try {
+          await this._updateTrailingStopLevels(runId);
+        } catch (error) {
+          console.error("[TMOBWaitForResolveState] Failed to update trailing stop levels:", error);
+        }
+
+        if (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId) break;
+        await this._sleepUntilNextMinuteOrWake(runId);
+      }
+    } finally {
+      if (this.trailingSleepTimeoutId != null) {
+        clearTimeout(this.trailingSleepTimeoutId);
+        this.trailingSleepTimeoutId = null;
+      }
+      if (this.trailingSleepWake) {
+        this.trailingSleepWake = undefined;
+      }
     }
-
-    this.trailingUpdaterPromise = undefined;
   }
 
   private _msUntilNextMinute(): number {
@@ -306,7 +351,10 @@ class TMOBWaitForResolveState implements TMOBState {
     return trSum / period;
   }
 
-  private async _updateTrailingStopLevels() {
+  async _updateTrailingStopLevels(runId?: number) {
+    if (runId !== undefined && (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId)) {
+      return;
+    }
     const position = this.bot.currActivePosition;
     if (!position) {
       this.bot.resetTrailingStopTracking();
@@ -336,6 +384,9 @@ class TMOBWaitForResolveState implements TMOBState {
         },
       }
     );
+    if (runId !== undefined && (this.trailingUpdaterAbort || this.trailingUpdaterRunId !== runId)) {
+      return;
+    }
     const cutoffTs = now - 60 * 1000;
     const finishedCandles = candles.filter((candle) => candle.timestamp <= cutoffTs);
 
@@ -347,8 +398,11 @@ class TMOBWaitForResolveState implements TMOBState {
     this.bot.trailingAtrWindow = finishedCandles.slice(-atrWindowSize);
 
     const entryTime = this.bot.lastEntryTime || 0;
+    // Align entry time to the 1-minute candle boundary so the first finished candle after entry
+    // is eligible, avoiding a common ~2-minute delay when entry occurs mid-minute.
+    const alignedEntryTime = entryTime === 0 ? 0 : Math.floor(entryTime / 60_000) * 60_000;
     const closesSinceEntry = finishedCandles
-      .filter((candle) => entryTime === 0 || candle.timestamp >= entryTime)
+      .filter((candle) => alignedEntryTime === 0 || candle.timestamp >= alignedEntryTime)
       .map((candle) => candle.closePrice);
 
     if (!closesSinceEntry.length) {
@@ -376,10 +430,16 @@ class TMOBWaitForResolveState implements TMOBState {
     let rawLevel: number | null = null;
     if (position.side === "long") {
       const highestClose = Math.max(...closesWindow);
-      rawLevel = highestClose - atrValue * multiplier;
+      const candidateStop = highestClose - atrValue * multiplier;
+      if (candidateStop > 0) {
+        rawLevel = this._quantizeToTick(candidateStop, "up");
+      }
     } else {
       const lowestClose = Math.min(...closesWindow);
-      rawLevel = lowestClose + atrValue * multiplier;
+      const candidateStop = lowestClose + atrValue * multiplier;
+      if (candidateStop > 0) {
+        rawLevel = this._quantizeToTick(candidateStop, "down");
+      }
     }
 
     if (rawLevel === null || !Number.isFinite(rawLevel) || rawLevel <= 0) {
@@ -506,6 +566,24 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     console.log("Exiting TMOB Wait For Resolve State");
     this._stopAllWatchers();
   }
+
+  _quantizeToTick(price: number, mode: TickRoundMode, withLogs?: boolean): number {
+    if (!Number.isFinite(price)) return price;
+    const tickSize = this.bot.tickSize;
+    if (!Number.isFinite(tickSize) || tickSize <= 0) return price;
+    const p = new BigNumber(price);
+    const t = new BigNumber(tickSize);
+    const q = p.div(t);
+
+    const rounded =
+      mode === "up"
+        ? q.integerValue(BigNumber.ROUND_CEIL)
+        : mode === "down"
+          ? q.integerValue(BigNumber.ROUND_FLOOR)
+          : q.integerValue(BigNumber.ROUND_HALF_UP);
+    const tick = rounded.times(t).toNumber();
+    return tick;
+  };
 }
 
 export default TMOBWaitForResolveState;

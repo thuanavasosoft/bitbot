@@ -2,6 +2,15 @@ export type TOrderStatus = 'open' | 'partially_filled' | 'partially_filled_cance
 export type TOrderType = "market" | "limit";
 export type TOrderSide = "buy" | "sell";
 
+export interface IWSTradeTick {
+  id: string;
+  symbol: string;
+  price: number;
+  quantity: number;
+  side: TOrderSide;
+  timestamp: number;
+}
+
 export interface IPlaceOrderParams {
   symbol: string;
   clientOrderId: string;

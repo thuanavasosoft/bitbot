@@ -45,21 +45,34 @@ class CombUtils {
     const numSteps = Math.max(1, Math.floor((multMax - multMin) / step) + 1);
     const trailMultipliers = Array.from({ length: numSteps }, (_, i) => Math.min(multMin + i * step, multMax));
 
-    const sharedArgs = {
+    const formattedCandles = filteredCandles.map(c => ({
+      openTime: c.openTime,
+      closeTime: c.closeTime,
+      open: c.openPrice,
+      high: c.highPrice,
+      low: c.lowPrice,
+      close: c.closePrice,
+      volume: c.volume,
+    }));
+    const sharedArgs: Omit<TMOBRunBacktestArgs, "trailMultiplier"> = {
+      margin: this.bot.margin,
+      leverage: this.bot.leverage,
       symbol: this.bot.symbol,
       interval: "1m" as const,
       requestedStartTime: optimizationWindowStartDate.toISOString(),
       requestedEndTime: endFetchCandles.toISOString(),
-      candles: filteredCandles,
+      candles: formattedCandles,
+      endCandle: formattedCandles[formattedCandles.length - 1],
       trailingAtrLength: this.bot.trailingAtrLength,
       highestLookback: this.bot.trailingHighestLookback,
       trailConfirmBars: this.bot.trailConfirmBars,
-      signalParams: { ...COMB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal } as CombSignalParams,
+      signalParams: { N: this.bot.nSignal, ...COMB_DEFAULT_SIGNAL_PARAMS } as CombSignalParams,
       tickSize: this.bot.tickSize,
       pricePrecision: this.bot.pricePrecision,
+      triggerBufferPercentage: this.bot.triggerBufferPercentage,
     };
 
-    const results = await runBacktestPool(sharedArgs as Omit<TMOBRunBacktestArgs, "trailMultiplier">, trailMultipliers);
+    const results = await runBacktestPool(sharedArgs, trailMultipliers);
 
     let bestTrailMultiplier = multMin;
     let bestTotalPnL = Number.NEGATIVE_INFINITY;

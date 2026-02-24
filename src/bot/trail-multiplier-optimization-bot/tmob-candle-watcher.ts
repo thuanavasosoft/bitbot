@@ -7,6 +7,7 @@ import { TMOB_DEFAULT_SIGNAL_PARAMS } from "./tmob-utils";
 import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
 import BigNumber from "bignumber.js";
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
+import { Candle } from "../auto-adjust-bot/types";
 
 class TMOBCandleWatcher {
   isCandleWatcherStarted: boolean = false;
@@ -57,7 +58,16 @@ class TMOBCandleWatcher {
         }
 
         const signalParams = { ...TMOB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal };
-        const signalResult = calculateBreakoutSignal(currCandles, signalParams);
+        const signalCandles: Candle[] = currCandles.map((c) => ({
+          openTime: c.openTime,
+          closeTime: c.closeTime,
+          open: c.openPrice,
+          high: c.highPrice,
+          low: c.lowPrice,
+          close: c.closePrice,
+          volume: c.volume,
+        }));
+        const signalResult = calculateBreakoutSignal(signalCandles, signalParams);
         if (signalResult.support === null && signalResult.resistance === null) {
           process.exit(0);
         }

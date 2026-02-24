@@ -6,7 +6,7 @@ import { EEventBusEventType } from "@/utils/event-bus.util";
 import type CombBotInstance from "../comb-bot-instance";
 
 class CombWaitForSignalState {
-  private priceListenerRemover?: () => void;
+  private ltpListenerRemover?: () => void;
   private cooldownTriggerNoticeBoundaryMs?: number;
 
   constructor(private bot: CombBotInstance) { }
@@ -14,8 +14,8 @@ class CombWaitForSignalState {
   async onEnter() {
     this.bot.queueMsg(`🔜 Waiting for entry signal - monitoring price for breakout...`);
     this.cooldownTriggerNoticeBoundaryMs = undefined;
-    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, (price) => {
-      void this._handlePriceUpdate(price);
+    this.ltpListenerRemover = ExchangeService.hookTradeListener(this.bot.symbol, (trade) => {
+      void this._handlePriceUpdate(trade.price);
     });
   }
 
@@ -60,7 +60,7 @@ class CombWaitForSignalState {
         this.bot.queueMsg(`📉 Short entry trigger: Price ${price} <= Short Trigger ${this.bot.shortTrigger}`);
       }
       if (shouldEnter && posDir) {
-        this.priceListenerRemover?.();
+        this.ltpListenerRemover?.();
         const budget = new BigNumber(this.bot.margin).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
         const triggerTs = Date.now();
         console.log(`[COMB] waitForSignal entryTrigger symbol=${this.bot.symbol} side=${posDir} price=${price} trigger=${posDir === "long" ? this.bot.longTrigger : this.bot.shortTrigger}`);
@@ -121,7 +121,7 @@ Price Diff(pips): ${icon} ${priceDiff}
 
   async onExit() {
     console.log(`[COMB] CombWaitForSignalState onExit symbol=${this.bot.symbol}`);
-    this.priceListenerRemover?.();
+    this.ltpListenerRemover?.();
   }
 }
 
