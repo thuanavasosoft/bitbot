@@ -1,4 +1,4 @@
-import type { IBalanceInfo, ICancelOrderResponse, ICandleInfo, IFeeRate, IGetPositionHistoryParams, IOrder, IPlaceOrderParams, IPlaceOrderResponse, IPosition, ISymbolInfo, ITrade, IWSOrderUpdate, TCandleResolution, TPositionType } from "./exchange-type";
+import type { IBalanceInfo, ICancelOrderResponse, ICandleInfo, IFeeRate, IGetPositionHistoryParams, IOrder, IPlaceOrderParams, IPlaceOrderResponse, IPosition, ISymbolInfo, ITrade, IWSTradeTick, IWSOrderUpdate, TCandleResolution, TPositionType } from "./exchange-type";
 import BinanceExchange from "./binance-exchange/binance-exchange";
 import KrakenExchange from "./kraken-exchange/kraken-exchange";
 
@@ -23,6 +23,7 @@ export interface IExchangeInstance {
   generateClientOrderId: () => Promise<string>;
   hookPriceListener: (symbol: string, callback: (price: number) => void) => () => void;
   hookPriceListenerWithTimestamp: (symbol: string, callback: (price: number, timestamp: number) => void) => () => void;
+  hookTradeListener: (symbol: string, callback: (trade: IWSTradeTick) => void) => () => void;
   hookOrderListener: (callback: (order: IWSOrderUpdate) => void) => () => void;
 }
 
@@ -111,6 +112,10 @@ class ExchangeService {
 
   static hookPriceListenerWithTimestamp(symbol: string, callback: (price: number, timestamp: number) => void): () => void {
     return this.exchangeInstance.hookPriceListenerWithTimestamp(symbol, callback);
+  }
+
+  static hookTradeListener(symbol: string, callback: (trade: IWSTradeTick) => void): () => void {
+    return this.exchangeInstance.hookTradeListener(symbol, callback);
   }
 
   static hookOrderListener(callback: (item: IWSOrderUpdate) => void): () => void {

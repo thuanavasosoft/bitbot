@@ -7,7 +7,7 @@ import BigNumber from "bignumber.js";
 import eventBus, { EEventBusEventType } from "@/utils/event-bus.util";
 
 class TMOBWaitForSignalState implements TMOBState {
-  private priceListenerRemover?: () => void;
+  private ltpListenerRemover?: () => void;
 
   constructor(private bot: TrailMultiplierOptimizationBot) { }
 
@@ -17,15 +17,15 @@ class TMOBWaitForSignalState implements TMOBState {
   }
 
   private async _watchForBreakout() {
-    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, (price) => {
-      void this._handlePriceUpdate(price);
+    this.ltpListenerRemover = ExchangeService.hookTradeListener(this.bot.symbol, (trade) => {
+      void this._handlePriceUpdate(trade.price);
     });
   }
 
   rehookPriceListener() {
-    if (this.priceListenerRemover) {
-      this.priceListenerRemover();
-      this.priceListenerRemover = undefined;
+    if (this.ltpListenerRemover) {
+      this.ltpListenerRemover();
+      this.ltpListenerRemover = undefined;
     }
     this._watchForBreakout();
   }
@@ -59,7 +59,7 @@ class TMOBWaitForSignalState implements TMOBState {
       }
 
       if (shouldEnter && posDir) {
-        this.priceListenerRemover && this.priceListenerRemover();
+        this.ltpListenerRemover && this.ltpListenerRemover();
         await this._openPosition(posDir);
         eventBus.emit(EEventBusEventType.StateChange);
       }
@@ -128,7 +128,7 @@ Price Diff(pips): ${icon} ${priceDiff}
 
   async onExit() {
     console.log("Exiting TMOBWaitForSignalState");
-    this.priceListenerRemover && this.priceListenerRemover();
+    this.ltpListenerRemover && this.ltpListenerRemover();
   }
 }
 

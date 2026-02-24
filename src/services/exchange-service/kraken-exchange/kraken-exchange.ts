@@ -12,6 +12,7 @@ import type {
   IPosition,
   ISymbolInfo,
   ITrade,
+  IWSTradeTick,
   IWSOrderUpdate,
   TCandleResolution,
   TOrderSide,
@@ -25,6 +26,7 @@ import type { IExchangeInstance } from "../exchange-service";
 
 type TPriceListener = (price: number) => void;
 type TPriceTimestampListener = (price: number, timestamp: number) => void;
+type TTradeListener = (trade: IWSTradeTick) => void;
 
 type KrakenInstrument = {
   symbol: string;
@@ -458,6 +460,12 @@ class KrakenExchange implements IExchangeInstance {
     return () => {
       delete this._priceTimestampListenerCallbacks[symbol][id];
     };
+  }
+
+  hookTradeListener(symbol: string, callback: TTradeListener): () => void {
+    console.warn(`[KrakenExchange] hookTradeListener is not implemented yet (symbol=${symbol}).`);
+    void callback; // keep signature consistent, no-op for now
+    return () => {};
   }
 
   hookOrderListener(callback: (order: IWSOrderUpdate) => void): () => void {

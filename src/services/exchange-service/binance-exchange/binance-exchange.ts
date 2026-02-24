@@ -28,6 +28,7 @@ import type {
   IPosition,
   ISymbolInfo,
   ITrade,
+  IWSTradeTick,
   IWSOrderUpdate,
   TCandleResolution,
   TOrderSide,
@@ -41,6 +42,7 @@ import type { IExchangeInstance } from "../exchange-service";
 
 type TPriceListener = (price: number) => void;
 type TPriceTimestampListener = (price: number, timestamp: number) => void;
+type TTradeListener = (trade: IWSTradeTick) => void;
 
 type TPositionMeta = {
   symbol: string;
@@ -64,10 +66,12 @@ class BinanceExchange implements IExchangeInstance {
 
   private _prices: Record<string, number> = {};
   private _subscribedSymbols: Record<string, boolean> = {};
+  private _subscribedAggTradeSymbols: Record<string, boolean> = {};
   private _normalizedToOriginalSymbol: Record<string, string> = {};
 
   private _priceListenerCallbacks: Record<string, Record<string, TPriceListener>> = {};
   private _priceTimestampListenerCallbacks: Record<string, Record<string, TPriceTimestampListener>> = {};
+  private _tradeListenerCallbacks: Record<string, Record<string, TTradeListener>> = {};
   private _orderListenerCallbacks: Record<string, (order: IWSOrderUpdate) => void> = {};
 
   private _symbolSideToPositionId: Map<string, number> = new Map();
@@ -501,6 +505,18 @@ class BinanceExchange implements IExchangeInstance {
     };
   }
 
+  hookTradeListener(symbol: string, callback: TTradeListener): () => void {
+    const id = generateRandomString(4);
+    if (!this._tradeListenerCallbacks[symbol]) this._tradeListenerCallbacks[symbol] = {};
+    this._tradeListenerCallbacks[symbol][id] = callback;
+
+    void this._subscribeAggTrades(symbol);
+
+    return () => {
+      delete this._tradeListenerCallbacks[symbol][id];
+    };
+  }
+
   hookOrderListener(callback: (order: IWSOrderUpdate) => void): () => void {
     const id = generateRandomString(4);
     this._orderListenerCallbacks[id] = callback;
@@ -516,6 +532,14 @@ class BinanceExchange implements IExchangeInstance {
 
     const normalizedSymbol = this._normalizeSymbol(symbol);
     await this._wsClient.subscribeMarkPrice(normalizedSymbol, "usdm", 1000);
+  }
+
+  private async _subscribeAggTrades(symbol: string): Promise<void> {
+    if (this._subscribedAggTradeSymbols[symbol]) return;
+    this._subscribedAggTradeSymbols[symbol] = true;
+
+    const normalizedSymbol = this._normalizeSymbol(symbol);
+    await this._wsClient.subscribeAggregateTrades(normalizedSymbol, "usdm");
   }
 
   private _normalizeSymbol(symbol: string): string {
@@ -705,8 +729,12 @@ class BinanceExchange implements IExchangeInstance {
 
       if (event.eventType === "markPriceUpdate") {
         this._handleMarkPriceEvent(event);
+      } else if (event.eventType === "aggTrade") {
+        this._handleAggTradeEvent(event);
       } else if (event.eventType === "ORDER_TRADE_UPDATE") {
         this._handleOrderTradeEvent(event);
+      } else if (event.eventType === "") {
+
       }
     });
   }
@@ -724,6 +752,23 @@ class BinanceExchange implements IExchangeInstance {
 
     if (this._priceTimestampListenerCallbacks[originalSymbol]) {
       Object.values(this._priceTimestampListenerCallbacks[originalSymbol]).forEach((callback) => callback(markPrice, timestamp));
+    }
+  }
+
+  private _handleAggTradeEvent(event: any) {
+    const originalSymbol = this._toOriginalSymbol(event.symbol);
+
+    const trade: IWSTradeTick = {
+      id: String(event.tradeId),
+      symbol: originalSymbol,
+      price: Number(event.price),
+      quantity: Number(event.quantity),
+      timestamp: Number(event.time ?? event.eventTime ?? Date.now()),
+      side: event.maker ? "sell" : "buy",
+    };
+
+    if (this._tradeListenerCallbacks[originalSymbol]) {
+      Object.values(this._tradeListenerCallbacks[originalSymbol]).forEach((callback) => callback(trade));
     }
   }
 

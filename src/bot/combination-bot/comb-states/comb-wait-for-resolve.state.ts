@@ -9,7 +9,7 @@ function toIso(ms: number): string {
 }
 
 class CombWaitForResolveState {
-  private priceListenerRemover?: () => void;
+  private ltpListenerRemover?: () => void;
   private orderUpdateRemover?: () => void;
   private trailingUpdaterAbort = false;
   private trailingUpdaterRunId = 0;
@@ -43,9 +43,9 @@ class CombWaitForResolveState {
   }
 
   private _clearPriceListener() {
-    if (this.priceListenerRemover) {
-      this.priceListenerRemover();
-      this.priceListenerRemover = undefined;
+    if (this.ltpListenerRemover) {
+      this.ltpListenerRemover();
+      this.ltpListenerRemover = undefined;
     }
   }
 
@@ -71,8 +71,8 @@ class CombWaitForResolveState {
   }
 
   private _watchForPositionExit() {
-    this.priceListenerRemover = ExchangeService.hookPriceListener(this.bot.symbol, (price) => {
-      void this._handleExitPriceUpdate(price);
+    this.ltpListenerRemover = ExchangeService.hookTradeListener(this.bot.symbol, (trade) => {
+      void this._handleExitPriceUpdate(trade.price);
     });
   }
 
