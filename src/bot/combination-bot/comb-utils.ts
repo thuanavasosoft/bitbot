@@ -66,7 +66,7 @@ class CombUtils {
       trailingAtrLength: this.bot.trailingAtrLength,
       highestLookback: this.bot.trailingHighestLookback,
       trailConfirmBars: this.bot.trailConfirmBars,
-      signalParams: { ...COMB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal } as CombSignalParams,
+      signalParams: { N: this.bot.nSignal, ...COMB_DEFAULT_SIGNAL_PARAMS } as CombSignalParams,
       tickSize: this.bot.tickSize,
       pricePrecision: this.bot.pricePrecision,
       triggerBufferPercentage: this.bot.triggerBufferPercentage,
