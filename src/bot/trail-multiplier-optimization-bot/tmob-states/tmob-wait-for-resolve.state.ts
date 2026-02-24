@@ -6,6 +6,8 @@ import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../../breakout-bot/bb-retry";
 import { toIso } from "@/bot/auto-adjust-bot/candle-utils";
 
+type TickRoundMode = "up" | "down" | "nearest";
+
 class TMOBWaitForResolveState implements TMOBState {
   private priceListenerRemover?: () => void;
   private orderUpdateRemover?: () => void;
@@ -306,7 +308,7 @@ class TMOBWaitForResolveState implements TMOBState {
     return trSum / period;
   }
 
-  private async _updateTrailingStopLevels() {
+  async _updateTrailingStopLevels() {
     const position = this.bot.currActivePosition;
     if (!position) {
       this.bot.resetTrailingStopTracking();
@@ -376,10 +378,16 @@ class TMOBWaitForResolveState implements TMOBState {
     let rawLevel: number | null = null;
     if (position.side === "long") {
       const highestClose = Math.max(...closesWindow);
-      rawLevel = highestClose - atrValue * multiplier;
+      const candidateStop = highestClose - atrValue * multiplier;
+      if (candidateStop > 0) {
+        rawLevel = this._quantizeToTick(candidateStop, "up");
+      }
     } else {
       const lowestClose = Math.min(...closesWindow);
-      rawLevel = lowestClose + atrValue * multiplier;
+      const candidateStop = lowestClose + atrValue * multiplier;
+      if (candidateStop > 0) {
+        rawLevel = this._quantizeToTick(candidateStop, "down");
+      }
     }
 
     if (rawLevel === null || !Number.isFinite(rawLevel) || rawLevel <= 0) {
@@ -396,6 +404,9 @@ class TMOBWaitForResolveState implements TMOBState {
         bufferedLevel = rawLevel * (1 - bufferPct);
       }
     }
+
+    console.log("rawLevel: ", rawLevel);
+    console.log("bufferedLevel: ", bufferedLevel);
 
     this.bot.trailingStopTargets = {
       side: position.side,
@@ -506,6 +517,24 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     console.log("Exiting TMOB Wait For Resolve State");
     this._stopAllWatchers();
   }
+
+  _quantizeToTick(price: number, mode: TickRoundMode, withLogs?: boolean): number {
+    if (!Number.isFinite(price)) return price;
+    const tickSize = this.bot.tickSize;
+    if (!Number.isFinite(tickSize) || tickSize <= 0) return price;
+    const p = new BigNumber(price);
+    const t = new BigNumber(tickSize);
+    const q = p.div(t);
+
+    const rounded =
+      mode === "up"
+        ? q.integerValue(BigNumber.ROUND_CEIL)
+        : mode === "down"
+          ? q.integerValue(BigNumber.ROUND_FLOOR)
+          : q.integerValue(BigNumber.ROUND_HALF_UP);
+    const tick = rounded.times(t).toNumber();
+    return tick;
+  };
 }
 
 export default TMOBWaitForResolveState;
