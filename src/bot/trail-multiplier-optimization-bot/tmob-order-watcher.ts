@@ -24,7 +24,7 @@ class TMOBOrderWatcher {
   private defaultTimeoutMs: number;
 
   constructor(options?: { defaultTimeoutMs?: number }) {
-    this.defaultTimeoutMs = Math.max(1000, options?.defaultTimeoutMs ?? 60_000);
+    this.defaultTimeoutMs = Math.max(1000, options?.defaultTimeoutMs ?? 10_000);
     this.removeOrderListener = ExchangeService.hookOrderListener((update) => this._handleOrderUpdate(update));
   }
 
