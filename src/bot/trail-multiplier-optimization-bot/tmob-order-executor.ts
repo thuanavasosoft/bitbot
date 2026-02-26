@@ -1,9 +1,39 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IOrder, IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { IOrder, IPosition, IWSPositionUpdate, TPositionSide } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 import { isTransientError, withRetries } from "../breakout-bot/bb-retry";
 import TelegramService from "@/services/telegram.service";
 import TrailMultiplierOptimizationBot from "./trail-multiplier-optimization-bot";
+
+/** Returns a promise and one-time resolve/reject; first call wins. */
+export const createSettleOnce = <T,>(): {
+  promise: Promise<T>;
+  tryResolve: (value: T) => void;
+  tryReject: (err: Error) => void;
+} => {
+  let settled = false;
+  let resolve!: (value: T) => void;
+  let reject!: (err: Error) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return {
+    promise,
+    tryResolve: (value) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    },
+    tryReject: (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    },
+  };
+};
 
 export interface IOrderFillUpdate {
   updateTime: number;
@@ -12,6 +42,10 @@ export interface IOrderFillUpdate {
 
 class TMOBOrderExecutor {
   constructor(private bot: TrailMultiplierOptimizationBot) { }
+
+  POSITION_OVERALL_TIMEOUT_MS = 60_000;
+  REST_POLL_INTERVAL_MS = 5000;
+  REST_POLL_ATTEMPTS = 12;
 
   private formatWithPrecision(value: number, precision?: number): number {
     if (!Number.isFinite(value) || precision === undefined) return value;
@@ -106,6 +140,16 @@ class TMOBOrderExecutor {
     const orderSide = posDir === "long" ? "buy" : "sell";
     const clientOrderId = await ExchangeService.generateClientOrderId();
     this.bot.lastOpenClientOrderId = clientOrderId;
+    const { promise: winnerPromise, tryResolve: trySettle, tryReject } = createSettleOnce<IPosition>();
+
+    const unsubscribePosition = ExchangeService.hookPositionUpdateListener((update: IWSPositionUpdate) => {
+      if (update.symbol !== this.bot.symbol || update.side !== posDir || update.size <= 0) return;
+      void (async () => {
+        const pos = await ExchangeService.getPosition(this.bot.symbol);
+        if (pos && pos.side === posDir) trySettle(pos);
+      })();
+    });
+
     const orderHandle = this.bot.orderWatcher?.preRegister(clientOrderId);
     try {
       console.log(
@@ -158,6 +202,7 @@ class TMOBOrderExecutor {
       let fillUpdate: IOrderFillUpdate | undefined;
       try {
         const fillUpdateResp = await orderHandle?.wait();
+        console.log("fillUpdateResp: ", fillUpdateResp);
         fillUpdate = {
           updateTime: fillUpdateResp?.updateTime ?? 0,
           executionPrice: fillUpdateResp?.executionPrice ?? 0,
@@ -166,7 +211,8 @@ class TMOBOrderExecutor {
         console.error("Error waiting for fill update: ", error);
         console.log("Checking for order execution manually...");
 
-        const orderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
+        const orderDetail = await withRetries(() => ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId), { label: "[TMOB] getOrderDetail (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
+        console.log("orderDetail: ", orderDetail);
         fillUpdate = {
           updateTime: orderDetail?.updateTs ?? 0,
           executionPrice: orderDetail?.avgPrice ?? 0,
@@ -178,35 +224,43 @@ class TMOBOrderExecutor {
         throw new Error("[Order fill watcher] Something went wrong No fill update found, order execution not detected, please check...");
       }
 
-      const openedPosition = await withRetries(
-        () => ExchangeService.getPosition(this.bot.symbol),
-        {
-          label: "[TMOB] getPosition (open)",
-          retries: 5,
-          minDelayMs: 5000,
-          isTransientError,
-          onRetry: ({ attempt, delayMs, error, label }) => {
-            console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
-          },
-        }
+      const openOrderDetail = await withRetries(() => ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId), { label: "[TMOB] getOrderDetail (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
+      if (openOrderDetail) TelegramService.queueMsg(this.formatOrderDetailMsg(openOrderDetail, "OPEN ORDER"));
+
+      // Start position detection only after order is placed and we have fill: 60s timeout + REST poll every 5s (12 times)
+      const overallTimeout = setTimeout(
+        () => tryReject(new Error(`[TMOB] Position not detected within ${this.POSITION_OVERALL_TIMEOUT_MS / 1000}s (REST poll + WebSocket)`)),
+        this.POSITION_OVERALL_TIMEOUT_MS
       );
-      if (!openedPosition || openedPosition.side !== posDir) {
-        throw new Error(`[TMOB] Position not detected after ${orderSide} order submission`);
+      void (async () => {
+        for (let i = 0; i < this.REST_POLL_ATTEMPTS; i++) {
+          const pos = await ExchangeService.getPosition(this.bot.symbol);
+          if (pos && pos.side === posDir) {
+            trySettle(pos);
+            return;
+          }
+          TelegramService.queueMsg(`🚸🚸🚸 Position not detected yet, retrying... (${i + 1}/${this.REST_POLL_ATTEMPTS})`);
+          if (i < this.REST_POLL_ATTEMPTS - 1) await new Promise((r) => setTimeout(r, this.REST_POLL_INTERVAL_MS));
+        }
+      })();
+
+      let openedPosition: IPosition;
+      try {
+        openedPosition = await winnerPromise;
+      } finally {
+        clearTimeout(overallTimeout);
       }
 
       const fillPrice = fillUpdate?.executionPrice ?? openedPosition.avgPrice;
       const fillTime = fillUpdate?.updateTime ? new Date(fillUpdate.updateTime) : new Date();
       this.bot.entryWsPrice = { price: fillPrice, time: fillTime };
 
-      const openOrderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
-      if (openOrderDetail) {
-        TelegramService.queueMsg(this.formatOrderDetailMsg(openOrderDetail, "OPEN ORDER"));
-      }
-
       return openedPosition;
     } catch (error) {
       orderHandle?.cancel();
       throw error;
+    } finally {
+      unsubscribePosition();
     }
   }
 
@@ -288,6 +342,7 @@ class TMOBOrderExecutor {
       let fillUpdate: IOrderFillUpdate | undefined;
       try {
         const fillUpdateResp = await orderHandle?.wait();
+        console.log("fillUpdateResp: ", fillUpdateResp);
         fillUpdate = {
           updateTime: fillUpdateResp?.updateTime ?? 0,
           executionPrice: fillUpdateResp?.executionPrice ?? 0,
@@ -295,8 +350,8 @@ class TMOBOrderExecutor {
       } catch (error) {
         console.error("Error waiting for fill update: ", error);
         console.log("Checking for order execution manually...");
-
         const orderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
+        console.log("orderDetail: ", orderDetail);
         fillUpdate = {
           updateTime: orderDetail?.updateTs ?? 0,
           executionPrice: orderDetail?.avgPrice ?? 0,
@@ -318,9 +373,8 @@ class TMOBOrderExecutor {
       this.bot.resolveWsPrice = { price: resolvePrice, time: resolveTime };
 
       const closeOrderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
-      if (closeOrderDetail) {
-        TelegramService.queueMsg(this.formatOrderDetailMsg(closeOrderDetail, "CLOSE ORDER"));
-      }
+      if (closeOrderDetail) TelegramService.queueMsg(this.formatOrderDetailMsg(closeOrderDetail, "CLOSE ORDER"));
+
 
       return closedPosition;
     } catch (error) {

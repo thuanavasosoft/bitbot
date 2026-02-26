@@ -167,6 +167,7 @@ class CombinationBot {
     if (inst.currentState === inst.startingState) return "starting";
     if (inst.currentState === inst.waitForSignalState) return "wait_for_signal";
     if (inst.currentState === inst.waitForResolveState) return "wait_for_resolve";
+    if (inst.currentState === inst.stoppedState) return "stopped";
     return "unknown";
   }
 
@@ -416,12 +417,16 @@ class CombinationBot {
     for (const instance of this.instances) {
       instance.stateBus.addListener(EEventBusEventType.StateChange, async (nextState: CombState | null) => {
         await instance.currentState.onExit();
-        if (instance.currentState === instance.startingState) {
+        if (nextState) {
+          instance.currentState = nextState;
+        } else if (instance.currentState === instance.startingState) {
           instance.currentState = instance.waitForSignalState;
         } else if (instance.currentState === instance.waitForSignalState) {
           instance.currentState = instance.waitForResolveState;
         } else if (instance.currentState === instance.waitForResolveState) {
-          instance.currentState = nextState ?? instance.startingState;
+          instance.currentState = instance.startingState;
+        } else if (instance.currentState === instance.stoppedState) {
+          instance.currentState = instance.stoppedState;
         }
         await instance.currentState.onEnter();
       });

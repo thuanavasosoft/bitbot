@@ -24,7 +24,7 @@ class CombOrderWatcher {
   private defaultTimeoutMs: number;
 
   constructor() {
-    this.defaultTimeoutMs = Math.max(1000, 60_000);
+    this.defaultTimeoutMs = Math.max(1000, 10_000);
     this.removeOrderListener = ExchangeService.hookOrderListener((update) => this._handleOrderUpdate(update));
   }
 

@@ -9,6 +9,9 @@ import BigNumber from "bignumber.js";
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import { Candle } from "../auto-adjust-bot/types";
 
+/** Delay in ms after the minute mark before running each candle watcher iteration (e.g. 500 => 00:01:00.500). */
+const CANDLE_WATCHER_DELAY_AFTER_MINUTE_MS = 500;
+
 class TMOBCandleWatcher {
   isCandleWatcherStarted: boolean = false;
 
@@ -163,10 +166,11 @@ class TMOBCandleWatcher {
 
         this.bot.lastSRUpdateTime = Date.now();
 
-        // Delay until next minute at 0 seconds before next iteration
+        // Delay until 500ms after next minute mark before next iteration
         const nowMs = Date.now();
         const nextMinuteStartMs = (Math.floor(nowMs / 60_000) + 1) * 60_000;
-        const delayMs = nextMinuteStartMs - nowMs;
+        const targetMs = nextMinuteStartMs + CANDLE_WATCHER_DELAY_AFTER_MINUTE_MS;
+        const delayMs = targetMs - nowMs;
         if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
       } catch (error) {
         console.error("[TMOBCandleWatcher] Failed to process candle watcher iteration:", error);

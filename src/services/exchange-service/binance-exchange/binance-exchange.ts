@@ -30,6 +30,7 @@ import type {
   ITrade,
   IWSTradeTick,
   IWSOrderUpdate,
+  IWSPositionUpdate,
   TCandleResolution,
   TOrderSide,
   TOrderStatus,
@@ -73,6 +74,7 @@ class BinanceExchange implements IExchangeInstance {
   private _priceTimestampListenerCallbacks: Record<string, Record<string, TPriceTimestampListener>> = {};
   private _tradeListenerCallbacks: Record<string, Record<string, TTradeListener>> = {};
   private _orderListenerCallbacks: Record<string, (order: IWSOrderUpdate) => void> = {};
+  private _positionUpdateCallbacks: Record<string, (update: IWSPositionUpdate) => void> = {};
 
   private _symbolSideToPositionId: Map<string, number> = new Map();
   private _positionMetaById: Map<number, TPositionMeta> = new Map();
@@ -526,6 +528,14 @@ class BinanceExchange implements IExchangeInstance {
     };
   }
 
+  hookPositionUpdateListener(callback: (update: IWSPositionUpdate) => void): () => void {
+    const id = generateRandomString(4);
+    this._positionUpdateCallbacks[id] = callback;
+    return () => {
+      delete this._positionUpdateCallbacks[id];
+    };
+  }
+
   private async _subscribeMarkPrice(symbol: string): Promise<void> {
     if (this._subscribedSymbols[symbol]) return;
     this._subscribedSymbols[symbol] = true;
@@ -733,10 +743,49 @@ class BinanceExchange implements IExchangeInstance {
         this._handleAggTradeEvent(event);
       } else if (event.eventType === "ORDER_TRADE_UPDATE") {
         this._handleOrderTradeEvent(event);
-      } else if (event.eventType === "") {
-
+      } else if (event.eventType === "ACCOUNT_UPDATE") {
+        this._handleAccountUpdateEvent(event);
       }
     });
+  }
+
+  private _handleAccountUpdateEvent(event: any): void {
+    const updateData = event.updateData ?? event.a;
+    const positions = updateData?.updatedPositions ?? updateData?.P ?? [];
+    if (!Array.isArray(positions) || positions.length === 0) return;
+
+    const eventTime = event.eventTime ?? event.E ?? Date.now();
+
+    for (const pos of positions) {
+      const positionAmount = Number(pos.positionAmount ?? pos.pa ?? 0);
+      const size = Math.abs(positionAmount);
+      if (size <= 0) continue;
+
+      const symbol = pos.symbol ?? pos.s;
+      const originalSymbol = this._toOriginalSymbol(symbol);
+      const entryPrice = Number(pos.entryPrice ?? pos.ep ?? 0);
+      const positionSideRaw = (pos.positionSide ?? pos.ps ?? "BOTH").toString().toUpperCase();
+
+      let side: TPositionSide;
+      if (positionSideRaw === "LONG") side = "long";
+      else if (positionSideRaw === "SHORT") side = "short";
+      else side = positionAmount > 0 ? "long" : "short";
+
+      const update: IWSPositionUpdate = {
+        symbol: originalSymbol,
+        side,
+        size,
+        avgPrice: entryPrice,
+        updateTime: eventTime,
+      };
+      Object.values(this._positionUpdateCallbacks).forEach((cb) => {
+        try {
+          cb(update);
+        } catch (err) {
+          console.warn("[BinanceExchange] positionUpdate callback error:", err);
+        }
+      });
+    }
   }
 
   private _handleMarkPriceEvent(event: any) {

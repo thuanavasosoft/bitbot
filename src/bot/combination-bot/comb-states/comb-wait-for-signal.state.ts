@@ -11,6 +11,12 @@ class CombWaitForSignalState {
 
   constructor(private bot: CombBotInstance) { }
 
+  private isPositionNotDetectedError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const msg = error.message || "";
+    return msg.includes("Position not detected within") || msg.includes("Position not detected");
+  }
+
   async onEnter() {
     this.bot.queueMsg(`🔜 Waiting for entry signal - monitoring price for breakout...`);
     this.cooldownTriggerNoticeBoundaryMs = undefined;
@@ -65,7 +71,32 @@ class CombWaitForSignalState {
         const triggerTs = Date.now();
         console.log(`[COMB] waitForSignal entryTrigger symbol=${this.bot.symbol} side=${posDir} price=${price} trigger=${posDir === "long" ? this.bot.longTrigger : this.bot.shortTrigger}`);
         this.bot.queueMsg(`✨️ Opening ${posDir} position`);
-        const position = await this.bot.orderExecutor.triggerOpenSignal(posDir, budget);
+        let position;
+        try {
+          position = await this.bot.orderExecutor.triggerOpenSignal(posDir, budget);
+        } catch (error) {
+          if (this.isPositionNotDetectedError(error)) {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            const clientOrderId = this.bot.lastOpenClientOrderId ?? "N/A";
+            const reason = `no_position_detected: ${errMsg}`;
+            this.bot.stopInstance(reason);
+            for (let i = 0; i < 3; i++) {
+              this.bot.queueMsg(
+                `🚨🚨🚨 NO POSITION DETECTED AFTER OPEN\n` +
+                `Symbol: ${this.bot.symbol}\n` +
+                `Side: ${posDir}\n` +
+                `Client Order ID: ${clientOrderId}\n` +
+                `Budget (quote): ${budget}\n` +
+                `Trigger time: ${new Date(triggerTs).toISOString()}\n` +
+                `Error: ${errMsg}\n\n` +
+                `Stopping this symbol instance (other symbols keep running).`
+              );
+            }
+            this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+            return;
+          }
+          throw error;
+        }
         this.bot.currActivePosition = position;
         this.bot.resetTrailingStopTracking();
         this.bot.lastEntryTime = Date.now();
