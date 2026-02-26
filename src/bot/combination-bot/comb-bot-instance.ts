@@ -11,6 +11,7 @@ import CombOrderExecutor from "./comb-order-executor";
 import CombStartingState from "./comb-states/comb-starting.state";
 import CombWaitForSignalState from "./comb-states/comb-wait-for-signal.state";
 import CombWaitForResolveState from "./comb-states/comb-wait-for-resolve.state";
+import CombStoppedState from "./comb-states/comb-stopped.state";
 import CombCandleWatcher from "./comb-candle-watcher";
 import CombOptimizationLoop from "./comb-optimization-loop";
 import CombTelegramHandler from "./comb-telegram-handler";
@@ -69,6 +70,10 @@ class CombBotInstance {
   pnlHistory: CombPnlHistoryPoint[] = [];
   private botCloseOrderIds = new Set<string>();
 
+  isStopped: boolean = false;
+  stopReason?: string;
+  stopAtMs?: number;
+
   orderWatcher: CombOrderWatcher;
   tmobCandles: CombCandles;
   tmobUtils: CombUtils;
@@ -76,6 +81,7 @@ class CombBotInstance {
   startingState: CombStartingState;
   waitForSignalState: CombWaitForSignalState;
   waitForResolveState: CombWaitForResolveState;
+  stoppedState: CombStoppedState;
   tmobCandleWatcher: CombCandleWatcher;
   optimizationLoop: CombOptimizationLoop;
   telegramHandler: CombTelegramHandler;
@@ -109,6 +115,7 @@ class CombBotInstance {
     this.startingState = new CombStartingState(this);
     this.waitForSignalState = new CombWaitForSignalState(this);
     this.waitForResolveState = new CombWaitForResolveState(this);
+    this.stoppedState = new CombStoppedState(this);
     this.tmobCandleWatcher = new CombCandleWatcher(this);
     this.optimizationLoop = new CombOptimizationLoop(this);
     this.telegramHandler = new CombTelegramHandler(this);
@@ -165,6 +172,18 @@ class CombBotInstance {
 
   startOptimizationLoop(): void {
     this.optimizationLoop.start();
+  }
+
+  /**
+   * Stop only this instance (symbol). This does not exit the overall process.
+   * Idempotent: repeated calls do nothing after the first stop.
+   */
+  stopInstance(reason: string): void {
+    if (this.isStopped) return;
+    this.isStopped = true;
+    this.stopReason = reason;
+    this.stopAtMs = Date.now();
+    this.optimizationLoop.stop();
   }
 
   async finalizeClosedPosition(

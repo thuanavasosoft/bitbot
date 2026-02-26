@@ -19,7 +19,7 @@ class CombCandleWatcher {
     if (this.isCandleWatcherStarted) return;
     this.isCandleWatcherStarted = true;
     this.bot.queueMsg("🔍 Starting CombCandleWatcher");
-    while (true) {
+    while (!this.bot.isStopped) {
       try {
         const now = new Date();
         await this.bot.tmobCandles.ensurePopulated();
@@ -138,6 +138,7 @@ class CombCandleWatcher {
         const delayMs = targetMs - nowMs;
         if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
       } catch (error) {
+        if (this.bot.isStopped) break;
         console.error("[COMB] Candle watcher iteration error:", error);
         this.bot.queueMsg(
           `⚠️ Comb candle watcher error (will retry next interval): ${error instanceof Error ? error.message : String(error)}`
