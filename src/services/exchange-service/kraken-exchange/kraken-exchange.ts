@@ -14,6 +14,7 @@ import type {
   ITrade,
   IWSTradeTick,
   IWSOrderUpdate,
+  IWSPositionUpdate,
   TCandleResolution,
   TOrderSide,
   TOrderStatus,
@@ -475,6 +476,10 @@ class KrakenExchange implements IExchangeInstance {
     return () => {
       delete this._orderListenerCallbacks[id];
     };
+  }
+
+  hookPositionUpdateListener(_callback: (update: IWSPositionUpdate) => void): () => void {
+    return () => {};
   }
 
   private _connectPublicWs() {

@@ -153,6 +153,15 @@ export interface IWSOrderUpdate {
   updateTime?: number;
 }
 
+/** WebSocket position update (e.g. from ACCOUNT_UPDATE). Enough to detect position open. */
+export interface IWSPositionUpdate {
+  symbol: string;
+  side: TPositionSide;
+  size: number;
+  avgPrice: number;
+  updateTime: number;
+}
+
 /** Force order (liquidation or ADL auto-close) */
 export interface IForceOrder {
   orderId: number;

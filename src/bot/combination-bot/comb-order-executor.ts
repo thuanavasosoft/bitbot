@@ -1,12 +1,18 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { IOrder, IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { IOrder, IPosition, IWSPositionUpdate, TPositionSide } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 import { withRetries, isTransientError } from "./comb-retry";
 import type { IOrderFillUpdate } from "./comb-types";
 import type CombBotInstance from "./comb-bot-instance";
+import { createSettleOnce } from "../trail-multiplier-optimization-bot/tmob-order-executor";
 
 class CombOrderExecutor {
   constructor(private bot: CombBotInstance) { }
+
+  POSITION_OVERALL_TIMEOUT_MS = 60_000;
+  REST_POLL_INTERVAL_MS = 5000;
+  REST_POLL_ATTEMPTS = 12;
+
 
   private formatWithPrecision(value: number, precision?: number): number {
     if (!Number.isFinite(value) || precision === undefined) return value;
@@ -66,6 +72,17 @@ class CombOrderExecutor {
     const orderSide = posDir === "long" ? "buy" : "sell";
     const clientOrderId = await ExchangeService.generateClientOrderId();
     this.bot.lastOpenClientOrderId = clientOrderId;
+    // Parallel position detection: REST poll (every 5s, 12 times) + WebSocket (60s; on update fetch via REST once). First success wins.
+    const { promise: winnerPromise, tryResolve: trySettle, tryReject } = createSettleOnce<IPosition>();
+
+    const unsubscribePosition = ExchangeService.hookPositionUpdateListener((update: IWSPositionUpdate) => {
+      if (update.symbol !== this.bot.symbol || update.side !== posDir || update.size <= 0) return;
+      void (async () => {
+        const pos = await ExchangeService.getPosition(this.bot.symbol);
+        if (pos && pos.side === posDir) trySettle(pos);
+      })();
+    });
+
     const orderHandle = this.bot.orderWatcher?.preRegister(clientOrderId);
     try {
       console.log(`[COMB] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.bot.symbol}`);
@@ -90,24 +107,50 @@ class CombOrderExecutor {
         console.log("[COMB] fillUpdateResp: ", fillUpdateResp);
         fillUpdate = { updateTime: fillUpdateResp?.updateTime ?? 0, executionPrice: fillUpdateResp?.executionPrice ?? 0 };
       } catch {
-        const orderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
+        const orderDetail = await withRetries(() => ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId), { label: "[COMB] getOrderDetail (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
         console.log("[COMB] Order Detail: ", orderDetail);
         fillUpdate = { updateTime: orderDetail?.updateTs ?? 0, executionPrice: orderDetail?.avgPrice ?? 0 };
       }
 
-      const openedPosition = await withRetries(() => ExchangeService.getPosition(this.bot.symbol), { label: "[COMB] getPosition (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) });
-      if (!openedPosition || openedPosition.side !== posDir) throw new Error(`[COMB] Position not detected after ${orderSide} order`);
+      // Start position detection only after order is placed and we have fill: 60s timeout + REST poll every 5s (12 times)
+      const overallTimeout = setTimeout(
+        () => tryReject(new Error(`[COMB] Position not detected within ${this.POSITION_OVERALL_TIMEOUT_MS / 1000}s (REST poll + WebSocket)`)),
+        this.POSITION_OVERALL_TIMEOUT_MS
+      );
+
+      const openOrderDetail = await withRetries(() => ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId), { label: "[COMB] getOrderDetail (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
+      if (openOrderDetail) this.bot.queueMsg(this.formatOrderDetailMsg(openOrderDetail, "OPEN ORDER"));
+
+      void (async () => {
+        for (let i = 0; i < this.REST_POLL_ATTEMPTS; i++) {
+          const pos = await ExchangeService.getPosition(this.bot.symbol);
+          if (pos && pos.side === posDir) {
+            trySettle(pos);
+            return;
+          }
+          this.bot.queueMsg(`🚸🚸🚸 Position not detected yet, retrying... (${i + 1}/${this.REST_POLL_ATTEMPTS})`);
+          if (i < this.REST_POLL_ATTEMPTS - 1) await new Promise((r) => setTimeout(r, this.REST_POLL_INTERVAL_MS));
+        }
+      })();
+
+      // Await first success from REST poll or WebSocket (then REST); clear timeout on done
+      let openedPosition: IPosition;
+      try {
+        openedPosition = await winnerPromise;
+      } finally {
+        clearTimeout(overallTimeout);
+      }
 
       console.log(
         `[COMB] openFilled symbol=${this.bot.symbol} side=${posDir} positionId=${openedPosition.id} avgPrice=${openedPosition.avgPrice} size=${openedPosition.size} clientOrderId=${clientOrderId}`
       );
       this.bot.entryWsPrice = { price: fillUpdate?.executionPrice ?? openedPosition.avgPrice, time: fillUpdate?.updateTime ? new Date(fillUpdate.updateTime) : new Date() };
-      const openOrderDetail = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
-      if (openOrderDetail) this.bot.queueMsg(this.formatOrderDetailMsg(openOrderDetail, "OPEN ORDER"));
       return openedPosition;
     } catch (e) {
       orderHandle?.cancel();
       throw e;
+    } finally {
+      unsubscribePosition();
     }
   }
 
