@@ -826,9 +826,32 @@ class BinanceExchange implements IExchangeInstance {
     if (!order) return;
 
     const originalSymbol = this._toOriginalSymbol(order.symbol);
-    const positionSide: TPositionSide = order.positionSide?.toLowerCase() === "short" ? "short" : "long";
-    const key = this._symbolSideKey(originalSymbol, positionSide);
-    const positionId = this._symbolSideToPositionId.get(key);
+    const positionSideRaw = String(order.positionSide ?? "").toUpperCase();
+    const orderSideRaw = String(order.orderSide ?? order.side ?? "").toUpperCase();
+
+    const longKey = this._symbolSideKey(originalSymbol, "long");
+    const shortKey = this._symbolSideKey(originalSymbol, "short");
+    const longPositionId = this._symbolSideToPositionId.get(longKey);
+    const shortPositionId = this._symbolSideToPositionId.get(shortKey);
+
+    let positionSide: TPositionSide | undefined;
+    if (positionSideRaw === "LONG") {
+      positionSide = "long";
+    } else if (positionSideRaw === "SHORT") {
+      positionSide = "short";
+    } else if (longPositionId && !shortPositionId) {
+      // One-way mode (positionSide=BOTH) with a single active position on this symbol.
+      positionSide = "long";
+    } else if (!longPositionId && shortPositionId) {
+      positionSide = "short";
+    } else if (longPositionId && shortPositionId) {
+      // Hedge mode fallback when Binance does not provide LONG/SHORT. Infer from order side.
+      if (orderSideRaw === "SELL") positionSide = "long";
+      else if (orderSideRaw === "BUY") positionSide = "short";
+    }
+
+    const key = positionSide ? this._symbolSideKey(originalSymbol, positionSide) : undefined;
+    const positionId = key ? this._symbolSideToPositionId.get(key) : undefined;
 
     const update: IWSOrderUpdate = {
       orderId: order.orderId.toString(),
@@ -877,7 +900,7 @@ class BinanceExchange implements IExchangeInstance {
     this._recentClosedPositions.set(positionId, closedPosition);
     this._trimClosedPositionsCache();
 
-    this._symbolSideToPositionId.delete(key);
+    if (key) this._symbolSideToPositionId.delete(key);
     const metaSnapshot = { ...meta };
     this._positionMetaById.delete(positionId);
     this._closedPositionMetaById.set(positionId, metaSnapshot);

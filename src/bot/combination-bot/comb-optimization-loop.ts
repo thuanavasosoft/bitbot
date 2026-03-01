@@ -11,8 +11,8 @@ class CombOptimizationLoop {
   constructor(private bot: CombBotInstance) { }
 
   start(): void {
-    if (this.loopPromise) return;
     this.abort = false;
+    if (this.loopPromise) return;
     this.loopPromise = this.runLoop();
   }
 
@@ -21,6 +21,7 @@ class CombOptimizationLoop {
   }
 
   private async optimizeLiveParams(): Promise<void> {
+    if (this.abort || this.bot.isStopped) return;
     const intervalMs = this.bot.updateIntervalMinutes * 60_000;
     const elapsedSinceLastMs = this.bot.lastOptimizationAtMs > 0 ? Date.now() - this.bot.lastOptimizationAtMs : Infinity;
     if (elapsedSinceLastMs < intervalMs) {
@@ -46,6 +47,7 @@ class CombOptimizationLoop {
       });
     }
 
+    if (this.abort || this.bot.isStopped) return;
     await this.bot.tmobUtils.updateCurrTrailMultiplier();
 
     if (this.bot.currTrailMultiplier !== undefined) {
@@ -64,7 +66,7 @@ class CombOptimizationLoop {
   }
 
   private async runLoop(): Promise<void> {
-    while (!this.abort) {
+    while (!this.abort && !this.bot.isStopped) {
       const now = Date.now();
       const intervalMs = this.bot.updateIntervalMinutes * 60_000;
       const elapsedSinceLastMs = this.bot.lastOptimizationAtMs > 0 ? now - this.bot.lastOptimizationAtMs : Infinity;
@@ -78,7 +80,7 @@ class CombOptimizationLoop {
         }
       }
 
-      if (this.abort) break;
+      if (this.abort || this.bot.isStopped) break;
       const MS_PER_MINUTE = 60_000;
       const nextDueMs =
         this.bot.lastOptimizationAtMs > 0

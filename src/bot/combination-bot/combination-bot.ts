@@ -330,28 +330,54 @@ class CombinationBot {
     }
   }
 
-  private getHelpMessage(): string {
+  private getHelpMessage(_options: { scope: "general" | "instance"; symbol?: string }): string {
+    const symbolTag = _options.scope === "instance" && _options.symbol ? ` (${_options.symbol})` : "";
     const lines = [
-      "[COMB] Combination bot – Telegram commands",
+      `[COMB] Combination bot – Telegram commands${symbolTag}`,
       "",
-      "/help – Show this list of commands (general channel only).",
+      "/help – Show this list of commands.",
+      "/chat_id – Show current chat id (Telegram global command).",
       "",
-      "/full_update – In general channel: overview of all instances (status, balance, position, PnL + merged total). In per-bot channel: full details for that instance.",
+      "/full_update – Show a full status report.",
+      "/pnl_graph – Render the PnL progression chart.",
       "",
-      "/pnl_graph – In general channel: merged PnL chart across all instances. In per-bot channel: PnL chart for that instance.",
+      "/close_position – Close the active position for this bot instance, then stop the instance.",
+      "/restart – Restart a stopped bot instance.",
       "",
-      "This is the general channel. Per-bot commands (/full_update, /pnl_graph) must be used in each instance’s own Telegram channel.",
     ];
+
+    if (_options.scope === "general") {
+      lines.push(
+        "Notes:",
+        "- Use /full_update and /pnl_graph here to see merged stats across all instances.",
+        "- Use /close_position and /restart inside the instance channel for a specific symbol."
+      );
+    } else {
+      lines.push(
+        "Notes:",
+        "- This is an instance channel. Commands act only on this symbol.",
+        "- /close_position stops the instance after attempting to close the position.",
+        "- /restart starts the instance again."
+      );
+    }
+
     return lines.join("\n");
   }
 
   private registerTelegramHandlers(): void {
     TelegramService.appendTgCmdHandler(ETGCommand.Help, async (ctx) => {
       const chatId = ctx.chat?.id;
-      if (chatId === undefined || !this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+      if (chatId === undefined) return;
+      if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
+        TelegramService.queueMsg(this.getHelpMessage({ scope: "general" }), this.generalChatId);
         return;
       }
-      TelegramService.queueMsg(this.getHelpMessage(), this.generalChatId);
+      const bot = this.getInstanceByChatId(chatId);
+      if (!bot) {
+        TelegramService.queueMsg("Unknown channel. This chat is not linked to any bot.", String(chatId));
+        return;
+      }
+      TelegramService.queueMsg(this.getHelpMessage({ scope: "instance", symbol: bot.symbol }), bot.telegramChatId);
     });
 
     TelegramService.appendTgCmdHandler(ETGCommand.FullUpdate, async (ctx) => {
@@ -392,6 +418,36 @@ class CombinationBot {
         return;
       }
       await bot.telegramHandler.handlePnlGraph(ctx);
+    });
+
+    TelegramService.appendTgCmdHandler("close_position", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
+        TelegramService.queueMsg("Use /close_position in the bot instance channel (not the general channel).", this.generalChatId);
+        return;
+      }
+      const bot = this.getInstanceByChatId(chatId);
+      if (!bot) {
+        TelegramService.queueMsg("Unknown channel.", String(chatId));
+        return;
+      }
+      await bot.telegramHandler.handleClosePositionCommand();
+    });
+
+    TelegramService.appendTgCmdHandler("restart", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
+        TelegramService.queueMsg("Use /restart in the bot instance channel (not the general channel).", this.generalChatId);
+        return;
+      }
+      const bot = this.getInstanceByChatId(chatId);
+      if (!bot) {
+        TelegramService.queueMsg("Unknown channel.", String(chatId));
+        return;
+      }
+      await bot.telegramHandler.handleRestartCommand();
     });
   }
 

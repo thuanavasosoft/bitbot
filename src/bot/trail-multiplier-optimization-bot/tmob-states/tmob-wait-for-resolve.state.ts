@@ -503,9 +503,14 @@ class TMOBWaitForResolveState implements TMOBState {
       if (isLiquidation) {
         TelegramService.queueMsg(this._formatLiquidationMessage(closedPosition));
       } else {
-        const msg = `⚠️ Active position ${activePosition.id} closed outside bot (order: ${update.clientOrderId || "N/A"}). Recording outcome...`;
-        console.warn(msg);
-        TelegramService.queueMsg(msg);
+        TelegramService.queueMsg("Position is closed manually from dashboard");
+        const detail =
+          `Symbol: ${this.bot.symbol}\n` +
+          `Position ID: ${activePosition.id}\n` +
+          `Order: ${update.clientOrderId || "N/A"}\n` +
+          `Recording outcome...`;
+        console.warn(detail);
+        TelegramService.queueMsg(detail);
       }
 
       await this.bot.finalizeClosedPosition(closedPosition, {

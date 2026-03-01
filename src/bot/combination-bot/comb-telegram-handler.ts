@@ -4,6 +4,7 @@ import { getRunDuration } from "@/utils/maths.util";
 import { formatFeeAwarePnLLine, getPositionDetailMsg } from "@/utils/strings.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
 import { withRetries, isTransientError } from "./comb-retry";
+import { EEventBusEventType } from "@/utils/event-bus.util";
 import type CombBotInstance from "./comb-bot-instance";
 
 function toIso(ms: number): string {
@@ -92,6 +93,69 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
     } catch (error) {
       this.bot.queueMsg(`⚠️ Failed to generate full PnL chart: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  async handleClosePositionCommand(): Promise<void> {
+    const triggerTs = Date.now();
+    const activePosition = this.bot.currActivePosition;
+    try {
+      if (this.bot.isStopped) {
+        this.bot.queueMsg(`Instance is already stopped for ${this.bot.symbol}. Use /restart to start it again.`);
+        return;
+      }
+
+      if (activePosition) {
+        this.bot.queueMsg(`Closing active position for ${this.bot.symbol}...`);
+        const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
+        const fillTimestamp = this.bot.resolveWsPrice?.time
+          ? this.bot.resolveWsPrice.time.getTime()
+          : (closedPosition.updateTime ?? Date.now());
+        await this.bot.finalizeClosedPosition(closedPosition, {
+          activePosition,
+          triggerTimestamp: triggerTs,
+          fillTimestamp,
+          isLiquidation: false,
+          exitReason: "end",
+          suppressStateChange: true,
+        });
+        this.bot.queueMsg(`✅ Close request completed for ${this.bot.symbol}.`);
+      } else {
+        this.bot.queueMsg(`No active position to close for ${this.bot.symbol}. Stopping the instance.`);
+      }
+
+      this.bot.stopInstance("close_position_command");
+      this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes("No active position")) {
+        this.bot.queueMsg(`No active position to close for ${this.bot.symbol}. Stopping the instance.`);
+        this.bot.stopInstance("close_position_command_no_position");
+        this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+        return;
+      }
+      this.bot.queueMsg(`❌ Failed to close position for ${this.bot.symbol}: ${msg}`);
+    }
+  }
+
+  async handleRestartCommand(): Promise<void> {
+    if (!this.bot.isStopped) {
+      this.bot.queueMsg(`Instance is already running for ${this.bot.symbol}.`);
+      return;
+    }
+
+    if (this.bot.currActivePosition) {
+      this.bot.queueMsg(
+        `Cannot restart because a cached active position exists (id=${this.bot.currActivePosition.id}). ` +
+        `Use /close_position first or clear the position state.`
+      );
+      return;
+    }
+
+    this.bot.isStopped = false;
+    this.bot.stopReason = undefined;
+    this.bot.stopAtMs = undefined;
+    this.bot.queueMsg(`🔄 Restarting instance for ${this.bot.symbol}...`);
+    this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.startingState);
   }
 }
 
