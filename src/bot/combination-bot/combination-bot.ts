@@ -115,10 +115,10 @@ class CombinationBot {
     this.registerTelegramHandlers();
   }
 
-  /** Send a message to the general combination-bot channel (if COMB_BOT_GENERAL_CHAT_ID is set). */
+  /** Send a message to the general combination-bot channel (if COMB_BOT_GENERAL_CHAT_ID is set). Top priority in the queue. */
   queueGeneralMessage(message: string): void {
     if (this.generalChatId) {
-      TelegramService.queueMsg(message, this.generalChatId);
+      TelegramService.queueMsgLongPriority(message, this.generalChatId);
     }
   }
 
@@ -148,9 +148,9 @@ class CombinationBot {
       // Auto-send a general /full_update after every close.
       if (this.generalChatId) {
         void this.getGeneralFullUpdateMessage()
-          .then((msg) => TelegramService.queueMsg(msg, this.generalChatId!))
+          .then((msg) => TelegramService.queueMsgLongPriority(msg, this.generalChatId!))
           .catch((err) =>
-            TelegramService.queueMsg(
+            TelegramService.queueMsgPriority(
               `Failed to auto-send full update: ${err instanceof Error ? err.message : String(err)}`,
               this.generalChatId!
             )
@@ -323,7 +323,7 @@ class CombinationBot {
     }
     try {
       const img = await generatePnLProgressionChart(merged);
-      if (this.generalChatId) TelegramService.queueMsg(img, this.generalChatId);
+      if (this.generalChatId) TelegramService.queueMsgPriority(img, this.generalChatId);
       this.queueGeneralMessage(`Merged PnL chart (${merged.length} points from ${this.instances.length} instance(s)).`);
     } catch (err) {
       this.queueGeneralMessage(`Failed to generate merged chart: ${err instanceof Error ? err.message : String(err)}`);
@@ -340,26 +340,19 @@ class CombinationBot {
       "",
       "/full_update – Show a full status report.",
       "/pnl_graph – Render the PnL progression chart.",
-      "",
-      "/close_position – Close the active position for this bot instance, then stop the instance.",
-      "/restart – Restart a stopped bot instance.",
-      "",
     ];
 
     if (_options.scope === "general") {
-      lines.push(
-        "Notes:",
-        "- Use /full_update and /pnl_graph here to see merged stats across all instances.",
-        "- Use /close_position and /restart inside the instance channel for a specific symbol."
-      );
-    } else {
-      lines.push(
-        "Notes:",
-        "- This is an instance channel. Commands act only on this symbol.",
-        "- /close_position stops the instance after attempting to close the position.",
-        "- /restart starts the instance again."
-      );
+      return lines.join("\n");
     }
+
+    lines.push("", "/close_position – Close the active position for this bot instance, then stop the instance.", "/restart – Restart a stopped bot instance.", "");
+    lines.push(
+      "Notes:",
+      "- This is an instance channel. Commands act only on this symbol.",
+      "- /close_position stops the instance after attempting to close the position.",
+      "- /restart starts the instance again."
+    );
 
     return lines.join("\n");
   }
@@ -369,7 +362,7 @@ class CombinationBot {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
       if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
-        TelegramService.queueMsg(this.getHelpMessage({ scope: "general" }), this.generalChatId);
+        TelegramService.queueMsgLongPriority(this.getHelpMessage({ scope: "general" }), this.generalChatId);
         return;
       }
       const bot = this.getInstanceByChatId(chatId);
@@ -386,9 +379,9 @@ class CombinationBot {
       if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
         try {
           const msg = await this.getGeneralFullUpdateMessage();
-          TelegramService.queueMsg(msg, this.generalChatId);
+          TelegramService.queueMsgLongPriority(msg, this.generalChatId);
         } catch (err) {
-          TelegramService.queueMsg(`Failed to get general update: ${err instanceof Error ? err.message : String(err)}`, this.generalChatId);
+          TelegramService.queueMsgPriority(`Failed to get general update: ${err instanceof Error ? err.message : String(err)}`, this.generalChatId);
         }
         return;
       }
@@ -424,7 +417,7 @@ class CombinationBot {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
       if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
-        TelegramService.queueMsg("Use /close_position in the bot instance channel (not the general channel).", this.generalChatId);
+        TelegramService.queueMsgPriority("Use /close_position in the bot instance channel (not the general channel).", this.generalChatId);
         return;
       }
       const bot = this.getInstanceByChatId(chatId);
@@ -439,7 +432,7 @@ class CombinationBot {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
       if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
-        TelegramService.queueMsg("Use /restart in the bot instance channel (not the general channel).", this.generalChatId);
+        TelegramService.queueMsgPriority("Use /restart in the bot instance channel (not the general channel).", this.generalChatId);
         return;
       }
       const bot = this.getInstanceByChatId(chatId);
