@@ -266,7 +266,8 @@ class TMOBOrderExecutor {
 
   async triggerCloseSignal(position?: IPosition): Promise<IPosition> {
     await this.bot.ensureSymbolInfoLoaded();
-    const targetPosition = position || this.bot.currActivePosition || (await withRetries(
+    const cachedPosition = position || this.bot.currActivePosition;
+    const livePosition = await withRetries(
       () => ExchangeService.getPosition(this.bot.symbol),
       {
         label: "[TMOB] getPosition (close)",
@@ -277,10 +278,17 @@ class TMOBOrderExecutor {
           console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
         },
       }
-    ));
-    if (!targetPosition) {
+    );
+    if (!livePosition) {
+      if (cachedPosition) {
+        const closedPosition = await this.fetchClosedPositionSnapshot(cachedPosition.id);
+        if (closedPosition && typeof closedPosition.closePrice === "number") {
+          return closedPosition;
+        }
+      }
       throw new Error("[TMOB] No active position found to close");
     }
+    const targetPosition = livePosition;
 
     const baseAmt = this.sanitizeBaseQty(Math.abs(targetPosition.size));
     if (!Number.isFinite(baseAmt) || baseAmt <= 0) {

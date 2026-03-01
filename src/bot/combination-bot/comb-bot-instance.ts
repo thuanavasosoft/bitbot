@@ -188,7 +188,15 @@ class CombBotInstance {
 
   async finalizeClosedPosition(
     closedPosition: IPosition,
-    _options?: { activePosition?: IPosition; triggerTimestamp?: number; fillTimestamp?: number; isLiquidation?: boolean; exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" }
+    _options?: {
+      activePosition?: IPosition;
+      triggerTimestamp?: number;
+      fillTimestamp?: number;
+      isLiquidation?: boolean;
+      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
+      /** When true, does not emit a state transition event. Caller must handle state transition explicitly. */
+      suppressStateChange?: boolean;
+    }
   ): Promise<void> {
     const exitReason = _options?.exitReason ?? "signal_change";
     const activePosition = _options?.activePosition ?? this.currActivePosition;
@@ -276,7 +284,9 @@ class CombBotInstance {
       exitReason,
     });
 
-    this.stateBus.emit(EEventBusEventType.StateChange);
+    if (!_options?.suppressStateChange) {
+      this.stateBus.emit(EEventBusEventType.StateChange);
+    }
   }
 }
 

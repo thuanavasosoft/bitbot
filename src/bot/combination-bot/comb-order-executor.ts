@@ -155,8 +155,21 @@ class CombOrderExecutor {
   }
 
   async triggerCloseSignal(position?: IPosition): Promise<IPosition> {
-    const targetPosition = position || this.bot.currActivePosition || await withRetries(() => ExchangeService.getPosition(this.bot.symbol), { label: "[COMB] getPosition (close)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) });
-    if (!targetPosition) throw new Error("[COMB] No active position to close");
+    const cachedPosition = position || this.bot.currActivePosition;
+    const livePosition = await withRetries(
+      () => ExchangeService.getPosition(this.bot.symbol),
+      { label: "[COMB] getPosition (close)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) }
+    );
+    if (!livePosition) {
+      if (cachedPosition) {
+        const closedPosition = await this.fetchClosedPositionSnapshot(cachedPosition.id);
+        if (closedPosition && typeof closedPosition.closePrice === "number") {
+          return closedPosition;
+        }
+      }
+      throw new Error("[COMB] No active position to close");
+    }
+    const targetPosition = livePosition;
     const baseAmt = this.sanitizeBaseQty(Math.abs(targetPosition.size));
     if (!Number.isFinite(baseAmt) || baseAmt <= 0) throw new Error("[COMB] Target position size is zero");
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";

@@ -492,7 +492,10 @@ class CombWaitForResolveState {
         console.log(
           `[COMB] waitForResolve externalClose symbol=${this.bot.symbol} positionId=${activePosition.id} clientOrderId=${update.clientOrderId ?? "N/A"} realizedPnl=${closedPosition.realizedPnl}`
         );
-        this.bot.queueMsg(`⚠️ Active position ${activePosition.id} closed outside bot (order: ${update.clientOrderId || "N/A"}). Recording outcome...`);
+        this.bot.queueMsg("Position is closed manually from dashboard");
+        this.bot.queueMsg(
+          `Symbol: ${this.bot.symbol}\nPosition ID: ${activePosition.id}\nOrder: ${update.clientOrderId || "N/A"}\nRecording outcome...`
+        );
       }
 
       await this.bot.finalizeClosedPosition(closedPosition, {
