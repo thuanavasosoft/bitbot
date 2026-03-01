@@ -119,12 +119,11 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
           suppressStateChange: true,
         });
         this.bot.queueMsg(`✅ Close request completed for ${this.bot.symbol}.`);
+        this.bot.stopInstance("close_position_command");
+        this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
       } else {
-        this.bot.queueMsg(`No active position to close for ${this.bot.symbol}. Stopping the instance.`);
+        this.bot.queueMsg(`No active position to close for ${this.bot.symbol}. doing nothing.`);
       }
-
-      this.bot.stopInstance("close_position_command");
-      this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (msg.includes("No active position")) {
