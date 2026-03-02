@@ -98,7 +98,7 @@ class CombWaitForResolveState {
       if (priceInLiquidationZone) {
         if (!this.liquidationAlertAlreadySent) {
           console.log(
-            `[COMB] waitForResolve liquidationZone symbol=${this.bot.symbol} positionId=${position.id} price=${price} liqPrice=${position.liquidationPrice} side=${position.side}`
+            `[COMB LIQ CHECK] price entered liquidation zone symbol=${this.bot.symbol} positionId=${position.id} price=${price} liqPrice=${position.liquidationPrice} side=${position.side}`
           );
           this.bot.queueMsg(
             `⚠️ Mark price crossed liquidation threshold!\nSymbol: ${this.bot.symbol}\nCurrent price: ${price}\nLiquidation price: ${position.liquidationPrice}\nPosition side: ${position.side}\n\nChecking if position is liquidated via REST API every ${CombWaitForResolveState.LIQUIDATION_CHECK_INTERVAL_MS / 1000}s.`
@@ -106,6 +106,7 @@ class CombWaitForResolveState {
           this.liquidationAlertAlreadySent = true;
         }
         if (!this.liquidationCheckIntervalId) {
+          console.log("[COMB LIQ CHECK] starting liquidation check interval (every 5s)");
           void this._runLiquidationCheck();
           this.liquidationCheckIntervalId = setInterval(() => {
             void this._runLiquidationCheck();
@@ -113,6 +114,7 @@ class CombWaitForResolveState {
         }
       } else {
         if (this.liquidationCheckIntervalId != null) {
+          console.log("[COMB LIQ CHECK] price left liquidation zone, clearing interval and running one final check");
           this._clearLiquidationCheckInterval();
           await this._runLiquidationCheck()
         }
@@ -272,14 +274,25 @@ class CombWaitForResolveState {
 
   private async _runLiquidationCheck(): Promise<void> {
     if (this.liquidationCheckInProgress || !this.bot.currActivePosition) {
+      if (!this.bot.currActivePosition) {
+        console.log("[COMB LIQ CHECK] _runLiquidationCheck skipped: no currActivePosition");
+      } else if (this.liquidationCheckInProgress) {
+        console.log("[COMB LIQ CHECK] _runLiquidationCheck skipped: check already in progress");
+      }
       return;
     }
     this.liquidationCheckInProgress = true;
+    console.log(
+      `[COMB LIQ CHECK] _runLiquidationCheck started symbol=${this.bot.symbol} positionId=${this.bot.currActivePosition.id} lastPrice=${this.lastPrice}`
+    );
     try {
       const finalized = await this._checkAndFinalizeLiquidationByPrice(this.lastPrice);
       if (finalized) {
+        console.log("[COMB LIQ CHECK] _runLiquidationCheck finalized=true, clearing interval and stopping watchers");
         this._clearLiquidationCheckInterval();
         this._stopAllWatchers();
+      } else {
+        console.log("[COMB LIQ CHECK] _runLiquidationCheck finalized=false, will retry on next interval");
       }
     } finally {
       this.liquidationCheckInProgress = false;
@@ -289,14 +302,74 @@ class CombWaitForResolveState {
   private async _checkAndFinalizeLiquidationByPrice(lastPrice: number): Promise<boolean> {
     const activePosition = this.bot.currActivePosition;
     if (!activePosition) return false;
+    console.log(
+      `[COMB LIQ CHECK] _checkAndFinalizeLiquidationByPrice entry symbol=${activePosition.symbol} positionId=${activePosition.id} side=${activePosition.side} lastPrice=${lastPrice} liqPrice=${activePosition.liquidationPrice} size=${activePosition.size}`
+    );
     try {
-      const positionHistory = await ExchangeService.getPositionsHistory({ symbol: activePosition.symbol });
-      if (!positionHistory.length) return false;
+      // Check 1: Try positionId-based lookup (most reliable)
+      let closedPosition: IPosition | null = null;
+      const positionHistoryById = await withRetries(
+        () => ExchangeService.getPositionsHistory({ positionId: activePosition.id }),
+        {
+          label: "[COMB] getPositionsHistory (positionId)",
+          retries: 5,
+          minDelayMs: 5000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
+        }
+      );
+      console.log(
+        `[COMB LIQ CHECK] check 1 (positionId): historyCount=${positionHistoryById.length}`
+      );
+      if (positionHistoryById.length > 0) {
+        const found = positionHistoryById.find((p) => p.id === activePosition.id) ?? positionHistoryById[0];
+        const isLiq = this._isLiquidationClose({ ...found, liquidationPrice: activePosition.liquidationPrice });
+        console.log(
+          `[COMB LIQ CHECK] check 1 found closedPosition id=${found.id} closePrice=${found.closePrice} isLiquidationClose=${isLiq}`
+        );
+        if (isLiq) {
+          closedPosition = found;
+        }
+      }
 
-      const closedPosition = positionHistory.find((p) => {
-        return p.size === activePosition.size && p.side === activePosition.side && p.symbol === activePosition.symbol;
-      });
-      if (!closedPosition) return false;
+      // Check 2: Fallback to symbol-based lookup with size/side/symbol match
+      if (!closedPosition) {
+        console.log("[COMB LIQ CHECK] check 2 (symbol): fetching history by symbol");
+        const positionHistoryBySymbol = await withRetries(
+          () => ExchangeService.getPositionsHistory({ symbol: activePosition.symbol }),
+          {
+            label: "[COMB] getPositionsHistory (symbol)",
+            retries: 5,
+            minDelayMs: 5000,
+            isTransientError,
+            onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
+          }
+        );
+        const matched = positionHistoryBySymbol.find((p) => {
+          return p.size === activePosition.size && p.side === activePosition.side && p.symbol === activePosition.symbol;
+        });
+        const isLiq = matched ? this._isLiquidationClose({ ...matched, liquidationPrice: activePosition.liquidationPrice }) : false;
+        console.log(
+          `[COMB LIQ CHECK] check 2 (symbol): historyCount=${positionHistoryBySymbol.length} matched=${!!matched} isLiquidationClose=${isLiq}${matched ? ` matchedId=${matched.id} matchedSize=${matched.size}` : ""}`
+        );
+        if (matched && isLiq) {
+          closedPosition = matched;
+        }
+      }
+
+      // Check 3: Fallback - infer liquidation from current account position (our position is gone)
+      if (!closedPosition) {
+        console.log("[COMB LIQ CHECK] check 3 (infer from current position): calling _tryInferLiquidationFromCurrentPosition");
+        const inferred = await this._tryInferLiquidationFromCurrentPosition(activePosition, lastPrice);
+        if (inferred) closedPosition = inferred;
+        console.log(`[COMB LIQ CHECK] check 3 result: inferred=${!!inferred}`);
+      }
+
+      if (!closedPosition) {
+        console.log("[COMB LIQ CHECK] all checks failed: no closed position found, not liquidated (or not yet visible)");
+        return false;
+      }
+
       closedPosition.avgPrice = activePosition.avgPrice;
       closedPosition.liquidationPrice = activePosition.liquidationPrice;
       closedPosition.notional = activePosition.notional;
@@ -305,8 +378,9 @@ class CombWaitForResolveState {
       closedPosition.maintenanceMargin = activePosition.maintenanceMargin;
       closedPosition.marginMode = activePosition.marginMode;
 
-      if (!this._isLiquidationClose(closedPosition)) return false;
-
+      console.log(
+        `[COMB LIQ CHECK] finalizing liquidation symbol=${this.bot.symbol} positionId=${closedPosition.id} closePrice=${closedPosition.closePrice} realizedPnl=${closedPosition.realizedPnl}`
+      );
       console.log(
         `[COMB] waitForResolve liquidationConfirmed symbol=${this.bot.symbol} positionId=${closedPosition.id} closePrice=${closedPosition.closePrice} realizedPnl=${closedPosition.realizedPnl}`
       );
@@ -324,8 +398,65 @@ class CombWaitForResolveState {
       });
       return true;
     } catch (error) {
-      console.error("[COMB] Failed to check/finalize liquidation by price:", error);
+      console.error("[COMB LIQ CHECK] _checkAndFinalizeLiquidationByPrice error:", error);
       return false;
+    }
+  }
+
+  /**
+   * Last-resort fallback: if both position history checks fail, infer liquidation by checking
+   * current account position. If our position is gone (no position or different side),
+   * assume liquidation and create a synthetic closed position with PnL = -(100% of initial margin).
+   */
+  private async _tryInferLiquidationFromCurrentPosition(
+    activePosition: IPosition,
+    lastPrice: number
+  ): Promise<IPosition | null> {
+    try {
+      console.log(
+        `[COMB LIQ CHECK] _tryInferLiquidationFromCurrentPosition entry symbol=${activePosition.symbol} positionId=${activePosition.id} side=${activePosition.side} lastPrice=${lastPrice}`
+      );
+      const currentPosition = await withRetries(
+        () => ExchangeService.getPosition(activePosition.symbol),
+        {
+          label: "[COMB] getPosition (liquidation infer)",
+          retries: 5,
+          minDelayMs: 5000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
+        }
+      );
+      const ourPositionGone =
+        !currentPosition || currentPosition.side !== activePosition.side;
+
+      console.log(
+        `[COMB LIQ CHECK] _tryInferLiquidationFromCurrentPosition currentPosition=${currentPosition ? `id=${currentPosition.id} side=${currentPosition.side}` : "none"} ourPositionGone=${ourPositionGone}`
+      );
+
+      if (!ourPositionGone) return null;
+
+      const marginLost = Math.abs(activePosition.initialMargin) || Math.abs(activePosition.maintenanceMargin) || 0;
+      const realizedPnl = marginLost > 0 ? -marginLost : 0;
+
+      console.log(
+        `[COMB LIQ CHECK] _tryInferLiquidationFromCurrentPosition inferring liquidation marginLost=${marginLost} realizedPnl=${realizedPnl}`
+      );
+      console.log(
+        `[COMB] waitForResolve liquidationInferredFromCurrentPosition symbol=${this.bot.symbol} positionId=${activePosition.id} ` +
+        `(currentPosition=${currentPosition ? `id=${currentPosition.id} side=${currentPosition.side}` : "none"}) realizedPnl=${realizedPnl}`
+      );
+
+      const syntheticClosed: IPosition = {
+        ...activePosition,
+        closePrice: lastPrice > 0 ? lastPrice : activePosition.liquidationPrice ?? activePosition.avgPrice,
+        realizedPnl,
+        updateTime: Date.now(),
+      };
+      return syntheticClosed;
+    } catch (error) {
+      console.error("[COMB LIQ CHECK] _tryInferLiquidationFromCurrentPosition error:", error);
+      console.error("[COMB] Failed to infer liquidation from current position:", error);
+      return null;
     }
   }
 
