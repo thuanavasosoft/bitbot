@@ -33,6 +33,56 @@ class TelegramService {
     }
   }
 
+  /** Queue a message at the front so it is sent before other queued messages (higher priority). */
+  static queueMsgPriority(message: string | Buffer, chatId?: string): void {
+    const resolvedChatId = chatId || this.chatId || process.env.TELEGRAM_CHAT_ID!;
+    TelegramService.messageQueue.unshift({ message, chatId: resolvedChatId });
+    if (!TelegramService.isProcessing) {
+      TelegramService.processQueue();
+    }
+  }
+
+  /** Telegram message length limit. */
+  private static readonly TG_MAX_MESSAGE_LENGTH = 4096;
+
+  /**
+   * Queue a long string as multiple priority messages (each under Telegram's limit).
+   * Chunks are queued at the front in order so the first part is sent first.
+   */
+  static queueMsgLongPriority(message: string, chatId?: string, maxLen: number = this.TG_MAX_MESSAGE_LENGTH): void {
+    const resolvedChatId = chatId || this.chatId || process.env.TELEGRAM_CHAT_ID!;
+    if (message.length <= maxLen) {
+      this.queueMsgPriority(message, resolvedChatId);
+      return;
+    }
+    const lines = message.split("\n");
+    const chunks: string[] = [];
+    let chunk = "";
+    for (const line of lines) {
+      const next = chunk ? chunk + "\n" + line : line;
+      if (next.length > maxLen) {
+        if (chunk) chunks.push(chunk);
+        if (line.length > maxLen) {
+          for (let i = 0; i < line.length; i += maxLen) {
+            chunks.push(line.slice(i, i + maxLen));
+          }
+          chunk = "";
+        } else {
+          chunk = line;
+        }
+      } else {
+        chunk = next;
+      }
+    }
+    if (chunk) chunks.push(chunk);
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      TelegramService.messageQueue.unshift({ message: chunks[i], chatId: resolvedChatId });
+    }
+    if (!TelegramService.isProcessing) {
+      TelegramService.processQueue();
+    }
+  }
+
   private static async processQueue(): Promise<void> {
     this.isProcessing = true;
 
