@@ -122,7 +122,9 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
         this.bot.stopInstance("close_position_command");
         this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
       } else {
-        this.bot.queueMsg(`No active position to close for ${this.bot.symbol}. doing nothing.`);
+        this.bot.queueMsg(`No active position to close for ${this.bot.symbol}. Stopping the instance only...`);
+        this.bot.stopInstance("close_position_command_no_position");
+        this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -145,7 +147,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
     if (this.bot.currActivePosition) {
       this.bot.queueMsg(
         `Cannot restart because a cached active position exists (id=${this.bot.currActivePosition.id}). ` +
-        `Use /close_position first or clear the position state.`
+        `Use /stop first or clear the position state.`
       );
       return;
     }

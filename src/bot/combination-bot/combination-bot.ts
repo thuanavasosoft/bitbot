@@ -1,7 +1,8 @@
+import ExchangeService from "@/services/exchange-service/exchange-service";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
-import { getRunDuration } from "@/utils/maths.util";
+import { calc_UnrealizedPnl, getRunDuration } from "@/utils/maths.util";
 import { formatFeeAwarePnLLine } from "@/utils/strings.util";
 import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
@@ -340,17 +341,21 @@ class CombinationBot {
       "",
       "/full_update – Show a full status report.",
       "/pnl_graph – Render the PnL progression chart.",
+      "",
+      "/stop_all – Stop all bot instances (close position then stop each).",
+      "/restart_all – Restart all stopped bot instances.",
+      "/curr_unrealized_pnl – Show current unrealized PnL for all instances (one symbol per line).",
     ];
 
     if (_options.scope === "general") {
       return lines.join("\n");
     }
 
-    lines.push("", "/close_position – Close the active position for this bot instance, then stop the instance.", "/restart – Restart a stopped bot instance.", "");
+    lines.push("", "/stop – Close the active position for this bot instance, then stop the instance.", "/restart – Restart a stopped bot instance.", "");
     lines.push(
       "Notes:",
       "- This is an instance channel. Commands act only on this symbol.",
-      "- /close_position stops the instance after attempting to close the position.",
+      "- /stop stops the instance after attempting to close the position.",
       "- /restart starts the instance again."
     );
 
@@ -413,11 +418,11 @@ class CombinationBot {
       await bot.telegramHandler.handlePnlGraph(ctx);
     });
 
-    TelegramService.appendTgCmdHandler("close_position", async (ctx) => {
+    TelegramService.appendTgCmdHandler("stop", async (ctx) => {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
       if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
-        TelegramService.queueMsgPriority("Use /close_position in the bot instance channel (not the general channel).", this.generalChatId);
+        TelegramService.queueMsgPriority("Use /stop in the bot instance channel (not the general channel).", this.generalChatId);
         return;
       }
       const bot = this.getInstanceByChatId(chatId);
@@ -441,6 +446,60 @@ class CombinationBot {
         return;
       }
       await bot.telegramHandler.handleRestartCommand();
+    });
+
+    TelegramService.appendTgCmdHandler("stop_all", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /stop_all in the general channel.", String(chatId));
+        return;
+      }
+      TelegramService.queueMsgPriority(`Sending stop command to ${this.instances.length} instance(s)...`, this.generalChatId);
+      for (const inst of this.instances) {
+        await inst.telegramHandler.handleClosePositionCommand();
+      }
+      TelegramService.queueMsgPriority("All instances have been sent the stop command.", this.generalChatId);
+    });
+
+    TelegramService.appendTgCmdHandler("restart_all", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /restart_all in the general channel.", String(chatId));
+        return;
+      }
+      TelegramService.queueMsgPriority(`Sending restart command to ${this.instances.length} instance(s)...`, this.generalChatId);
+      for (const inst of this.instances) {
+        await inst.telegramHandler.handleRestartCommand();
+      }
+      TelegramService.queueMsgPriority("All instances have been sent the restart command.", this.generalChatId);
+    });
+
+    TelegramService.appendTgCmdHandler("curr_unrealized_pnl", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /curr_unrealized_pnl in the general channel.", String(chatId));
+        return;
+      }
+      try {
+        const lines: string[] = ["Current unrealized PnL (USDT):", ""];
+        for (const inst of this.instances) {
+          const pos = inst.currActivePosition;
+          if (!pos) {
+            lines.push(`${inst.symbol} - No open position`);
+            continue;
+          }
+          const markPrice = inst.resolveWsPrice?.price ?? (await ExchangeService.getMarkPrice(inst.symbol));
+          const pnl = calc_UnrealizedPnl(pos, markPrice);
+          const icon = pnl >= 0 ? "🟩" : "🟥";
+          lines.push(`${inst.symbol} - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`);
+        }
+        TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
+      } catch (err) {
+        TelegramService.queueMsgPriority(`Failed to get unrealized PnL: ${err instanceof Error ? err.message : String(err)}`, this.generalChatId);
+      }
     });
   }
 
