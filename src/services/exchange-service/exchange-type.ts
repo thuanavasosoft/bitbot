@@ -54,6 +54,8 @@ export interface ITrade {
   takerOrMaker: 'taker' | 'maker';
   cost: number;
   fee: IFee;
+  /** Realized PnL from this trade (Binance Futures /fapi/v1/userTrades). Present for position-reducing trades. */
+  realizedPnl?: number;
 }
 
 export interface IFee {

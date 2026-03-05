@@ -57,13 +57,17 @@ export function getMsDetailDuration(millis: number): { years: number, months: nu
   return { years, months, days, hours, minutes, seconds }
 }
 
+/**
+ * Computes unrealized PnL using entry price and current mark price.
+ * Uses avgPrice * size for entry notional (not pos.notional, which on Binance/Kraken
+ * is the current notional at mark price, causing the calc to be wrong).
+ */
 export function calc_UnrealizedPnl(pos: IPosition, p: number): number {
   const markPrice = new BigNumber(p);
-  const notionalGainedIfCloseNow = markPrice.times(pos.size).abs();
+  const size = new BigNumber(pos.size).abs();
+  const priceDiff = pos.side === "long" ? markPrice.minus(pos.avgPrice) : new BigNumber(pos.avgPrice).minus(markPrice);
 
-  let pnl: BigNumber = pos.side === "long" ?
-    notionalGainedIfCloseNow.minus(pos.notional) :
-    new BigNumber(pos.notional).minus(notionalGainedIfCloseNow);
+  const pnl: BigNumber = priceDiff.times(size);
 
   return pnl.toNumber();
 }
