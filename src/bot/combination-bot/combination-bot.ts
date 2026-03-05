@@ -397,7 +397,7 @@ class CombinationBot {
       }
       try {
         const msg = await bot.telegramHandler.getFullUpdateMessage();
-        TelegramService.queueMsg(msg, bot.telegramChatId);
+        TelegramService.queueMsgPriority(msg, bot.telegramChatId);
       } catch (err) {
         TelegramService.queueMsg(`Failed to get update: ${err instanceof Error ? err.message : String(err)}`, String(chatId));
       }
