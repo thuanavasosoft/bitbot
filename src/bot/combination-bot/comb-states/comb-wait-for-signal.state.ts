@@ -97,6 +97,31 @@ class CombWaitForSignalState {
           }
           throw error;
         }
+        if (this.bot.isStopped) {
+          this.bot.queueMsg(
+            `Instance was stopped while opening position for ${this.bot.symbol}. Closing the newly opened position...`
+          );
+          try {
+            const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(position);
+            const fillTimestamp = this.bot.resolveWsPrice?.time?.getTime() ?? closedPosition.updateTime ?? Date.now();
+            await this.bot.finalizeClosedPosition(closedPosition, {
+              activePosition: position,
+              triggerTimestamp: triggerTs,
+              fillTimestamp,
+              isLiquidation: false,
+              exitReason: "end",
+              suppressStateChange: true,
+            });
+            this.bot.currActivePosition = undefined;
+            this.bot.queueMsg(`Position closed. Instance remains stopped.`);
+          } catch (closeErr) {
+            const closeMsg = closeErr instanceof Error ? closeErr.message : String(closeErr);
+            this.bot.queueMsg(
+              `Failed to close the position opened during stop: ${closeMsg}. Instance is stopped; close manually or use /stop.`
+            );
+          }
+          return;
+        }
         this.bot.currActivePosition = position;
         this.bot.resetTrailingStopTracking();
         this.bot.lastEntryTime = Date.now();
