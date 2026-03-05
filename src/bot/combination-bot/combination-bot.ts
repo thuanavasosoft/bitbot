@@ -344,7 +344,7 @@ class CombinationBot {
       "",
       "/stop_all – Stop all bot instances (close position then stop each).",
       "/restart_all – Restart all stopped bot instances.",
-      "/curr_unrealized_pnl – Show current unrealized PnL for all instances (one symbol per line).",
+      "/un_pnl – Show current unrealized PnL for all instances (one symbol per line).",
     ];
 
     if (_options.scope === "general") {
@@ -476,11 +476,11 @@ class CombinationBot {
       TelegramService.queueMsgPriority("All instances have been sent the restart command.", this.generalChatId);
     });
 
-    TelegramService.appendTgCmdHandler("curr_unrealized_pnl", async (ctx) => {
+    TelegramService.appendTgCmdHandler("un_pnl", async (ctx) => {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
       if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
-        TelegramService.queueMsgPriority("Use /curr_unrealized_pnl in the general channel.", String(chatId));
+        TelegramService.queueMsgPriority("Use /un_pnl in the general channel.", String(chatId));
         return;
       }
       try {
