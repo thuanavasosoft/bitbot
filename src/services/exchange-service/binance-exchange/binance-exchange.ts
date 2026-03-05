@@ -344,6 +344,11 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   async getMarkPrice(symbol: string): Promise<number> {
+    if (this._isTestnet) {
+      const prices = await this._client.getMarkPrice();
+      return Number(prices.find((p) => p.symbol === symbol)?.markPrice);
+    }
+
     await this._subscribeMarkPrice(symbol);
 
     while (typeof this._prices[symbol] !== "number") {
@@ -716,6 +721,7 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   private _mapTrade(trade: any, originalSymbol: string): ITrade {
+    const realizedPnl = trade.realizedPnl != null ? Number(trade.realizedPnl) : undefined;
     return {
       quantity: Number(trade.qty),
       id: trade.id.toString(),
@@ -730,6 +736,7 @@ class BinanceExchange implements IExchangeInstance {
         currency: trade.commissionAsset,
         amt: Number(trade.commission),
       },
+      realizedPnl,
     };
   }
 

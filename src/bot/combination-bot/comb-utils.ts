@@ -149,6 +149,40 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
     return trades.reduce((sum, t) => sum.plus(t.fee?.amt ?? 0), new BigNumber(0));
   }
 
+  /**
+   * Fetches close-order trades from /fapi/v1/userTrades and derives gross PnL + fees.
+   * Returns null when trades unavailable or realizedPnl not present (e.g. non-Binance).
+   */
+  private async _getPnLAndFeesFromCloseTrades(
+    symbol: string,
+    clientOrderId: string
+  ): Promise<{ grossPnl: BigNumber; closeFees: BigNumber } | null> {
+    const trades = await withRetries(
+      () => ExchangeService.getTradeList(symbol, clientOrderId),
+      {
+        label: "[COMB] getTradeList (close)",
+        retries: 3,
+        minDelayMs: 2000,
+        isTransientError,
+        onRetry: ({ attempt, delayMs, error, label }) =>
+          console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
+      }
+    );
+    if (!trades?.length) return null;
+    const hasRealizedPnl = trades.some((t) => t.realizedPnl != null);
+    if (!hasRealizedPnl) return null;
+
+    const grossPnl = trades.reduce(
+      (sum, t) => sum.plus(t.realizedPnl ?? 0),
+      new BigNumber(0)
+    );
+    const closeFees = trades.reduce(
+      (sum, t) => sum.plus(t.fee?.amt ?? 0),
+      new BigNumber(0)
+    );
+    return { grossPnl, closeFees };
+  }
+
   async handlePnL(
     PnL: number,
     _isLiquidated: boolean,
@@ -157,15 +191,27 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
     timeDiffMs?: number,
     closedPositionId?: number,
   ): Promise<void> {
-    const tradePnL = new BigNumber(PnL);
+    const fallbackGrossPnl = new BigNumber(PnL);
     const openFees = await this._getOrderFees(this.bot.symbol, this.bot.lastOpenClientOrderId);
-    const closeFees = await this._getOrderFees(this.bot.symbol, this.bot.lastCloseClientOrderId);
-    const tradeFees = (openFees ?? new BigNumber(0)).plus(closeFees ?? new BigNumber(0));
 
+    let grossPnl: BigNumber;
+    let closeFees: BigNumber;
+
+    const fromTrades = this.bot.lastCloseClientOrderId
+      ? await this._getPnLAndFeesFromCloseTrades(this.bot.symbol, this.bot.lastCloseClientOrderId)
+      : null;
+
+    if (fromTrades) {
+      grossPnl = fromTrades.grossPnl;
+      closeFees = fromTrades.closeFees;
+    } else {
+      grossPnl = fallbackGrossPnl;
+      closeFees = (await this._getOrderFees(this.bot.symbol, this.bot.lastCloseClientOrderId)) ?? new BigNumber(0);
+    }
+
+    const tradeFees = (openFees ?? new BigNumber(0)).plus(closeFees);
     const feeEstimate = tradeFees;
-    // Exchange "realizedPnl" is treated as realized PnL before fees.
-    const grossPnl = tradePnL;
-    const netPnl = tradePnL.minus(tradeFees);
+    const netPnl = grossPnl.minus(tradeFees);
 
     const normalize = (v: BigNumber) =>
       !v.isFinite() ? undefined : v.abs().lt(1e-8) ? 0 : v.decimalPlaces(6, BigNumber.ROUND_HALF_UP).toNumber();
@@ -201,7 +247,7 @@ Time Diff: ${timeDiffMs}ms
 Price Diff (pips): ${icon} ${slippage}` : ""}`;
 
     console.log(
-      `[COMB] handlePnL symbol=${this.bot.symbol} closedPositionId=${closedPositionId ?? "N/A"} realizedPnl=${PnL.toFixed(4)} totalCalculatedProfit=${this.bot.totalActualCalculatedProfit.toFixed(4)}`
+      `[COMB] handlePnL symbol=${this.bot.symbol} closedPositionId=${closedPositionId ?? "N/A"} grossPnl=${grossPnl.toFixed(4)} netPnl=${netPnl.toFixed(4)} fees=${tradeFees.toFixed(4)} totalCalculatedProfit=${this.bot.totalActualCalculatedProfit.toFixed(4)}`
     );
     this.bot.queueMsg(msg);
   }
