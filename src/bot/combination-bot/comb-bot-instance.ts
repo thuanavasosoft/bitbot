@@ -126,6 +126,10 @@ class CombBotInstance {
     TelegramService.queueMsg(message, this.telegramChatId);
   }
 
+  queueMsgPriority(message: string | Buffer): void {
+    TelegramService.queueMsgPriority(message, this.telegramChatId);
+  }
+
   /** Notify the general bot of an instance event (position opened/closed, liquidated). No-op if onInstanceEvent not set. */
   notifyInstanceEvent(event: CombInstanceEvent): void {
     this.onInstanceEvent?.(event);
