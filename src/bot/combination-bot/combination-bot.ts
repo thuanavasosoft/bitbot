@@ -145,18 +145,6 @@ class CombinationBot {
           `${prefix} ✅ Position closed (${reasonStr}) | Exit net PnL: ${pnlStr}`
         );
       }
-
-      // Auto-send a general /full_update after every close.
-      if (this.generalChatId) {
-        void this.getGeneralFullUpdateMessage()
-          .then((msg) => TelegramService.queueMsgLongPriority(msg, this.generalChatId!))
-          .catch((err) =>
-            TelegramService.queueMsgPriority(
-              `Failed to auto-send full update: ${err instanceof Error ? err.message : String(err)}`,
-              this.generalChatId!
-            )
-          );
-      }
     }
   }
 
@@ -485,6 +473,8 @@ class CombinationBot {
       }
       try {
         const lines: string[] = ["Current unrealized PnL (USDT):", ""];
+        let totalUnrealizedPnl = 0;
+        let totalBufferedUnrealizedPnl = 0;
         for (const inst of this.instances) {
           const pos = inst.currActivePosition;
           if (!pos) {
@@ -493,8 +483,29 @@ class CombinationBot {
           }
           const markPrice = inst.resolveWsPrice?.price ?? (await ExchangeService.getMarkPrice(inst.symbol));
           const pnl = calc_UnrealizedPnl(pos, markPrice);
+          const bufferedMarkPrice =
+            pos.side === "long" ? markPrice * 0.999 : markPrice * 1.001;
+          const bufferedUnrealizedPnL = calc_UnrealizedPnl(pos, bufferedMarkPrice);
+          totalUnrealizedPnl += pnl;
+          totalBufferedUnrealizedPnl += bufferedUnrealizedPnL;
           const icon = pnl >= 0 ? "🟩" : "🟥";
-          lines.push(`${inst.symbol} - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`);
+          const side = pos.side.toUpperCase();
+          lines.push(
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT (buffered: ${icon} ${bufferedUnrealizedPnL.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })})`
+          );
+        }
+        if (this.instances.some((i) => i.currActivePosition)) {
+          const totalIcon = totalUnrealizedPnl >= 0 ? "🟩" : "🟥";
+          const bufferedIcon = totalBufferedUnrealizedPnl >= 0 ? "🟩" : "🟥";
+          lines.push(
+            "",
+            `Total unrealized PnL: ${totalIcon} ${totalUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT (buffered: ${bufferedIcon} ${totalBufferedUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })})`
+          );
+
+          lines.push(
+            "",
+            `Note: Buffered PnL is calculated with a 0.1% buffer worse than the current mark price. This is to account for the slippage that occurs when closing the position. The actual PnL will be different if the position is closed at a different price.`
+          );
         }
         TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
       } catch (err) {
