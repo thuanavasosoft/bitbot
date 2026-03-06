@@ -491,7 +491,7 @@ class CombinationBot {
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
           lines.push(
-            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT (buffered: ${icon} ${bufferedUnrealizedPnL.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })})`
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`
           );
         }
         if (this.instances.some((i) => i.currActivePosition)) {
@@ -499,12 +499,8 @@ class CombinationBot {
           const bufferedIcon = totalBufferedUnrealizedPnl >= 0 ? "🟩" : "🟥";
           lines.push(
             "",
-            `Total unrealized PnL: ${totalIcon} ${totalUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT (buffered: ${bufferedIcon} ${totalBufferedUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })})`
-          );
-
-          lines.push(
-            "",
-            `Note: Buffered PnL is calculated with a 0.1% buffer worse than the current mark price. This is to account for the slippage that occurs when closing the position. The actual PnL will be different if the position is closed at a different price.`
+            `Total unrealized PnL: ${totalIcon} ${totalUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`,
+            `Total buffered unrealized PnL: ${bufferedIcon} ${totalBufferedUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`
           );
         }
         TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
