@@ -24,6 +24,11 @@ class CombWaitForResolveState {
 
   constructor(private bot: CombBotInstance) { }
 
+  /** Recalculate trailing stop levels (e.g. after temp_tm change). Call before refreshChart to show updated trail stop. */
+  async refreshTrailingStopLevels(): Promise<void> {
+    await this._updateTrailingStopLevels();
+  }
+
   async onEnter() {
     if (!this.bot.currActivePosition) {
       const msg = `[COMB] ${this.bot.symbol} currActivePosition is not defined but entering wait for resolve state`;
@@ -551,7 +556,7 @@ class CombWaitForResolveState {
       return;
     }
 
-    const multiplier = this.bot.trailingStopMultiplier;
+    const multiplier = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
     let rawLevel: number | null = null;
     if (position.side === "long") {
       const highestClose = Math.max(...closesWindow);
@@ -623,21 +628,22 @@ class CombWaitForResolveState {
         console.log(
           `[COMB] waitForResolve externalClose symbol=${this.bot.symbol} positionId=${activePosition.id} clientOrderId=${update.clientOrderId ?? "N/A"} realizedPnl=${closedPosition.realizedPnl}`
         );
-        this.bot.queueMsg("Position is closed manually from dashboard");
-        this.bot.queueMsg(
-          `Symbol: ${this.bot.symbol}\nPosition ID: ${activePosition.id}\nOrder: ${update.clientOrderId || "N/A"}\nRecording outcome...`
-        );
+        this.bot.queueMsg("Position closed manually. Recording PnL and continuing.");
       }
 
-      await this.bot.finalizeClosedPosition(closedPosition, {
-        activePosition,
-        triggerTimestamp: update.updateTime ?? Date.now(),
-        fillTimestamp: update.updateTime ?? Date.now(),
-        isLiquidation,
-        exitReason: isLiquidation ? "liquidation_exit" : "signal_change",
-      });
+      if (!this.bot.justManuallyClosedByTg) {
+        await this.bot.finalizeClosedPosition(closedPosition, {
+          activePosition,
+          triggerTimestamp: update.updateTime ?? Date.now(),
+          fillTimestamp: update.updateTime ?? Date.now(),
+          isLiquidation,
+          exitReason: isLiquidation ? "liquidation_exit" : "signal_change",
+          suppressStateChange: true,
+        });
+        this._stopAllWatchers();
+      }
+
       this._clearLiquidationCheckInterval();
-      this._stopAllWatchers();
     } catch (error) {
       console.error("[COMB] Failed to process external order update:", error);
     } finally {
@@ -669,8 +675,8 @@ Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
     const triggerTs = Date.now();
     const activePosition = this.bot.currActivePosition;
     const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-    const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
 
+    const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
     await this.bot.finalizeClosedPosition(closedPosition, {
       activePosition,
       triggerTimestamp: triggerTs,

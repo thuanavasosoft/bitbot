@@ -117,7 +117,7 @@ class CombWaitForSignalState {
           } catch (closeErr) {
             const closeMsg = closeErr instanceof Error ? closeErr.message : String(closeErr);
             this.bot.queueMsg(
-              `Failed to close the position opened during stop: ${closeMsg}. Instance is stopped; close manually or use /stop.`
+              `Failed to close the position opened during stop: ${closeMsg}. Instance is stopped; close manually or use /close_pos.`
             );
           }
           return;

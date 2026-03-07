@@ -15,6 +15,128 @@ class CombCandleWatcher {
 
   constructor(private bot: CombBotInstance) { }
 
+  /** Generate and send the price chart (support/resistance, trail stop, etc.) to the instance channel. */
+  async refreshChart(): Promise<void> {
+    try {
+      const now = new Date();
+      await this.bot.tmobCandles.ensurePopulated();
+      now.setSeconds(0);
+      now.setMilliseconds(0);
+      let currCandles = await this.bot.tmobCandles.getCandles(
+        new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000),
+        now
+      );
+      if (currCandles.length <= this.bot.nSignal) {
+        const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+        currCandles.push({
+          timestamp: now.getTime(),
+          openTime: now.getTime(),
+          closeTime: now.getTime(),
+          openPrice: markPrice,
+          highPrice: markPrice,
+          lowPrice: markPrice,
+          closePrice: markPrice,
+          volume: 0,
+        } as ICandleInfo);
+      }
+      const signalParams = { ...COMB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal };
+      const signalResult = calculateBreakoutSignal(currCandles, signalParams);
+      const rawSupport = signalResult.support;
+      const rawResistance = signalResult.resistance;
+      this.bot.currentSupport = rawSupport;
+      this.bot.currentResistance = rawResistance;
+
+      let trailingStopRaw: number | null = null;
+      let trailingStopBuffered: number | null = null;
+      const trailingTargets = this.bot.trailingStopTargets;
+      if (
+        trailingTargets &&
+        this.bot.currActivePosition &&
+        trailingTargets.side === this.bot.currActivePosition.side
+      ) {
+        trailingStopRaw = trailingTargets.rawLevel;
+        trailingStopBuffered = trailingTargets.bufferedLevel;
+      }
+
+      if (rawResistance !== null) {
+        const bufferMultiplier = new BigNumber(1).minus(this.bot.triggerBufferPercentage / 100);
+        this.bot.longTrigger = new BigNumber(rawResistance)
+          .times(bufferMultiplier)
+          .decimalPlaces(this.bot.pricePrecision, BigNumber.ROUND_DOWN)
+          .toNumber();
+      } else {
+        this.bot.longTrigger = null;
+      }
+      if (rawSupport !== null) {
+        const bufferMultiplier = new BigNumber(1).plus(this.bot.triggerBufferPercentage / 100);
+        this.bot.shortTrigger = new BigNumber(rawSupport)
+          .times(bufferMultiplier)
+          .decimalPlaces(this.bot.pricePrecision, BigNumber.ROUND_UP)
+          .toNumber();
+      } else {
+        this.bot.shortTrigger = null;
+      }
+
+      const signalImageData = await withRetries(
+        () =>
+          generateImageOfCandlesWithSupportResistance(
+            this.bot.symbol,
+            currCandles,
+            rawSupport,
+            rawResistance,
+            false,
+            now,
+            this.bot.currActivePosition ?? undefined,
+            this.bot.longTrigger ?? undefined,
+            this.bot.shortTrigger ?? undefined,
+            trailingStopRaw ?? undefined,
+            trailingStopBuffered ?? undefined,
+          ),
+        {
+          label: "[CombCandleWatcher] refreshChart generateImage",
+          retries: 3,
+          minDelayMs: 2000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error, label }) =>
+            console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
+        }
+      );
+      this.bot.queueMsg(signalImageData);
+
+      const currentPrice = currCandles[currCandles.length - 1].closePrice;
+      const effectiveMult = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
+      const trailingMsg =
+        trailingStopRaw !== null || trailingStopBuffered !== null
+          ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
+          : "";
+      const paramsMsg =
+        `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
+        `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
+      const optimizationAgeMsg =
+        this.bot.lastOptimizationAtMs > 0
+          ? (() => {
+              const elapsedMs = now.getTime() - this.bot.lastOptimizationAtMs;
+              const totalSeconds = Math.floor(elapsedMs / 1000);
+              const hours = Math.floor(totalSeconds / 3600);
+              const minutes = Math.floor((totalSeconds % 3600) / 60);
+              return `\nLast optimized: ${hours}h${minutes}m`;
+            })()
+          : "\nLast optimized: N/A";
+
+      this.bot.queueMsg(
+        `Candles count: ${currCandles.length}\n` +
+          `ℹ️ Price: ${currentPrice}\n` +
+          `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
+          `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}`
+      );
+      this.bot.lastSRUpdateTime = Date.now();
+    } catch (err) {
+      this.bot.queueMsg(
+        `⚠️ Failed to refresh chart: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   async startWatchingCandles() {
     if (this.isCandleWatcherStarted) return;
     this.isCandleWatcherStarted = true;
@@ -120,9 +242,10 @@ class CombCandleWatcher {
               return `\nLast optimized: ${hours}h${minutes}m`;
             })()
             : "\nLast optimized: N/A";
+        const effectiveMult = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
         const paramsMsg =
           `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
-          `\nTrailing Multiplier: ${this.bot.trailingStopMultiplier}`;
+          `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
 
         this.bot.queueMsg(
           `Candles count: ${currCandles.length}\n` +

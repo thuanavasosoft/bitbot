@@ -330,21 +330,22 @@ class CombinationBot {
       "/full_update – Show a full status report.",
       "/pnl_graph – Render the PnL progression chart.",
       "",
-      "/stop_all – Stop all bot instances (close position then stop each).",
-      "/restart_all – Restart all stopped bot instances.",
-      "/un_pnl – Show current unrealized PnL for all instances (one symbol per line).",
     ];
 
     if (_options.scope === "general") {
+      lines.push(
+        "/close_pos all|{SYMBOL} – Close position(s) (e.g. /close_pos all or /close_pos BTCUSDT).",
+        "/temp_tm all|{SYMBOL} {value} – Set temporary trail multiplier (e.g. /temp_tm all 20 or /temp_tm BTCUSDT 20). Cleared when position closes.",
+        "/un_pnl – Show current unrealized PnL for all instances (one symbol per line)."
+      );
       return lines.join("\n");
     }
 
-    lines.push("", "/stop – Close the active position for this bot instance, then stop the instance.", "/restart – Restart a stopped bot instance.", "");
+    lines.push("", "/close_pos – Close the active position for this bot instance (instance keeps running).", "/temp_tm {value} – Set temporary trail multiplier (e.g. /temp_tm 100). Cleared when position closes.", "");
     lines.push(
       "Notes:",
       "- This is an instance channel. Commands act only on this symbol.",
-      "- /stop stops the instance after attempting to close the position.",
-      "- /restart starts the instance again."
+      "- /close_pos closes the position; the instance continues running and waits for the next signal."
     );
 
     return lines.join("\n");
@@ -406,62 +407,160 @@ class CombinationBot {
       await bot.telegramHandler.handlePnlGraph(ctx);
     });
 
-    TelegramService.appendTgCmdHandler("stop", async (ctx) => {
-      const chatId = ctx.chat?.id;
-      if (chatId === undefined) return;
-      if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
-        TelegramService.queueMsgPriority("Use /stop in the bot instance channel (not the general channel).", this.generalChatId);
-        return;
-      }
-      const bot = this.getInstanceByChatId(chatId);
-      if (!bot) {
-        TelegramService.queueMsg("Unknown channel.", String(chatId));
-        return;
-      }
-      await bot.telegramHandler.handleClosePositionCommand();
-    });
-
     TelegramService.appendTgCmdHandler("restart", async (ctx) => {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
+      TelegramService.queueMsg("Restart command is disabled.", String(chatId));
+    });
+
+    TelegramService.appendTgCmdHandler("temp_tm", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+
       if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
-        TelegramService.queueMsgPriority("Use /restart in the bot instance channel (not the general channel).", this.generalChatId);
+        // General channel: /temp_tm all|{SYMBOL} {value}
+        const target = parts[1];
+        const valueStr = parts[2];
+        if (!target || !valueStr) {
+          TelegramService.queueMsgPriority("Usage: /temp_tm all {value} or /temp_tm {SYMBOL} {value} (e.g. /temp_tm all 20 or /temp_tm BTCUSDT 20)", this.generalChatId);
+          return;
+        }
+        const value = Number(valueStr);
+        if (!Number.isFinite(value) || value < 0) {
+          TelegramService.queueMsgPriority("Value must be a non-negative number.", this.generalChatId);
+          return;
+        }
+        if (target.toLowerCase() === "all") {
+          const instancesWithPosition = this.instances.filter((i) => i.currActivePosition);
+          if (instancesWithPosition.length === 0) {
+            TelegramService.queueMsgPriority("No instances with open position.", this.generalChatId);
+            return;
+          }
+          for (const inst of instancesWithPosition) {
+            inst.temporaryTrailMultiplier = value;
+          }
+          const symbolsStr = instancesWithPosition.map((i) => i.symbol).join(", ");
+          const instanceWord = instancesWithPosition.length === 1 ? "instance" : "instances";
+          TelegramService.queueMsgPriority(
+            `Temporary trail multiplier set to ${value} for ${symbolsStr} (${instancesWithPosition.length} ${instanceWord}). Will be cleared when each position closes.`,
+            this.generalChatId
+          );
+          for (const inst of instancesWithPosition) {
+            if (inst.telegramChatId) {
+              TelegramService.queueMsg(
+                `Temporary trail multiplier set to ${value}. Will be cleared when position closes.`,
+                inst.telegramChatId
+              );
+            }
+            await inst.refreshChartAndTrailingLevels();
+          }
+          return;
+        }
+        const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+        if (!inst) {
+          TelegramService.queueMsgPriority(
+            `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+            this.generalChatId
+          );
+          return;
+        }
+        if (!inst.currActivePosition) {
+          TelegramService.queueMsgPriority(`${inst.symbol} has no open position, abort....`, this.generalChatId);
+          return;
+        }
+        inst.temporaryTrailMultiplier = value;
+        TelegramService.queueMsgPriority(
+          `Temporary trail multiplier set to ${value} for ${inst.symbol}. Will be cleared when position closes.`,
+          this.generalChatId
+        );
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(
+            `Temporary trail multiplier set to ${value}. Will be cleared when position closes.`,
+            inst.telegramChatId
+          );
+        }
+        await inst.refreshChartAndTrailingLevels();
         return;
       }
+
+      // Instance channel: /temp_tm {value}
       const bot = this.getInstanceByChatId(chatId);
       if (!bot) {
         TelegramService.queueMsg("Unknown channel.", String(chatId));
         return;
       }
-      await bot.telegramHandler.handleRestartCommand();
-    });
-
-    TelegramService.appendTgCmdHandler("stop_all", async (ctx) => {
-      const chatId = ctx.chat?.id;
-      if (chatId === undefined) return;
-      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
-        TelegramService.queueMsgPriority("Use /stop_all in the general channel.", String(chatId));
+      const valueStr = parts[1];
+      if (!valueStr) {
+        TelegramService.queueMsg("Usage: /temp_tm {value} (e.g. /temp_tm 100)", bot.telegramChatId);
         return;
       }
-      TelegramService.queueMsgPriority(`Sending stop command to ${this.instances.length} instance(s)...`, this.generalChatId);
-      for (const inst of this.instances) {
-        await inst.telegramHandler.handleClosePositionCommand();
+      const value = Number(valueStr);
+      if (!Number.isFinite(value) || value < 0) {
+        TelegramService.queueMsg("Value must be a non-negative number.", bot.telegramChatId);
+        return;
       }
-      TelegramService.queueMsgPriority("All instances have been sent the stop command.", this.generalChatId);
+      if (!bot.currActivePosition) {
+        TelegramService.queueMsg("No open position for this symbol. abort...", bot.telegramChatId);
+        return;
+      }
+      bot.temporaryTrailMultiplier = value;
+      TelegramService.queueMsg(
+        `Temporary trail multiplier set to ${value}. Will be cleared when position closes.`,
+        bot.telegramChatId
+      );
+      await bot.refreshChartAndTrailingLevels();
+    });
+
+    TelegramService.appendTgCmdHandler("close_pos", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+      const target = parts[1];
+
+      // Instance channel: /close_pos (no args) closes this instance
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        const bot = this.getInstanceByChatId(chatId);
+        if (!bot) {
+          TelegramService.queueMsg("Unknown channel.", String(chatId));
+          return;
+        }
+        await bot.telegramHandler.handleClosePositionCommand();
+        return;
+      }
+
+      // General channel: /close_pos all or /close_pos {SYMBOL}
+      if (!target) {
+        TelegramService.queueMsgPriority("Usage: /close_pos all or /close_pos {SYMBOL} (e.g. /close_pos BTCUSDT)", this.generalChatId);
+        return;
+      }
+      if (target.toLowerCase() === "all") {
+        TelegramService.queueMsgPriority(`Sending close command to all (${this.instances.length}) instances...`, this.generalChatId);
+        for (const inst of this.instances) {
+          inst.telegramHandler.handleClosePositionCommand();
+        }
+        TelegramService.queueMsgPriority("All positions closed. Instances continue running.", this.generalChatId);
+        return;
+      }
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      TelegramService.queueMsgPriority(`Sending close command to ${inst.symbol}...`, this.generalChatId);
+      await inst.telegramHandler.handleClosePositionCommand();
+      TelegramService.queueMsgPriority(`Close command sent for ${inst.symbol}.`, this.generalChatId);
     });
 
     TelegramService.appendTgCmdHandler("restart_all", async (ctx) => {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
-      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
-        TelegramService.queueMsgPriority("Use /restart_all in the general channel.", String(chatId));
-        return;
-      }
-      TelegramService.queueMsgPriority(`Sending restart command to ${this.instances.length} instance(s)...`, this.generalChatId);
-      for (const inst of this.instances) {
-        await inst.telegramHandler.handleRestartCommand();
-      }
-      TelegramService.queueMsgPriority("All instances have been sent the restart command.", this.generalChatId);
+      TelegramService.queueMsg("Restart command is disabled.", String(chatId));
     });
 
     TelegramService.appendTgCmdHandler("un_pnl", async (ctx) => {

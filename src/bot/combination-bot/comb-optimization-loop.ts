@@ -29,6 +29,8 @@ class CombOptimizationLoop {
       return;
     }
 
+    console.log("OptimizationLive this.bot.currActivePosition: ", this.bot.currActivePosition);
+
     if (this.bot.currActivePosition) {
       const triggerTs = Date.now();
       const activePosition = this.bot.currActivePosition;
