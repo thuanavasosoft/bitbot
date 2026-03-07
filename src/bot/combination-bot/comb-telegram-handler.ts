@@ -96,9 +96,12 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
   }
 
   async handleClosePositionCommand(): Promise<void> {
-    const triggerTs = Date.now();
     const activePosition = this.bot.currActivePosition;
     try {
+      if (this.bot.justManuallyClosedByTg) {
+        this.bot.queueMsgPriority(`Position for ${this.bot.symbol} was already closed. State unchanged.`);
+        return;
+      }
       if (this.bot.isStopped) {
         this.bot.queueMsgPriority(`Instance is already stopped for ${this.bot.symbol}. Use /restart to start it again.`);
         return;
@@ -107,31 +110,48 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
       if (activePosition) {
         this.bot.queueMsgPriority(`Closing active position for ${this.bot.symbol}...`);
         const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-        const fillTimestamp = this.bot.resolveWsPrice?.time
-          ? this.bot.resolveWsPrice.time.getTime()
-          : (closedPosition.updateTime ?? Date.now());
-        await this.bot.finalizeClosedPosition(closedPosition, {
-          activePosition,
-          triggerTimestamp: triggerTs,
-          fillTimestamp,
-          isLiquidation: false,
-          exitReason: "end",
-          suppressStateChange: true,
+        this.bot.justManuallyClosedByTg = true;
+        const netPnl = await this.bot.tmobUtils.handlePnL(
+          typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
+          false,
+          undefined,
+          undefined,
+          undefined,
+          closedPosition.id,
+        );
+
+        this.bot.notifyInstanceEvent({
+          type: "position_closed",
+          closedPosition,
+          exitReason: "close_command",
+          realizedPnl: closedPosition.realizedPnl,
+          netPnl: netPnl,
+          symbol: this.bot.symbol,
         });
-        this.bot.queueMsgPriority(`✅ Close request completed for ${this.bot.symbol}.`);
-        this.bot.stopInstance("close_position_command");
-        this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+        const entryFill = this.bot.entryWsPrice;
+        this.bot.pnlHistory.push({
+          timestamp: new Date().toISOString(),
+          timestampMs: Date.now(),
+          side: closedPosition.side,
+          totalPnL: this.bot.totalActualCalculatedProfit,
+          entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
+          entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
+          entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
+          exitTimestamp: new Date(closedPosition.updateTime).toISOString(),
+          exitTimestampMs: closedPosition.updateTime,
+          exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
+          tradePnL: closedPosition.realizedPnl,
+          exitReason: "close_command",
+        });
+
+        this.bot.queueMsgPriority(`✅ Close request completed for ${this.bot.symbol}. State unchanged.`);
       } else {
-        this.bot.queueMsgPriority(`No active position to close for ${this.bot.symbol}. Stopping the instance only...`);
-        this.bot.stopInstance("close_position_command_no_position");
-        this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+        this.bot.queueMsgPriority(`No active position for ${this.bot.symbol}. State unchanged.`);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (msg.includes("No active position")) {
-        this.bot.queueMsgPriority(`No active position to close for ${this.bot.symbol}. Stopping the instance.`);
-        this.bot.stopInstance("close_position_command_no_position");
-        this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+        this.bot.queueMsgPriority(`No active position for ${this.bot.symbol}. State unchanged.`);
         return;
       }
       this.bot.queueMsgPriority(`❌ Failed to close position for ${this.bot.symbol}: ${msg}`);
@@ -147,7 +167,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
     if (this.bot.currActivePosition) {
       this.bot.queueMsgPriority(
         `Cannot restart because a cached active position exists (id=${this.bot.currActivePosition.id}). ` +
-        `Use /stop first or clear the position state.`
+        `Use /close_pos first or clear the position state.`
       );
       return;
     }

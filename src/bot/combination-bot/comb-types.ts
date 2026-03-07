@@ -51,7 +51,7 @@ export type CombPnlHistoryPoint = {
   exitTimestampMs: number;
   exitFillPrice: number;
   tradePnL: number;
-  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
+  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command";
 };
 
 export type CombRunBacktestArgs = {
@@ -127,12 +127,12 @@ export interface IOrderFillUpdate {
 /** Event emitted by an instance so the general bot can notify the general channel. */
 export type CombInstanceEvent =
   | { type: "position_opened"; position: IPosition; symbol: string }
-  |     {
-      type: "position_closed";
-      closedPosition: IPosition;
-      exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
-      realizedPnl: number;
-      /** Net PnL after fees (matches Total calculated PnL / wallet impact). */
-      netPnl: number;
-      symbol: string;
-    };
+  | {
+    type: "position_closed";
+    closedPosition: IPosition;
+    exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command";
+    realizedPnl: number;
+    /** Net PnL after fees (matches Total calculated PnL / wallet impact). */
+    netPnl: number;
+    symbol: string;
+  };

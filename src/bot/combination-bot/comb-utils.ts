@@ -190,7 +190,7 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
     slippage?: number,
     timeDiffMs?: number,
     closedPositionId?: number,
-  ): Promise<void> {
+  ): Promise<number> {
     const fallbackGrossPnl = new BigNumber(PnL);
     const openFees = await this._getOrderFees(this.bot.symbol, this.bot.lastOpenClientOrderId);
 
@@ -250,6 +250,8 @@ Price Diff (pips): ${icon} ${slippage}` : ""}`;
       `[COMB] handlePnL symbol=${this.bot.symbol} closedPositionId=${closedPositionId ?? "N/A"} grossPnl=${grossPnl.toFixed(4)} netPnl=${netPnl.toFixed(4)} fees=${tradeFees.toFixed(4)} totalCalculatedProfit=${this.bot.totalActualCalculatedProfit.toFixed(4)}`
     );
     this.bot.queueMsg(msg);
+
+    return netPnl.toNumber();
   }
 }
 
