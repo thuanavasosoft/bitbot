@@ -220,6 +220,9 @@ class CombinationBot {
         lines.push("Position:");
         lines.push(`Side: ${pos.side.toUpperCase()} | Entry: ${pos.avgPrice} | Size: ${pos.size}`);
         lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
+        if (inst.justManuallyClosedByTg) {
+          lines.push("⚠️ [has been closed via /close_pos]");
+        }
       } else {
         lines.push("Position: No open position");
       }
@@ -585,19 +588,27 @@ class CombinationBot {
           const bufferedMarkPrice =
             pos.side === "long" ? markPrice * 0.999 : markPrice * 1.001;
           const bufferedUnrealizedPnL = calc_UnrealizedPnl(pos, bufferedMarkPrice);
-          totalUnrealizedPnl += pnl;
-          totalBufferedUnrealizedPnl += bufferedUnrealizedPnL;
+          if (!inst.justManuallyClosedByTg) {
+            totalUnrealizedPnl += pnl;
+            totalBufferedUnrealizedPnl += bufferedUnrealizedPnL;
+          }
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
+          const closingIndicator = inst.justManuallyClosedByTg ? "⚠️ [has been closed via /close_pos]" : "";
           lines.push(
-            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT${closingIndicator}`
           );
         }
-        if (this.instances.some((i) => i.currActivePosition)) {
+        const instancesWithOpenPosition = this.instances.filter(
+          (i) => i.currActivePosition && !i.justManuallyClosedByTg
+        );
+        if (instancesWithOpenPosition.length > 0) {
           const totalIcon = totalUnrealizedPnl >= 0 ? "🟩" : "🟥";
           const bufferedIcon = totalBufferedUnrealizedPnl >= 0 ? "🟩" : "🟥";
+          const symbolsStr = instancesWithOpenPosition.map((i) => i.symbol).join(", ");
           lines.push(
             "",
+            `--- Total (open positions only: ${symbolsStr}) ---`,
             `Total unrealized PnL: ${totalIcon} ${totalUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`,
             `Total buffered unrealized PnL: ${bufferedIcon} ${totalBufferedUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`
           );

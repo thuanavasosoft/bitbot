@@ -61,7 +61,7 @@ Current trail multiplier: ${this.bot.currTrailMultiplier}
 Last optimized: ${this.bot.lastOptimizationAtMs > 0 ? toIso(this.bot.lastOptimizationAtMs + 1000) : "N/A"}
 
 === DETAILS ===
-${await this.getFullUpdateDetailsMsg()}
+${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedByTg ? "\n⚠️ [has been closed via /close_pos]" : ""}
 
 === PnL ===
 Run time: ${runDurationDisplay}
