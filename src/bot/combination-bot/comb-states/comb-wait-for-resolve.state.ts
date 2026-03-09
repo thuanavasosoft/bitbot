@@ -659,7 +659,7 @@ Avg price: ${closedPosition.avgPrice}
 Liquidation price: ${closedPosition.liquidationPrice}
 Close price: ${closedPosition.closePrice}
 
-Realized PnL: 🟥🟥🟥 ${closedPosition.realizedPnl}
+Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0) * 2).toFixed(4)} USDT
 `;
   }
 
