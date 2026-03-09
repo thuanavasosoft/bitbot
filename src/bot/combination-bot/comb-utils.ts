@@ -201,7 +201,7 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
       ? await this._getPnLAndFeesFromCloseTrades(this.bot.symbol, this.bot.lastCloseClientOrderId)
       : null;
     if (_isLiquidated) {
-      grossPnl = new BigNumber(this.bot.margin); // liquidated position is always negative margin
+      grossPnl = new BigNumber(-this.bot.margin); // liquidated position is always negative margin
       closeFees = openFees ?? new BigNumber(0);
     } else if (fromTrades) {
       grossPnl = fromTrades.grossPnl;
