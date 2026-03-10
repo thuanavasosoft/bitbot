@@ -221,7 +221,8 @@ class CombinationBot {
         lines.push(`Side: ${pos.side.toUpperCase()} | Entry: ${pos.avgPrice} | Size: ${pos.size}`);
         lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
         if (inst.justManuallyClosedByTg) {
-          lines.push("⚠️ [has been closed via /close_pos]");
+          const lastNetPnl = inst.lastNetPnl;
+          lines.push(`⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]`);
         }
       } else {
         lines.push("Position: No open position");
@@ -583,7 +584,7 @@ class CombinationBot {
             lines.push(`${inst.symbol} - No open position`);
             continue;
           }
-          const markPrice = inst.resolveWsPrice?.price ?? (await ExchangeService.getMarkPrice(inst.symbol));
+          const markPrice = await ExchangeService.getMarkPrice(inst.symbol);
           const pnl = calc_UnrealizedPnl(pos, markPrice);
           const bufferedMarkPrice =
             pos.side === "long" ? markPrice * 0.999 : markPrice * 1.001;
@@ -594,9 +595,10 @@ class CombinationBot {
           }
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
-          const closingIndicator = inst.justManuallyClosedByTg ? "⚠️ [has been closed via /close_pos]" : "";
+          const lastNetPnl = inst.lastNetPnl;
+          const closingIndicator = inst.justManuallyClosedByTg ? ` ⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
           lines.push(
-            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT${closingIndicator}`
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT${closingIndicator}`
           );
         }
         const instancesWithOpenPosition = this.instances.filter(
@@ -609,8 +611,10 @@ class CombinationBot {
           lines.push(
             "",
             `--- Total (open positions only: ${symbolsStr}) ---`,
-            `Total unrealized PnL: ${totalIcon} ${totalUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`,
-            `Total buffered unrealized PnL: ${bufferedIcon} ${totalBufferedUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDT`
+            `Total unrealized PnL: ${totalIcon} ${totalUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`,
+            `Total buffered unrealized PnL: ${bufferedIcon} ${totalBufferedUnrealizedPnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`,
+            "",
+            `Note: Closed positions are not included in the total unrealized PnL.`
           );
         }
         TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
