@@ -6,6 +6,7 @@ import { COMB_DEFAULT_SIGNAL_PARAMS } from "./comb-utils";
 import BigNumber from "bignumber.js";
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import type CombBotInstance from "./comb-bot-instance";
+import { calc_UnrealizedPnl } from "@/utils/maths.util";
 
 /** Delay in ms after the minute mark before running each candle watcher iteration (e.g. 500 => 00:01:00.500). */
 const CANDLE_WATCHER_DELAY_AFTER_MINUTE_MS = 500;
@@ -103,7 +104,6 @@ class CombCandleWatcher {
       );
       this.bot.queueMsg(signalImageData);
 
-      const currentPrice = currCandles[currCandles.length - 1].closePrice;
       const effectiveMult = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
       const trailingMsg =
         trailingStopRaw !== null || trailingStopBuffered !== null
@@ -122,11 +122,17 @@ class CombCandleWatcher {
             return `\nLast optimized: ${hours}h${minutes}m`;
           })()
           : "\nLast optimized: N/A";
-      const closedIndicator = this.bot.justManuallyClosedByTg ? "\n⚠️ [has been closed via /close_pos]" : "";
+      const lastNetPnl = this.bot.lastNetPnl;
+      const closedIndicator = this.bot.justManuallyClosedByTg ? `\n⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
 
       const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(4)}%` : "N/A";
+
+      const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+      const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, markPrice) : 0;
+      const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
+
       this.bot.queueMsg(
-        `ℹ️ Price: ${currentPrice}\n` +
+        `ℹ️ Price: ${markPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
         `ROC Val: ${rocVal}\n` +
         `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
         `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
@@ -229,7 +235,6 @@ class CombCandleWatcher {
           );
           this.bot.queueMsg(signalImageData);
 
-          const currentPrice = currCandles[currCandles.length - 1].closePrice;
           const trailingMsg =
             trailingStopRaw !== null || trailingStopBuffered !== null
               ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
@@ -248,11 +253,16 @@ class CombCandleWatcher {
           const paramsMsg =
             `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
             `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
-          const closedIndicator = this.bot.justManuallyClosedByTg ? "\n⚠️ [has been closed via /close_pos]" : "";
+          const lastNetPnl = this.bot.lastNetPnl;
+          const closedIndicator = this.bot.justManuallyClosedByTg ? `\n⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
           const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(2)}%` : "N/A";
 
+          const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
+          const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, markPrice) : 0;
+          const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
+
           this.bot.queueMsg(
-            `ℹ️ Price: ${currentPrice}\n` +
+            `ℹ️ Price: ${markPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
             `ROC Val: ${rocVal}\n` +
             `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
             `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
