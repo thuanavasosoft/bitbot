@@ -124,9 +124,10 @@ class CombCandleWatcher {
           : "\nLast optimized: N/A";
       const closedIndicator = this.bot.justManuallyClosedByTg ? "\n⚠️ [has been closed via /close_pos]" : "";
 
+      const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(4)}%` : "N/A";
       this.bot.queueMsg(
-        `Candles count: ${currCandles.length}\n` +
         `ℹ️ Price: ${currentPrice}\n` +
+        `ROC Val: ${rocVal}\n` +
         `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
         `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
       );
@@ -248,10 +249,11 @@ class CombCandleWatcher {
             `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
             `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
           const closedIndicator = this.bot.justManuallyClosedByTg ? "\n⚠️ [has been closed via /close_pos]" : "";
+          const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(2)}%` : "N/A";
 
           this.bot.queueMsg(
-            `Candles count: ${currCandles.length}\n` +
             `ℹ️ Price: ${currentPrice}\n` +
+            `ROC Val: ${rocVal}\n` +
             `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
             `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
           );
