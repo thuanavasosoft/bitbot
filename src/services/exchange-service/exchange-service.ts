@@ -13,6 +13,7 @@ export interface IExchangeInstance {
   getOpenedPositions: () => Promise<IPosition[] | undefined>
   getPositionsHistory: (params: IGetPositionHistoryParams) => Promise<IPosition[]>
   getMarkPrice: (symbol: string) => Promise<number>
+  getLTPPrice: (symbol: string) => Promise<number>
   getSymbolInfo: (symbol: string) => Promise<ISymbolInfo>;
   getFeeRate: (symbol: string) => Promise<IFeeRate>
   placeOrder: (params: IPlaceOrderParams) => Promise<IPlaceOrderResponse>;
@@ -73,6 +74,10 @@ class ExchangeService {
 
   static async getMarkPrice(symbol: string): Promise<number> {
     return await this.exchangeInstance.getMarkPrice(symbol)
+  }
+
+  static async getLTPPrice(symbol: string): Promise<number> {
+    return await this.exchangeInstance.getLTPPrice(symbol)
   }
 
   static async getFeeRate(symbol: string): Promise<IFeeRate> {

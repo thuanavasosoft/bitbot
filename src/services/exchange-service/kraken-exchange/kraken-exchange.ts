@@ -320,6 +320,11 @@ class KrakenExchange implements IExchangeInstance {
     return this._prices[symbol];
   }
 
+  /** Returns last traded price (LTP) for the symbol. */
+  async getLTPPrice(symbol: string): Promise<number> {
+    throw new Error("getLTPPrice is not implemented for kraken");
+  }
+
   async getSymbolInfo(symbol: string): Promise<ISymbolInfo> {
     const instrument = await this._resolveInstrument(symbol);
     const tickSize = Number(instrument.tickSize ?? 0);
@@ -466,7 +471,7 @@ class KrakenExchange implements IExchangeInstance {
   hookTradeListener(symbol: string, callback: TTradeListener): () => void {
     console.warn(`[KrakenExchange] hookTradeListener is not implemented yet (symbol=${symbol}).`);
     void callback; // keep signature consistent, no-op for now
-    return () => {};
+    return () => { };
   }
 
   hookOrderListener(callback: (order: IWSOrderUpdate) => void): () => void {
@@ -479,7 +484,7 @@ class KrakenExchange implements IExchangeInstance {
   }
 
   hookPositionUpdateListener(_callback: (update: IWSPositionUpdate) => void): () => void {
-    return () => {};
+    return () => { };
   }
 
   private _connectPublicWs() {

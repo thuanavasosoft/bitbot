@@ -584,11 +584,11 @@ class CombinationBot {
             lines.push(`${inst.symbol} - No open position`);
             continue;
           }
-          const markPrice = await ExchangeService.getMarkPrice(inst.symbol);
-          const pnl = calc_UnrealizedPnl(pos, markPrice);
-          const bufferedMarkPrice =
-            pos.side === "long" ? markPrice * 0.999 : markPrice * 1.001;
-          const bufferedUnrealizedPnL = calc_UnrealizedPnl(pos, bufferedMarkPrice);
+          const ltpPrice = await ExchangeService.getLTPPrice(inst.symbol);
+          const pnl = calc_UnrealizedPnl(pos, ltpPrice);
+          const bufferedLtpPrice =
+            pos.side === "long" ? ltpPrice * 0.999 : ltpPrice * 1.001;
+          const bufferedUnrealizedPnL = calc_UnrealizedPnl(pos, bufferedLtpPrice);
           if (!inst.justManuallyClosedByTg) {
             totalUnrealizedPnl += pnl;
             totalBufferedUnrealizedPnl += bufferedUnrealizedPnL;

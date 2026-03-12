@@ -63,9 +63,9 @@ export function getMsDetailDuration(millis: number): { years: number, months: nu
  * is the current notional at mark price, causing the calc to be wrong).
  */
 export function calc_UnrealizedPnl(pos: IPosition, p: number): number {
-  const markPrice = new BigNumber(p);
+  const currPrice = new BigNumber(p);
   const size = new BigNumber(pos.size).abs();
-  const priceDiff = pos.side === "long" ? markPrice.minus(pos.avgPrice) : new BigNumber(pos.avgPrice).minus(markPrice);
+  const priceDiff = pos.side === "long" ? currPrice.minus(pos.avgPrice) : new BigNumber(pos.avgPrice).minus(currPrice);
 
   const pnl: BigNumber = priceDiff.times(size);
 

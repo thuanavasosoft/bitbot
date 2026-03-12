@@ -66,6 +66,7 @@ class BinanceExchange implements IExchangeInstance {
   private _isTestnet: boolean;
 
   private _prices: Record<string, number> = {};
+  private _ltpPrices: Record<string, number> = {};
   private _subscribedSymbols: Record<string, boolean> = {};
   private _subscribedAggTradeSymbols: Record<string, boolean> = {};
   private _normalizedToOriginalSymbol: Record<string, string> = {};
@@ -129,6 +130,7 @@ class BinanceExchange implements IExchangeInstance {
     const wsMarket = this._isTestnet ? "usdmTestnet" : "usdm";
     await Promise.all([
       ...this._symbols.map((symbol) => this._subscribeMarkPrice(symbol)),
+      ...this._symbols.map((symbol) => this._subscribeAggTrades(symbol)),
       this._wsClient.subscribeUsdFuturesUserDataStream(wsMarket),
     ]);
   }
@@ -356,6 +358,22 @@ class BinanceExchange implements IExchangeInstance {
     }
 
     return this._prices[symbol];
+  }
+
+  /** Returns last traded price (LTP) for the symbol. */
+  async getLTPPrice(symbol: string): Promise<number> {
+    if (this._isTestnet) {
+      const prices = await this._client.getMarkPrice();
+      return Number(prices.find((p) => p.symbol === symbol)?.markPrice);
+    }
+
+    await this._subscribeAggTrades(symbol);
+
+    while (typeof this._ltpPrices[symbol] !== "number") {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    return this._ltpPrices[symbol];
   }
 
   /**
@@ -822,6 +840,9 @@ class BinanceExchange implements IExchangeInstance {
       timestamp: Number(event.time ?? event.eventTime ?? Date.now()),
       side: event.maker ? "sell" : "buy",
     };
+
+    const ltp = Number(trade.price);
+    if (Number.isFinite(ltp)) this._ltpPrices[originalSymbol] = ltp;
 
     if (this._tradeListenerCallbacks[originalSymbol]) {
       Object.values(this._tradeListenerCallbacks[originalSymbol]).forEach((callback) => callback(trade));
