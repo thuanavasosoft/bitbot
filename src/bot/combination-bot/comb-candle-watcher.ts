@@ -127,12 +127,12 @@ class CombCandleWatcher {
 
       const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(4)}%` : "N/A";
 
-      const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
-      const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, markPrice) : 0;
+      const currLtpPrice = await ExchangeService.getLTPPrice(this.bot.symbol);
+      const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, currLtpPrice) : 0;
       const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
 
       this.bot.queueMsg(
-        `ℹ️ Price: ${markPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
+        `ℹ️ Curr LTP Price: ${currLtpPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
         `ROC Val: ${rocVal}\n` +
         `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
         `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
@@ -257,12 +257,12 @@ class CombCandleWatcher {
           const closedIndicator = this.bot.justManuallyClosedByTg ? `\n⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
           const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(2)}%` : "N/A";
 
-          const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
-          const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, markPrice) : 0;
+          const currLtpPrice = await ExchangeService.getLTPPrice(this.bot.symbol);
+          const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, currLtpPrice) : 0;
           const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
 
           this.bot.queueMsg(
-            `ℹ️ Price: ${markPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
+            `ℹ️ Curr LTP Price: ${currLtpPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
             `ROC Val: ${rocVal}\n` +
             `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
             `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
