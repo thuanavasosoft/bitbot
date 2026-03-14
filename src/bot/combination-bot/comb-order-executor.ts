@@ -56,9 +56,16 @@ class CombOrderExecutor {
     return this.sanitizeBaseQty(new BigNumber(quoteAmt).div(price).toNumber());
   }
 
-  private formatOrderDetailMsg(order: IOrder, label: string): string {
-    const feeStr = order.fee ? `${order.fee.currency} ${order.fee.amt}` : "—";
-    return `📋 ${label}\nOrder ID: ${order.id}\nClient Order ID: ${order.clientOrderId}\nSymbol: ${order.symbol} | Side: ${order.side.toUpperCase()} | Type: ${order.type}\nStatus: ${order.status}\nAvg Price: ${order.avgPrice} | Qty: ${order.orderQuantity} | Exec Qty: ${order.execQty}\nExec Value: ${order.execValue} | Fee: ${feeStr}\nCreated: ${new Date(order.createdTs).toISOString()}\nUpdated: ${new Date(order.updateTs).toISOString()}`;
+  private formatOrderDetailMsg(order: Omit<IOrder, "fee">, label: string): string {
+    return `📋 ${label}
+Order ID: ${order.id}
+Client Order ID: ${order.clientOrderId}
+Symbol: ${order.symbol} | Side: ${order.side.toUpperCase()} | Type: ${order.type}
+Status: ${order.status}
+Avg Price: ${order.avgPrice} | Qty: ${order.orderQuantity} | Exec Qty: ${order.execQty}
+Exec Value: ${order.execValue}
+Created: ${new Date(order.createdTs).toISOString()}
+Updated: ${new Date(order.updateTs).toISOString()}`;
   }
 
   async triggerOpenSignal(posDir: TPositionSide, openBalanceAmt: string): Promise<IPosition> {
@@ -78,7 +85,7 @@ class CombOrderExecutor {
     const unsubscribePosition = ExchangeService.hookPositionUpdateListener((update: IWSPositionUpdate) => {
       if (update.symbol !== this.bot.symbol || update.side !== posDir || update.size <= 0) return;
       void (async () => {
-        const pos = await ExchangeService.getPosition(this.bot.symbol);
+        const pos = await withRetries(() => ExchangeService.getPosition(this.bot.symbol), { label: "[COMB] getPosition (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) });
         if (pos && pos.side === posDir) trySettle(pos);
       })();
     });
@@ -91,7 +98,7 @@ class CombOrderExecutor {
           try {
             return await ExchangeService.placeOrder({ symbol: this.bot.symbol, orderType: "market", orderSide, baseAmt, clientOrderId });
           } catch (err) {
-            const existing = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
+            const existing = await withRetries(() => ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId), { label: "[COMB] getOrderDetail existing (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
             if (existing) { console.warn(`[COMB] placeOrder failed but order exists (clientOrderId=${clientOrderId})`); return; }
             throw err;
           }
@@ -118,12 +125,24 @@ class CombOrderExecutor {
         this.POSITION_OVERALL_TIMEOUT_MS
       );
 
-      const openOrderDetail = await withRetries(() => ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId), { label: "[COMB] getOrderDetail (open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
-      if (openOrderDetail) this.bot.queueMsg(this.formatOrderDetailMsg(openOrderDetail, "OPEN ORDER"));
+      this.bot.queueMsg(this.formatOrderDetailMsg({
+        id: orderResp?.orderId!,
+        symbol: this.bot.symbol,
+        avgPrice: fillUpdate.executionPrice,
+        updateTs: fillUpdate.updateTime,
+        execQty: baseAmt,
+        clientOrderId: clientOrderId,
+        execValue: baseAmt,
+        createdTs: fillUpdate.updateTime,
+        orderQuantity: baseAmt,
+        side: orderSide,
+        status: "filled",
+        type: "market",
+      }, "OPEN ORDER"));
 
       void (async () => {
         for (let i = 0; i < this.REST_POLL_ATTEMPTS; i++) {
-          const pos = await ExchangeService.getPosition(this.bot.symbol);
+          const pos = await withRetries(() => ExchangeService.getPosition(this.bot.symbol), { label: "[COMB] getPosition (http poll open)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) });
           if (pos && pos.side === posDir) {
             trySettle(pos);
             return;
@@ -184,7 +203,7 @@ class CombOrderExecutor {
           try {
             return await ExchangeService.placeOrder({ symbol: targetPosition.symbol, orderType: "market", orderSide, baseAmt, clientOrderId });
           } catch (err) {
-            const existing = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
+            const existing = await withRetries(() => ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId), { label: "[COMB] getOrderDetail existing (close)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
             if (existing) { console.warn(`[COMB] close placeOrder failed but order exists`); return; }
             throw err;
           }
@@ -198,7 +217,7 @@ class CombOrderExecutor {
         console.log("[COMB] fillUpdateResp: ", fillUpdateResp);
         fillUpdate = { updateTime: fillUpdateResp?.updateTime ?? 0, executionPrice: fillUpdateResp?.executionPrice ?? 0 };
       } catch {
-        const orderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
+        const orderDetail = await withRetries(() => ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId), { label: "[COMB] getOrderDetail (close)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: ({ attempt, delayMs, error, label }) => { console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error); } });
         console.log("[COMB] Order Detail: ", orderDetail);
         fillUpdate = { updateTime: orderDetail?.updateTs ?? 0, executionPrice: orderDetail?.avgPrice ?? 0 };
       }
@@ -209,8 +228,20 @@ class CombOrderExecutor {
         `[COMB] closeFilled symbol=${this.bot.symbol} positionId=${closedPosition.id} closePrice=${closedPosition.closePrice} realizedPnl=${realizedPnl.toFixed(4)} clientOrderId=${clientOrderId}`
       );
       this.bot.resolveWsPrice = { price: fillUpdate?.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice, time: fillUpdate?.updateTime ? new Date(fillUpdate.updateTime) : new Date() };
-      const closeOrderDetail = await ExchangeService.getOrderDetail(targetPosition.symbol, clientOrderId);
-      if (closeOrderDetail) this.bot.queueMsg(this.formatOrderDetailMsg(closeOrderDetail, "CLOSE ORDER"));
+      this.bot.queueMsg(this.formatOrderDetailMsg({
+        id: orderResp?.orderId!,
+        symbol: this.bot.symbol,
+        avgPrice: fillUpdate.executionPrice,
+        updateTs: fillUpdate.updateTime,
+        execQty: baseAmt,
+        clientOrderId: clientOrderId,
+        execValue: baseAmt,
+        createdTs: fillUpdate.updateTime,
+        orderQuantity: baseAmt,
+        side: orderSide,
+        status: "filled",
+        type: "market",
+      }, "CLOSE ORDER"));
       return closedPosition;
     } catch (e) {
       orderHandle?.cancel();
@@ -222,7 +253,7 @@ class CombOrderExecutor {
 
   async fetchClosedPositionSnapshot(positionId: number, maxRetries = 5): Promise<IPosition | undefined> {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const history = await ExchangeService.getPositionsHistory({ positionId });
+      const history = await withRetries(() => ExchangeService.getPositionsHistory({ positionId }), { label: "[COMB] getPositionsHistory (close)", retries: 5, minDelayMs: 5000, isTransientError, onRetry: (o) => console.warn(`${o.label} retrying:`, o.error) });
       const position = history[0];
       if (position && typeof position.closePrice === "number") return position;
       if (attempt < maxRetries - 1) await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt)));
