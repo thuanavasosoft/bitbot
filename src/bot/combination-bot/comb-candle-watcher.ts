@@ -132,7 +132,7 @@ class CombCandleWatcher {
       const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
 
       this.bot.queueMsg(
-        `ℹ️ Curr LTP Price: ${currLtpPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
+        `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
         `ROC Val: ${rocVal}\n` +
         `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
         `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
@@ -262,7 +262,7 @@ class CombCandleWatcher {
           const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
 
           this.bot.queueMsg(
-            `ℹ️ Curr LTP Price: ${currLtpPrice} (${!!this.bot.currActivePosition ? `${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""})\n` +
+            `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
             `ROC Val: ${rocVal}\n` +
             `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
             `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
