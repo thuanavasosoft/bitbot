@@ -107,6 +107,8 @@ class CombinationBot {
       const instance = new CombBotInstance(config);
       const botIndex = i;
       instance.onInstanceEvent = (event) => this.handleInstanceEvent(botIndex, instance, event);
+      instance.onGeneralInfoMessage = (msg) =>
+        this.queueGeneralMessage(`[COMB] BOT_${botIndex} (${instance.symbol}) ${msg}`);
       this.instances.push(instance);
       if (config.TELEGRAM_CHAT_ID) {
         this.chatIdToInstance.set(String(config.TELEGRAM_CHAT_ID), instance);
@@ -220,7 +222,7 @@ class CombinationBot {
         lines.push("Position:");
         lines.push(`Side: ${pos.side.toUpperCase()} | Entry: ${pos.avgPrice} | Size: ${pos.size}`);
         lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
-        if (inst.justManuallyClosedByTg) {
+        if (inst.justManuallyClosedBy) {
           const lastNetPnl = inst.lastNetPnl;
           lines.push(`⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]`);
         }
@@ -345,7 +347,13 @@ class CombinationBot {
       return lines.join("\n");
     }
 
-    lines.push("", "/close_pos – Close the active position for this bot instance (instance keeps running).", "/temp_tm {value} – Set temporary trail multiplier (e.g. /temp_tm 100). Cleared when position closes.", "");
+    lines.push(
+      "",
+      "/close_pos – Close the active position for this bot instance (instance keeps running).",
+      "/temp_tm {value} – Set temporary trail multiplier (e.g. /temp_tm 100). Cleared when position closes.",
+      "/tp_pb {percent} – Take profit on pullback (e.g. /tp_pb 1). Close when price pulls back X% from highest (long) or lowest (short). 0 = disabled.",
+      ""
+    );
     lines.push(
       "Notes:",
       "- This is an instance channel. Commands act only on this symbol.",
@@ -517,6 +525,40 @@ class CombinationBot {
       await bot.refreshChartAndTrailingLevels();
     });
 
+    TelegramService.appendTgCmdHandler("tp_pb", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+      const valueStr = parts[1];
+
+      const bot = this.getInstanceByChatId(chatId);
+      if (!bot) {
+        TelegramService.queueMsg("Unknown channel.", String(chatId));
+        return;
+      }
+      if (!valueStr) {
+        TelegramService.queueMsg(
+          `Usage: /tp_pb {percent} (e.g. /tp_pb 1 for 1% pullback). Current: ${bot.tpPullbackPercent}% (0 = disabled).`,
+          bot.telegramChatId
+        );
+        return;
+      }
+      const value = Number(valueStr);
+      if (!Number.isFinite(value) || value < 0) {
+        TelegramService.queueMsg("Value must be a non-negative number.", bot.telegramChatId);
+        return;
+      }
+      bot.tpPullbackPercent = value;
+      TelegramService.queueMsg(
+        value === 0
+          ? `TP pullback disabled for ${bot.symbol}.`
+          : `TP pullback set to ${value}% for ${bot.symbol}. Will close when price pulls back ${value}% from highest (long) or lowest (short).`,
+        bot.telegramChatId
+      );
+      await bot.refreshChartAndTrailingLevels();
+    });
+
     TelegramService.appendTgCmdHandler("close_pos", async (ctx) => {
       const chatId = ctx.chat?.id;
       if (chatId === undefined) return;
@@ -589,20 +631,20 @@ class CombinationBot {
           const bufferedLtpPrice =
             pos.side === "long" ? ltpPrice * 0.999 : ltpPrice * 1.001;
           const bufferedUnrealizedPnL = calc_UnrealizedPnl(pos, bufferedLtpPrice);
-          if (!inst.justManuallyClosedByTg) {
+          if (!inst.justManuallyClosedBy) {
             totalUnrealizedPnl += pnl;
             totalBufferedUnrealizedPnl += bufferedUnrealizedPnL;
           }
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
           const lastNetPnl = inst.lastNetPnl;
-          const closingIndicator = inst.justManuallyClosedByTg ? ` ⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP pullback"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
           lines.push(
             `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT${closingIndicator}`
           );
         }
         const instancesWithOpenPosition = this.instances.filter(
-          (i) => i.currActivePosition && !i.justManuallyClosedByTg
+          (i) => i.currActivePosition && !i.justManuallyClosedBy
         );
         if (instancesWithOpenPosition.length > 0) {
           const totalIcon = totalUnrealizedPnl >= 0 ? "🟩" : "🟥";

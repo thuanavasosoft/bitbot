@@ -61,7 +61,7 @@ Current trail multiplier: ${this.bot.currTrailMultiplier}
 Last optimized: ${this.bot.lastOptimizationAtMs > 0 ? toIso(this.bot.lastOptimizationAtMs + 1000) : "N/A"}
 
 === DETAILS ===
-${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedByTg ? `\n⚠️ [closed via /close_pos at (${(this.bot.lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(this.bot.lastNetPnl ?? 0).toFixed(2)} USDT)]` : ""}
+${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP pullback"} at (${(this.bot.lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(this.bot.lastNetPnl ?? 0).toFixed(2)} USDT)]` : ""}
 
 === PnL ===
 Run time: ${runDurationDisplay}
@@ -98,7 +98,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
   async handleClosePositionCommand(): Promise<void> {
     const activePosition = this.bot.currActivePosition;
     try {
-      if (this.bot.justManuallyClosedByTg) {
+      if (this.bot.justManuallyClosedBy) {
         this.bot.queueMsgPriority(`Position for ${this.bot.symbol} was already closed. State unchanged.`);
         return;
       }
@@ -110,7 +110,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
       if (activePosition) {
         this.bot.queueMsgPriority(`Closing active position for ${this.bot.symbol}...`);
         const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-        this.bot.justManuallyClosedByTg = true;
+        this.bot.justManuallyClosedBy = "close_pos";
         const netPnl = await this.bot.tmobUtils.handlePnL(
           typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
           false,
