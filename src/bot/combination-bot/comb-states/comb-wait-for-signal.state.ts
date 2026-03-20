@@ -7,7 +7,7 @@ import type CombBotInstance from "../comb-bot-instance";
 
 class CombWaitForSignalState {
   private ltpListenerRemover?: () => void;
-  private cooldownTriggerNoticeBoundaryMs?: number;
+  private entryCooldownNoticeBoundaryMs?: number;
 
   constructor(private bot: CombBotInstance) { }
 
@@ -19,7 +19,7 @@ class CombWaitForSignalState {
 
   async onEnter() {
     this.bot.queueMsg(`🔜 Waiting for entry signal - monitoring price for breakout...`);
-    this.cooldownTriggerNoticeBoundaryMs = undefined;
+    this.entryCooldownNoticeBoundaryMs = undefined;
     this.ltpListenerRemover = ExchangeService.hookTradeListener(this.bot.symbol, (trade) => {
       void this._handlePriceUpdate(trade.price);
     });
@@ -34,24 +34,22 @@ class CombWaitForSignalState {
       const longCross = this.bot.longTrigger !== null && priceNum.gte(this.bot.longTrigger);
       const shortCross = this.bot.shortTrigger !== null && priceNum.lte(this.bot.shortTrigger);
 
-      if (this.bot.lastExitTime > 0) {
-        const nextMinuteAfterExitMs = (Math.floor(this.bot.lastExitTime / 60_000) + 1) * 60_000;
-        if (nowMs < nextMinuteAfterExitMs) {
-          if ((longCross || shortCross) && this.cooldownTriggerNoticeBoundaryMs !== nextMinuteAfterExitMs) {
-            this.cooldownTriggerNoticeBoundaryMs = nextMinuteAfterExitMs;
-            const side = longCross ? "LONG" : "SHORT";
-            const trigger = longCross ? this.bot.longTrigger : this.bot.shortTrigger;
-            this.bot.queueMsg(
-              `⏳ Entry blocked until next minute boundary because we just exited a position within the last minute\n` +
-              `Symbol: ${this.bot.symbol}\n` +
-              `Side: ${side}\n` +
-              `Price: ${price}\n` +
-              `Trigger: ${trigger}\n` +
-              `Entry allowed at: ${new Date(nextMinuteAfterExitMs).toISOString()}`
-            );
-          }
-          return;
+      const entryAllowedAt = this.bot.nextEntryAllowedAtMs;
+      if (entryAllowedAt != null && nowMs < entryAllowedAt) {
+        if ((longCross || shortCross) && this.entryCooldownNoticeBoundaryMs !== entryAllowedAt) {
+          this.entryCooldownNoticeBoundaryMs = entryAllowedAt;
+          const side = longCross ? "LONG" : "SHORT";
+          const trigger = longCross ? this.bot.longTrigger : this.bot.shortTrigger;
+          this.bot.queueMsg(
+            `⏳ Entry blocked until the next minute (:00) after the last position closed\n` +
+            `Symbol: ${this.bot.symbol}\n` +
+            `Side: ${side}\n` +
+            `Price: ${price}\n` +
+            `Trigger: ${trigger}\n` +
+            `Entry allowed at: ${new Date(entryAllowedAt).toISOString()}`
+          );
         }
+        return;
       }
       if (this.bot.lastExitTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastExitTime) return;
       let shouldEnter = false;
@@ -123,7 +121,10 @@ class CombWaitForSignalState {
           return;
         }
         this.bot.currActivePosition = position;
+        this.bot.nextEntryAllowedAtMs = undefined;
         this.bot.resetTrailingStopTracking();
+        this.bot.highestPriceSinceEntry = undefined;
+        this.bot.lowestPriceSinceEntry = undefined;
         this.bot.lastEntryTime = Date.now();
         this.bot.numberOfTrades++;
 
