@@ -138,6 +138,7 @@ export async function generateImageOfCandlesWithSupportResistance(
   shortTrigger?: number | null,
   trailingStopRaw?: number | null,
   trailingStopBuffered?: number | null,
+  tpPullbackLevel?: number | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
   const ctx = canvas.getContext('2d');
@@ -298,6 +299,34 @@ export async function generateImageOfCandlesWithSupportResistance(
         backgroundColor: "#00BFFF",
         color: "#FFFFFF",
         xAdjust: 4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
+  // Add TP pullback line (purple) when /tp_pb is set
+  if (tpPullbackLevel !== null && tpPullbackLevel !== undefined) {
+    const tpColor = "#9370DB"; // Purple (MediumPurple)
+    annotations.tpPullback = {
+      type: 'line' as any,
+      yMin: tpPullbackLevel,
+      yMax: tpPullbackLevel,
+      borderColor: tpColor,
+      borderWidth: 2,
+      borderDash: [4, 4],
+      label: {
+        display: true,
+        content: [`TP Pullback: ${tpPullbackLevel}`],
+        position: "start",
+        backgroundColor: tpColor,
+        color: "#FFFFFF",
+        xAdjust: -4,
         font: {
           size: 11,
           weight: "bold",

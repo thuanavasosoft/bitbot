@@ -51,8 +51,11 @@ export type CombPnlHistoryPoint = {
   exitTimestampMs: number;
   exitFillPrice: number;
   tradePnL: number;
-  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command";
+  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback";
 };
+
+/** Indicates position was closed but state should be preserved until trailing stop triggers. */
+export type JustManuallyClosedBy = "close_pos" | "tp_pb";
 
 export type CombRunBacktestArgs = {
   symbol: string;
@@ -130,7 +133,7 @@ export type CombInstanceEvent =
   | {
     type: "position_closed";
     closedPosition: IPosition;
-    exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command";
+    exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback";
     realizedPnl: number;
     /** Net PnL after fees (matches Total calculated PnL / wallet impact). */
     netPnl: number;

@@ -3,7 +3,7 @@ import { EEventBusEventType } from "@/utils/event-bus.util";
 import TelegramService from "@/services/telegram.service";
 import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
-import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent } from "./comb-types";
+import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
 import CombUtils from "./comb-utils";
@@ -16,6 +16,20 @@ import CombCandleWatcher from "./comb-candle-watcher";
 import CombOptimizationLoop from "./comb-optimization-loop";
 import CombTelegramHandler from "./comb-telegram-handler";
 import type { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
+
+/** Human-readable labels for finalizeClosedPosition exit reasons (general channel / logs). */
+const EXIT_REASON_DISPLAY = new Map<string, string>([
+  ["atr_trailing", "trailing stop"],
+  ["signal_change", "signal/close"],
+  ["liquidation_exit", "liquidation"],
+  ["end", "end"],
+  ["tp_pullback", "TP pullback (state reset)"],
+  ["close_command", "close command"],
+]);
+
+function formatExitReasonDisplay(exitReason: string): string {
+  return EXIT_REASON_DISPLAY.get(exitReason) ?? exitReason;
+}
 
 class CombBotInstance {
   runId: string;
@@ -43,6 +57,8 @@ class CombBotInstance {
   longTrigger: number | null = null;
   shortTrigger: number | null = null;
   lastExitTime: number = 0;
+  /** Earliest wall-clock time (ms) a new entry is allowed; set on position close (next minute :00 after resolve). */
+  nextEntryAllowedAtMs?: number;
   lastSRUpdateTime: number = 0;
   lastEntryTime: number = 0;
   currActivePosition?: IPosition;
@@ -58,6 +74,12 @@ class CombBotInstance {
   trailingStopMultiplier: number = 0;
   /** Temporary override for trailing stop multiplier. Cleared when position is closed. */
   temporaryTrailMultiplier?: number;
+  /** Take profit on pullback: close when price pulls back X% from highest (long) or lowest (short). 0 = disabled. */
+  tpPullbackPercent: number = 0;
+  /** Highest price since entry (for long). Used by TP_PB. */
+  highestPriceSinceEntry?: number;
+  /** Lowest price since entry (for short). Used by TP_PB. */
+  lowestPriceSinceEntry?: number;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -72,8 +94,8 @@ class CombBotInstance {
   pnlHistory: CombPnlHistoryPoint[] = [];
   private botCloseOrderIds = new Set<string>();
 
-  /** Set to true when /close_pos is called; reset to false after finalizeClosedPosition cleanup. */
-  justManuallyClosedByTg: boolean = false;
+  /** Set when position closed via /close_pos or TP_PB; reset after finalizeClosedPosition cleanup. */
+  justManuallyClosedBy?: JustManuallyClosedBy;
 
   isStopped: boolean = false;
   stopReason?: string;
@@ -94,6 +116,8 @@ class CombBotInstance {
 
   /** Optional callback for the general bot to receive instance events (position opened/closed, liquidated). */
   onInstanceEvent?: (event: CombInstanceEvent) => void;
+  /** Optional: send a short line to the general COMB channel (e.g. state cleared after prior manual/TP-PB close). */
+  onGeneralInfoMessage?: (message: string) => void;
 
   constructor(config: CombInstanceConfig) {
     this.runId = randomUUID();
@@ -210,21 +234,25 @@ class CombBotInstance {
       triggerTimestamp?: number;
       fillTimestamp?: number;
       isLiquidation?: boolean;
-      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit";
+      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "tp_pullback" | "close_command";
       /** When true, does not emit a state transition event. Caller must handle state transition explicitly. */
       suppressStateChange?: boolean;
     }
   ): Promise<void> {
-    if (this.justManuallyClosedByTg) {
+    const exitReason = _options?.exitReason ?? "signal_change";
+    const exitReasonDisplay = formatExitReasonDisplay(exitReason);
+
+    if (this.justManuallyClosedBy) {
       console.log(
-        `[COMB] finalizeClosedPosition: position ${closedPosition.id} already recorded (e.g. via /close_pos). Skipping duplicate PnL/slippage/history.`
+        `[COMB] finalizeClosedPosition: position ${closedPosition.id} already recorded (via ${this.justManuallyClosedBy}). Skipping duplicate PnL/slippage/history.`
       );
       this.queueMsg(
-        `⏭️ Position ${closedPosition.id} was already closed and PnL recorded (e.g. via /close_pos). Skipping duplicate update, clearing state only.`
+        `⏭️ Position ${closedPosition.id} was already closed and PnL recorded (via ${this.justManuallyClosedBy}). Skipping duplicate update, clearing state only.`
+      );
+      this.onGeneralInfoMessage?.(
+        `has cleared its position due to ${exitReasonDisplay}. The instance can enter a new position again.`
       );
     }
-
-    const exitReason = _options?.exitReason ?? "signal_change";
     const activePosition = _options?.activePosition ?? this.currActivePosition;
     const positionSide = activePosition?.side ?? closedPosition.side;
     const entryFill = this.entryWsPrice;
@@ -234,6 +262,8 @@ class CombBotInstance {
       closedPosition.updateTime ??
       Date.now();
     this.lastExitTime = fillTimestamp;
+    const resolvedAtMs = Math.max(fillTimestamp, Date.now());
+    this.nextEntryAllowedAtMs = (Math.floor(resolvedAtMs / 60_000) + 1) * 60_000;
     const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
     const shouldTrackSlippage = !_options?.isLiquidation;
     const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
@@ -250,7 +280,7 @@ class CombBotInstance {
     let slippage = 0;
     const timeDiffMs = fillTimestamp - triggerTimestamp;
 
-    if (!this.justManuallyClosedByTg && shouldTrackSlippage) {
+    if (!this.justManuallyClosedBy && shouldTrackSlippage) {
       if (srLevel === null) {
         this.queueMsg(
           `⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`
@@ -264,7 +294,7 @@ class CombBotInstance {
     }
 
     const icon = slippage <= 0 ? "🟩" : "🟥";
-    if (!this.justManuallyClosedByTg && shouldTrackSlippage) {
+    if (!this.justManuallyClosedBy && shouldTrackSlippage) {
       if (icon === "🟥") {
         this.slippageAccumulation += Math.abs(slippage);
       } else {
@@ -273,7 +303,7 @@ class CombBotInstance {
       this.numberOfTrades++;
     }
 
-    if (!this.justManuallyClosedByTg) {
+    if (!this.justManuallyClosedBy) {
       await this.tmobUtils.handlePnL(
         realizedPnl,
         _options?.isLiquidation ?? false,
@@ -312,8 +342,11 @@ class CombBotInstance {
     this.currActivePosition = undefined;
     this.entryWsPrice = undefined;
     this.resolveWsPrice = undefined;
-    this.justManuallyClosedByTg = false;
+    this.justManuallyClosedBy = undefined;
     this.temporaryTrailMultiplier = undefined;
+    this.tpPullbackPercent = 0;
+    this.highestPriceSinceEntry = undefined;
+    this.lowestPriceSinceEntry = undefined;
 
     if (!_options?.suppressStateChange) {
       this.stateBus.emit(EEventBusEventType.StateChange);
