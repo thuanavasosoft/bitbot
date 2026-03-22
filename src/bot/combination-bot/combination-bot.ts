@@ -342,6 +342,7 @@ class CombinationBot {
       lines.push(
         "/close_pos all|{SYMBOL} – Close position(s) (e.g. /close_pos all or /close_pos BTCUSDT).",
         "/temp_tm all|{SYMBOL} {value} – Set temporary trail multiplier (e.g. /temp_tm all 20 or /temp_tm BTCUSDT 20). Cleared when position closes.",
+        "/tp_pb all|{SYMBOL} {percent} – Take profit on pullback (e.g. /tp_pb all 1 or /tp_pb BTCUSDT 1). 0 = disabled.",
         "/un_pnl – Show current unrealized PnL for all instances (one symbol per line)."
       );
       return lines.join("\n");
@@ -530,13 +531,66 @@ class CombinationBot {
       if (chatId === undefined) return;
       const rawText = ctx.text || "";
       const parts = rawText.trim().split(/\s+/).filter(Boolean);
-      const valueStr = parts[1];
+
+      if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
+        const target = parts[1];
+        const valueStr = parts[2];
+        if (!target || !valueStr) {
+          TelegramService.queueMsgPriority(
+            "Usage: /tp_pb all {percent} or /tp_pb {SYMBOL} {percent} (e.g. /tp_pb all 1 or /tp_pb BTCUSDT 1). 0 = disabled.",
+            this.generalChatId
+          );
+          return;
+        }
+        const value = Number(valueStr);
+        if (!Number.isFinite(value) || value < 0) {
+          TelegramService.queueMsgPriority("Percent must be a non-negative number.", this.generalChatId);
+          return;
+        }
+        const ackForSymbol = (symbol: string) =>
+          value === 0
+            ? `TP pullback disabled for ${symbol}.`
+            : `TP pullback set to ${value}% for ${symbol}. Will close when price pulls back ${value}% from highest (long) or lowest (short).`;
+        if (target.toLowerCase() === "all") {
+          const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+          TelegramService.queueMsgPriority(
+            value === 0
+              ? `TP pullback disabled for all instances (${symbolsStr}).`
+              : `TP pullback set to ${value}% for all instances (${symbolsStr}).`,
+            this.generalChatId
+          );
+          for (const inst of this.instances) {
+            inst.tpPullbackPercent = value;
+            if (inst.telegramChatId) {
+              TelegramService.queueMsg(ackForSymbol(inst.symbol), inst.telegramChatId);
+            }
+            await inst.refreshChartAndTrailingLevels();
+          }
+          return;
+        }
+        const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+        if (!inst) {
+          TelegramService.queueMsgPriority(
+            `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+            this.generalChatId
+          );
+          return;
+        }
+        inst.tpPullbackPercent = value;
+        TelegramService.queueMsgPriority(ackForSymbol(inst.symbol), this.generalChatId);
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(ackForSymbol(inst.symbol), inst.telegramChatId);
+        }
+        await inst.refreshChartAndTrailingLevels();
+        return;
+      }
 
       const bot = this.getInstanceByChatId(chatId);
       if (!bot) {
         TelegramService.queueMsg("Unknown channel.", String(chatId));
         return;
       }
+      const valueStr = parts[1];
       if (!valueStr) {
         TelegramService.queueMsg(
           `Usage: /tp_pb {percent} (e.g. /tp_pb 1 for 1% pullback). Current: ${bot.tpPullbackPercent}% (0 = disabled).`,
