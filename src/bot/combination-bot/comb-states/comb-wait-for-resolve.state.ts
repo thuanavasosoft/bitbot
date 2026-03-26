@@ -4,6 +4,7 @@ import BigNumber from "bignumber.js";
 import { withRetries, isTransientError } from "../comb-retry";
 import type CombBotInstance from "../comb-bot-instance";
 import { TickRoundMode } from "@/bot/trail-multiplier-optimization-bot/tmob-states/tmob-wait-for-resolve.state";
+import { EEventBusEventType } from "@/utils/event-bus.util";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -33,8 +34,12 @@ class CombWaitForResolveState {
   async onEnter() {
     if (!this.bot.currActivePosition) {
       const msg = `[COMB] ${this.bot.symbol} currActivePosition is not defined but entering wait for resolve state`;
-      console.log(msg);
-      throw new Error(msg);
+      console.error(msg);
+      const reason =
+        "no_active_position: entered wait-for-resolve without open position (internal state ordering error)";
+      this.bot.stopInstance(reason);
+      this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+      return;
     }
 
     const msg = `🔁 Waiting for resolve signal - monitoring price for exit...`;
