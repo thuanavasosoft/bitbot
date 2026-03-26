@@ -344,6 +344,7 @@ class CombWaitForResolveState {
       return;
     }
     this.liquidationCheckInProgress = true;
+    this.bot.isClosingPosition = true;
     console.log(
       `[COMB LIQ CHECK] _runLiquidationCheck started symbol=${this.bot.symbol} positionId=${this.bot.currActivePosition.id} lastPrice=${this.lastPrice}`
     );
@@ -358,6 +359,7 @@ class CombWaitForResolveState {
       }
     } finally {
       this.liquidationCheckInProgress = false;
+      this.bot.isClosingPosition = false;
     }
   }
 
@@ -729,18 +731,27 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
   }
 
   private async _closeCurrPosition(reason: string = "support_resistance") {
+    if (this.bot.isClosingPosition) {
+      console.log(`[COMB] _closeCurrPosition skipped: lock held for ${this.bot.symbol} reason=${reason}`);
+      this.bot.queueMsg(`⚠️ [${this.bot.symbol}] Close order blocked (${reason}): another close is already in progress — lock is held.`);
+      return;
+    }
+    this.bot.isClosingPosition = true;
     const triggerTs = Date.now();
     const activePosition = this.bot.currActivePosition;
-    const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-
-    const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
-    await this.bot.finalizeClosedPosition(closedPosition, {
-      activePosition,
-      triggerTimestamp: triggerTs,
-      fillTimestamp,
-      isLiquidation: reason === "liquidation_exit",
-      exitReason: reason === "atr_trailing" ? "atr_trailing" : "signal_change",
-    });
+    try {
+      const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
+      const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
+      await this.bot.finalizeClosedPosition(closedPosition, {
+        activePosition,
+        triggerTimestamp: triggerTs,
+        fillTimestamp,
+        isLiquidation: reason === "liquidation_exit",
+        exitReason: reason === "atr_trailing" ? "atr_trailing" : "signal_change",
+      });
+    } finally {
+      this.bot.isClosingPosition = false;
+    }
   }
 
   /** Close via TP pullback - same pattern as /close_pos: record PnL, preserve state, watchers stay running. */
@@ -748,7 +759,14 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
     const activePosition = this.bot.currActivePosition;
     if (!activePosition) return;
     if (this.tpPullbackCloseInProgress) return; // Guard: prevent concurrent price updates from spamming
+    if (this.bot.isClosingPosition) {
+      console.log(`[COMB] _handleTpPullbackClose skipped: lock held for ${this.bot.symbol}`);
+      this.bot.queueMsg(`⚠️ [${this.bot.symbol}] TP pullback close blocked: another close is already in progress — lock is held.`);
+      this.bot.justManuallyClosedBy = undefined;
+      return;
+    }
     this.tpPullbackCloseInProgress = true;
+    this.bot.isClosingPosition = true;
     try {
       const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
       const netPnl = await this.bot.tmobUtils.handlePnL(
@@ -790,6 +808,7 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
       this.bot.queueMsg(`❌ TP pullback close failed for ${this.bot.symbol}: ${msg}`);
     } finally {
       this.tpPullbackCloseInProgress = false;
+      this.bot.isClosingPosition = false;
     }
   }
 
@@ -797,6 +816,7 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
     console.log(`[COMB] CombWaitForResolveState onExit symbol=${this.bot.symbol}`);
     this._stopAllWatchers();
     this.tpPullbackCloseInProgress = false;
+    this.bot.isClosingPosition = false;
   }
 
   _quantizeToTick(price: number, mode: TickRoundMode, withLogs?: boolean): number {

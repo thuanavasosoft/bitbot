@@ -97,6 +97,30 @@ class CombBotInstance {
   /** Set when position closed via /close_pos or TP_PB; reset after finalizeClosedPosition cleanup. */
   justManuallyClosedBy?: JustManuallyClosedBy;
 
+  /**
+   * Mutex for the close-order flow. Set to true before any path calls triggerCloseSignal,
+   * released in its finally block. Any other path that wants to close checks this first and
+   * bails out immediately if locked — preventing two market close orders from hitting the
+   * exchange simultaneously (which would open an unintended opposite position).
+   * Reset to false on new position open and on waitForResolveState.onExit().
+   */
+  isClosingPosition: boolean = false;
+
+  /**
+   * Guards finalizeClosedPosition against concurrent calls from racing close paths
+   * (e.g. optimization loop fire-and-forget racing with trailing stop / liquidation).
+   * Reset to false whenever a new position is assigned to currActivePosition.
+   */
+  isFinalizingPosition: boolean = false;
+
+  /**
+   * Set to true once PnL has been recorded for the current position.
+   * Guards handlePnL against being called more than once per position (last-line defence
+   * against sequential races where isFinalizingPosition has already been cleared).
+   * Reset to false whenever a new position is assigned to currActivePosition.
+   */
+  isPnlRecorded: boolean = false;
+
   isStopped: boolean = false;
   stopReason?: string;
   stopAtMs?: number;
@@ -239,117 +263,135 @@ class CombBotInstance {
       suppressStateChange?: boolean;
     }
   ): Promise<void> {
-    const exitReason = _options?.exitReason ?? "signal_change";
-    const exitReasonDisplay = formatExitReasonDisplay(exitReason);
-
-    if (this.justManuallyClosedBy) {
-      console.log(
-        `[COMB] finalizeClosedPosition: position ${closedPosition.id} already recorded (via ${this.justManuallyClosedBy}). Skipping duplicate PnL/slippage/history.`
-      );
-      this.queueMsg(
-        `⏭️ Position ${closedPosition.id} was already closed and PnL recorded (via ${this.justManuallyClosedBy}). Skipping duplicate update, clearing state only.`
-      );
-      this.onGeneralInfoMessage?.(
-        `has cleared its position due to ${exitReasonDisplay}. The instance can enter a new position again.`
-      );
+    if (this.isFinalizingPosition) {
+      const msg = `⚠️ [${this.symbol}] Close skipped (${_options?.exitReason ?? "signal_change"}): another close path is already finalizing this position — narrow time gap between two simultaneous triggers.`;
+      console.log(`[COMB] finalizeClosedPosition skipped: already in progress for ${this.symbol} positionId=${closedPosition.id} exitReason=${_options?.exitReason ?? "signal_change"}`);
+      this.queueMsg(msg);
+      return;
     }
-    const activePosition = _options?.activePosition ?? this.currActivePosition;
-    const positionSide = activePosition?.side ?? closedPosition.side;
-    const entryFill = this.entryWsPrice;
-    const fillTimestamp =
-      _options?.fillTimestamp ??
-      this.resolveWsPrice?.time?.getTime() ??
-      closedPosition.updateTime ??
-      Date.now();
-    this.lastExitTime = fillTimestamp;
-    const resolvedAtMs = Math.max(fillTimestamp, Date.now());
-    this.nextEntryAllowedAtMs = (Math.floor(resolvedAtMs / 60_000) + 1) * 60_000;
-    const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
-    const shouldTrackSlippage = !_options?.isLiquidation;
-    const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
-
-    const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
-
-    let srLevel: number | null = null;
-    if (positionSide === "long") {
-      srLevel = this.currentSupport;
-    } else if (positionSide === "short") {
-      srLevel = this.currentResistance;
+    if (!this.currActivePosition) {
+      const msg = `⚠️ [${this.symbol}] Close skipped (${_options?.exitReason ?? "signal_change"}): position already finalized by another trigger — narrow time gap between two simultaneous closes.`;
+      console.log(`[COMB] finalizeClosedPosition skipped: no active position for ${this.symbol} positionId=${closedPosition.id} exitReason=${_options?.exitReason ?? "signal_change"}`);
+      this.queueMsg(msg);
+      return;
     }
+    this.isFinalizingPosition = true;
 
-    let slippage = 0;
-    const timeDiffMs = fillTimestamp - triggerTimestamp;
+    try {
+      const exitReason = _options?.exitReason ?? "signal_change";
+      const exitReasonDisplay = formatExitReasonDisplay(exitReason);
 
-    if (!this.justManuallyClosedBy && shouldTrackSlippage) {
-      if (srLevel === null) {
-        this.queueMsg(
-          `⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`
+      if (this.justManuallyClosedBy) {
+        console.log(
+          `[COMB] finalizeClosedPosition: position ${closedPosition.id} already recorded (via ${this.justManuallyClosedBy}). Skipping duplicate PnL/slippage/history.`
         );
-      } else {
-        slippage =
-          positionSide === "short"
-            ? new BigNumber(closedPrice).minus(srLevel).toNumber()
-            : new BigNumber(srLevel).minus(closedPrice).toNumber();
+        this.queueMsg(
+          `⏭️ Position ${closedPosition.id} was already closed and PnL recorded (via ${this.justManuallyClosedBy}). Skipping duplicate update, clearing state only.`
+        );
+        this.onGeneralInfoMessage?.(
+          `has cleared its position due to ${exitReasonDisplay}. The instance can enter a new position again.`
+        );
       }
-    }
+      const activePosition = _options?.activePosition ?? this.currActivePosition;
+      const positionSide = activePosition?.side ?? closedPosition.side;
+      const entryFill = this.entryWsPrice;
+      const fillTimestamp =
+        _options?.fillTimestamp ??
+        this.resolveWsPrice?.time?.getTime() ??
+        closedPosition.updateTime ??
+        Date.now();
+      this.lastExitTime = fillTimestamp;
+      const resolvedAtMs = Math.max(fillTimestamp, Date.now());
+      this.nextEntryAllowedAtMs = (Math.floor(resolvedAtMs / 60_000) + 1) * 60_000;
+      const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
+      const shouldTrackSlippage = !_options?.isLiquidation;
+      const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
 
-    const icon = slippage <= 0 ? "🟩" : "🟥";
-    if (!this.justManuallyClosedBy && shouldTrackSlippage) {
-      if (icon === "🟥") {
-        this.slippageAccumulation += Math.abs(slippage);
-      } else {
-        this.slippageAccumulation -= Math.abs(slippage);
+      const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
+
+      let srLevel: number | null = null;
+      if (positionSide === "long") {
+        srLevel = this.currentSupport;
+      } else if (positionSide === "short") {
+        srLevel = this.currentResistance;
       }
-      this.numberOfTrades++;
-    }
 
-    if (!this.justManuallyClosedBy) {
-      await this.tmobUtils.handlePnL(
-        realizedPnl,
-        _options?.isLiquidation ?? false,
-        shouldTrackSlippage ? icon : undefined,
-        shouldTrackSlippage ? slippage : undefined,
-        shouldTrackSlippage ? timeDiffMs : undefined,
-        closedPosition.id
-      );
-      this.notifyInstanceEvent({
-        type: "position_closed",
-        closedPosition,
-        exitReason,
-        realizedPnl,
-        netPnl: this.lastNetPnl ?? realizedPnl,
-        symbol: this.symbol,
-      });
-      console.log(
-        `[COMB] finalizeClosedPosition symbol=${this.symbol} positionId=${closedPosition.id} exitReason=${exitReason} realizedPnl=${realizedPnl.toFixed(4)} totalCalculatedProfit=${this.totalActualCalculatedProfit.toFixed(4)}`
-      );
-      this.pnlHistory.push({
-        timestamp: new Date().toISOString(),
-        timestampMs: Date.now(),
-        side: positionSide as "long" | "short",
-        totalPnL: this.totalActualCalculatedProfit,
-        entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
-        entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
-        entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
-        exitTimestamp: new Date(fillTimestamp).toISOString(),
-        exitTimestampMs: fillTimestamp,
-        exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
-        tradePnL: realizedPnl,
-        exitReason,
-      });
-    }
+      let slippage = 0;
+      const timeDiffMs = fillTimestamp - triggerTimestamp;
 
-    this.currActivePosition = undefined;
-    this.entryWsPrice = undefined;
-    this.resolveWsPrice = undefined;
-    this.justManuallyClosedBy = undefined;
-    this.temporaryTrailMultiplier = undefined;
-    this.tpPullbackPercent = 0;
-    this.highestPriceSinceEntry = undefined;
-    this.lowestPriceSinceEntry = undefined;
+      if (!this.justManuallyClosedBy && shouldTrackSlippage) {
+        if (srLevel === null) {
+          this.queueMsg(
+            `⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`
+          );
+        } else {
+          slippage =
+            positionSide === "short"
+              ? new BigNumber(closedPrice).minus(srLevel).toNumber()
+              : new BigNumber(srLevel).minus(closedPrice).toNumber();
+        }
+      }
 
-    if (!_options?.suppressStateChange) {
-      this.stateBus.emit(EEventBusEventType.StateChange);
+      const icon = slippage <= 0 ? "🟩" : "🟥";
+      if (!this.justManuallyClosedBy && shouldTrackSlippage) {
+        if (icon === "🟥") {
+          this.slippageAccumulation += Math.abs(slippage);
+        } else {
+          this.slippageAccumulation -= Math.abs(slippage);
+        }
+        this.numberOfTrades++;
+      }
+
+      if (!this.justManuallyClosedBy) {
+        await this.tmobUtils.handlePnL(
+          realizedPnl,
+          _options?.isLiquidation ?? false,
+          shouldTrackSlippage ? icon : undefined,
+          shouldTrackSlippage ? slippage : undefined,
+          shouldTrackSlippage ? timeDiffMs : undefined,
+          closedPosition.id
+        );
+        this.notifyInstanceEvent({
+          type: "position_closed",
+          closedPosition,
+          exitReason,
+          realizedPnl,
+          netPnl: this.lastNetPnl ?? realizedPnl,
+          symbol: this.symbol,
+        });
+        console.log(
+          `[COMB] finalizeClosedPosition symbol=${this.symbol} positionId=${closedPosition.id} exitReason=${exitReason} realizedPnl=${realizedPnl.toFixed(4)} totalCalculatedProfit=${this.totalActualCalculatedProfit.toFixed(4)}`
+        );
+        this.pnlHistory.push({
+          timestamp: new Date().toISOString(),
+          timestampMs: Date.now(),
+          side: positionSide as "long" | "short",
+          totalPnL: this.totalActualCalculatedProfit,
+          entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
+          entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
+          entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
+          exitTimestamp: new Date(fillTimestamp).toISOString(),
+          exitTimestampMs: fillTimestamp,
+          exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
+          tradePnL: realizedPnl,
+          exitReason,
+        });
+      }
+
+      this.currActivePosition = undefined;
+      this.entryWsPrice = undefined;
+      this.resolveWsPrice = undefined;
+      this.justManuallyClosedBy = undefined;
+      this.temporaryTrailMultiplier = undefined;
+      this.tpPullbackPercent = 0;
+      this.highestPriceSinceEntry = undefined;
+      this.lowestPriceSinceEntry = undefined;
+
+      if (!_options?.suppressStateChange) {
+        this.stateBus.emit(EEventBusEventType.StateChange);
+      }
+    } finally {
+      this.isFinalizingPosition = false;
     }
   }
 }

@@ -121,6 +121,9 @@ class CombWaitForSignalState {
           return;
         }
         this.bot.currActivePosition = position;
+        this.bot.isClosingPosition = false;
+        this.bot.isFinalizingPosition = false;
+        this.bot.isPnlRecorded = false;
         this.bot.nextEntryAllowedAtMs = undefined;
         this.bot.resetTrailingStopTracking();
         this.bot.highestPriceSinceEntry = undefined;

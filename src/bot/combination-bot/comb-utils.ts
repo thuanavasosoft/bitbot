@@ -191,6 +191,14 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
     timeDiffMs?: number,
     closedPositionId?: number,
   ): Promise<number> {
+    if (this.bot.isPnlRecorded) {
+      const msg = `⚠️ [${this.bot.symbol}] Duplicate PnL recording blocked for position ${closedPositionId ?? "N/A"} — PnL was already recorded by a concurrent close trigger. Only the first close counts.`;
+      console.log(`[COMB] handlePnL skipped: isPnlRecorded=true for ${this.bot.symbol} closedPositionId=${closedPositionId ?? "N/A"}`);
+      this.bot.queueMsg(msg);
+      return this.bot.lastNetPnl ?? 0;
+    }
+    this.bot.isPnlRecorded = true;
+
     const fallbackGrossPnl = new BigNumber(PnL);
     const openFees = await this._getOrderFees(this.bot.symbol, this.bot.lastOpenClientOrderId);
 
