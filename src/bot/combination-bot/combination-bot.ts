@@ -224,7 +224,9 @@ class CombinationBot {
         lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
         if (inst.justManuallyClosedBy) {
           const lastNetPnl = inst.lastNetPnl;
-          lines.push(`⚠️ [closed via /close_pos at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]`);
+          lines.push(
+            `⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]`
+          );
         }
       } else {
         lines.push("Position: No open position");
@@ -342,7 +344,7 @@ class CombinationBot {
       lines.push(
         "/close_pos all|{SYMBOL} – Close position(s) (e.g. /close_pos all or /close_pos BTCUSDT).",
         "/temp_tm all|{SYMBOL} {value} – Set temporary trail multiplier (e.g. /temp_tm all 20 or /temp_tm BTCUSDT 20). Cleared when position closes.",
-        "/tp_pb all|{SYMBOL} {percent} – Take profit on pullback (e.g. /tp_pb all 1 or /tp_pb BTCUSDT 1). 0 = disabled.",
+        "/tp_pb all|{SYMBOL} {percent} – Fixed TP at % of avg–LTP gap (e.g. /tp_pb all 50). 0 = disabled.",
         "/un_pnl – Show current unrealized PnL for all instances (one symbol per line)."
       );
       return lines.join("\n");
@@ -352,7 +354,7 @@ class CombinationBot {
       "",
       "/close_pos – Close the active position for this bot instance (instance keeps running).",
       "/temp_tm {value} – Set temporary trail multiplier (e.g. /temp_tm 100). Cleared when position closes.",
-      "/tp_pb {percent} – Take profit on pullback (e.g. /tp_pb 1). Close when price pulls back X% from highest (long) or lowest (short). 0 = disabled.",
+      "/tp_pb {percent} – Fixed TP: avg ± (gap×%) where gap = |LTP−avg| at command time (e.g. /tp_pb 50). 0 = disabled.",
       ""
     );
     lines.push(
@@ -537,7 +539,7 @@ class CombinationBot {
         const valueStr = parts[2];
         if (!target || !valueStr) {
           TelegramService.queueMsgPriority(
-            "Usage: /tp_pb all {percent} or /tp_pb {SYMBOL} {percent} (e.g. /tp_pb all 1 or /tp_pb BTCUSDT 1). 0 = disabled.",
+            "Usage: /tp_pb all {percent} or /tp_pb {SYMBOL} {percent} (e.g. /tp_pb all 50 or /tp_pb BTCUSDT 50). 0 = disabled.",
             this.generalChatId
           );
           return;
@@ -547,24 +549,16 @@ class CombinationBot {
           TelegramService.queueMsgPriority("Percent must be a non-negative number.", this.generalChatId);
           return;
         }
-        const ackForSymbol = (symbol: string) =>
-          value === 0
-            ? `TP pullback disabled for ${symbol}.`
-            : `TP pullback set to ${value}% for ${symbol}. Will close when price pulls back ${value}% from highest (long) or lowest (short).`;
         if (target.toLowerCase() === "all") {
           const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
           TelegramService.queueMsgPriority(
             value === 0
-              ? `TP pullback disabled for all instances (${symbolsStr}).`
-              : `TP pullback set to ${value}% for all instances (${symbolsStr}).`,
+              ? `TP_PB disabled on all instances (${symbolsStr}).`
+              : `Applying TP_PB (${value}% of avg–LTP gap) on all instances (${symbolsStr}). See each channel for result.`,
             this.generalChatId
           );
           for (const inst of this.instances) {
-            inst.tpPullbackPercent = value;
-            if (inst.telegramChatId) {
-              TelegramService.queueMsg(ackForSymbol(inst.symbol), inst.telegramChatId);
-            }
-            await inst.refreshChartAndTrailingLevels();
+            await inst.applyTpPbFromTelegram(value);
           }
           return;
         }
@@ -576,12 +570,13 @@ class CombinationBot {
           );
           return;
         }
-        inst.tpPullbackPercent = value;
-        TelegramService.queueMsgPriority(ackForSymbol(inst.symbol), this.generalChatId);
-        if (inst.telegramChatId) {
-          TelegramService.queueMsg(ackForSymbol(inst.symbol), inst.telegramChatId);
-        }
-        await inst.refreshChartAndTrailingLevels();
+        TelegramService.queueMsgPriority(
+          value === 0
+            ? `TP_PB disabled for ${inst.symbol}.`
+            : `TP_PB (${value}%) requested for ${inst.symbol}. See instance channel for details.`,
+          this.generalChatId
+        );
+        await inst.applyTpPbFromTelegram(value);
         return;
       }
 
@@ -592,8 +587,12 @@ class CombinationBot {
       }
       const valueStr = parts[1];
       if (!valueStr) {
+        const cur =
+          bot.tpPbPercent > 0 && bot.tpPbFixedPrice != null
+            ? `${bot.tpPbPercent}% → fixed TP ${bot.tpPbFixedPrice}`
+            : `${bot.tpPbPercent}% (0 = disabled)`;
         TelegramService.queueMsg(
-          `Usage: /tp_pb {percent} (e.g. /tp_pb 1 for 1% pullback). Current: ${bot.tpPullbackPercent}% (0 = disabled).`,
+          `Usage: /tp_pb {percent} (e.g. /tp_pb 50 for 50% of gap between avg and LTP). Current: ${cur}.`,
           bot.telegramChatId
         );
         return;
@@ -603,14 +602,7 @@ class CombinationBot {
         TelegramService.queueMsg("Value must be a non-negative number.", bot.telegramChatId);
         return;
       }
-      bot.tpPullbackPercent = value;
-      TelegramService.queueMsg(
-        value === 0
-          ? `TP pullback disabled for ${bot.symbol}.`
-          : `TP pullback set to ${value}% for ${bot.symbol}. Will close when price pulls back ${value}% from highest (long) or lowest (short).`,
-        bot.telegramChatId
-      );
-      await bot.refreshChartAndTrailingLevels();
+      await bot.applyTpPbFromTelegram(value);
     });
 
     TelegramService.appendTgCmdHandler("close_pos", async (ctx) => {
@@ -692,7 +684,7 @@ class CombinationBot {
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
           const lastNetPnl = inst.lastNetPnl;
-          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP pullback"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
           lines.push(
             `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT${closingIndicator}`
           );

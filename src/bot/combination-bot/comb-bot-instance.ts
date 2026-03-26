@@ -6,7 +6,7 @@ import { randomUUID } from "crypto";
 import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
-import CombUtils from "./comb-utils";
+import CombUtils, { getLtpOrMarkPrice, quantizePriceByPrecision } from "./comb-utils";
 import CombOrderExecutor from "./comb-order-executor";
 import CombStartingState from "./comb-states/comb-starting.state";
 import CombWaitForSignalState from "./comb-states/comb-wait-for-signal.state";
@@ -16,6 +16,31 @@ import CombCandleWatcher from "./comb-candle-watcher";
 import CombOptimizationLoop from "./comb-optimization-loop";
 import CombTelegramHandler from "./comb-telegram-handler";
 import type { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { calc_UnrealizedPnl } from "@/utils/maths.util";
+
+/** en-US grouping for Telegram (e.g. 6,000.5); maxFractionDigits caps decimal places. */
+function formatEnUsNumber(n: number, maxFractionDigits: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFractionDigits,
+  });
+}
+
+function formatApproxPnlUsdt(pnl: number): string {
+  const icon = pnl >= 0 ? "🟩" : "🟥";
+  return `${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+}
+
+/** Adverse market exit: long sells ~0.1% below TP; short buys ~0.1% above TP. */
+const TP_PB_EXIT_SLIPPAGE_FRAC = 0.001;
+
+function tpPbAdverseSlippageExitPrice(side: TPositionSide, tp: number, pricePrecision: number): number {
+  const raw =
+    side === "long"
+      ? tp * (1 - TP_PB_EXIT_SLIPPAGE_FRAC)
+      : tp * (1 + TP_PB_EXIT_SLIPPAGE_FRAC);
+  return quantizePriceByPrecision(raw, pricePrecision, "half");
+}
 
 /** Human-readable labels for finalizeClosedPosition exit reasons (general channel / logs). */
 const EXIT_REASON_DISPLAY = new Map<string, string>([
@@ -23,7 +48,7 @@ const EXIT_REASON_DISPLAY = new Map<string, string>([
   ["signal_change", "signal/close"],
   ["liquidation_exit", "liquidation"],
   ["end", "end"],
-  ["tp_pullback", "TP pullback (state reset)"],
+  ["tp_pullback", "TP_PB (state reset)"],
   ["close_command", "close command"],
 ]);
 
@@ -74,12 +99,13 @@ class CombBotInstance {
   trailingStopMultiplier: number = 0;
   /** Temporary override for trailing stop multiplier. Cleared when position is closed. */
   temporaryTrailMultiplier?: number;
-  /** Take profit on pullback: close when price pulls back X% from highest (long) or lowest (short). 0 = disabled. */
-  tpPullbackPercent: number = 0;
-  /** Highest price since entry (for long). Used by TP_PB. */
-  highestPriceSinceEntry?: number;
-  /** Lowest price since entry (for short). Used by TP_PB. */
-  lowestPriceSinceEntry?: number;
+  /**
+   * TP_PB v2: percent of the gap between avg price and LTP at command time. 0 = disabled.
+   * Fixed take-profit price is stored in tpPbFixedPrice until disabled or position finalized.
+   */
+  tpPbPercent: number = 0;
+  /** Fixed TP price set when /tp_pb runs (does not trail with LTP). */
+  tpPbFixedPrice?: number;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -201,6 +227,90 @@ class CombBotInstance {
       await this.waitForResolveState.refreshTrailingStopLevels();
     }
     await this.tmobCandleWatcher.refreshChart();
+  }
+
+  /**
+   * TP_PB v2: set a fixed TP at avg + gap×pct (long) or avg − gap×pct (short) from current LTP vs avg.
+   * If LTP is not favorable vs avg (long needs LTP above avg; short needs LTP below avg), only a message is sent — no close, no TP level. percent 0 disables.
+   */
+  async applyTpPbFromTelegram(value: number): Promise<void> {
+    if (value === 0) {
+      this.tpPbPercent = 0;
+      this.tpPbFixedPrice = undefined;
+      await this.refreshChartAndTrailingLevels();
+      this.queueMsg(`TP_PB disabled for ${this.symbol}.`);
+      return;
+    }
+    if (!Number.isFinite(value) || value < 0) {
+      this.queueMsg("TP_PB: value must be a non-negative number.");
+      return;
+    }
+    if (!this.currActivePosition) {
+      this.queueMsg(`No open position for ${this.symbol}. /tp_pb ignored.`);
+      return;
+    }
+    if (this.currentState !== this.waitForResolveState) {
+      this.queueMsg(`TP_PB requires an open position in resolve state for ${this.symbol}.`);
+      return;
+    }
+    if (this.isClosingPosition) {
+      this.queueMsg(`Cannot set TP_PB for ${this.symbol}: a close is already in progress.`);
+      return;
+    }
+    const ltp = await getLtpOrMarkPrice(this.symbol);
+    const avg = this.currActivePosition.avgPrice;
+    const side = this.currActivePosition.side;
+    const ltpBn = new BigNumber(ltp);
+    const avgBn = new BigNumber(avg);
+
+    if (side === "long") {
+      if (ltpBn.lte(avgBn)) {
+        const fd = this.pricePrecision;
+        this.queueMsg(
+          `Cannot set /tp_pb: LTP (${formatEnUsNumber(ltp, fd)}) must be above avg (${formatEnUsNumber(avg, fd)}) for a long. Not doing anything.`
+        );
+        return;
+      }
+      const gap = ltpBn.minus(avgBn);
+      const rawTp = avgBn.plus(gap.times(value).div(100));
+      const tp = quantizePriceByPrecision(rawTp.toNumber(), this.pricePrecision, "half");
+      this.tpPbPercent = value;
+      this.tpPbFixedPrice = tp;
+      const fd = this.pricePrecision;
+      const slipPx = tpPbAdverseSlippageExitPrice("long", tp, this.pricePrecision);
+      const approxPnlTp = calc_UnrealizedPnl(this.currActivePosition, tp);
+      const approxPnlSlip = calc_UnrealizedPnl(this.currActivePosition, slipPx);
+      this.queueMsg(
+        `TP_PB set for ${this.symbol} (long): fixed TP ${formatEnUsNumber(tp, fd)} (${formatEnUsNumber(value, 8)}% of gap ${formatEnUsNumber(gap.toNumber(), fd)} between avg ${formatEnUsNumber(avg, fd)} and LTP ${formatEnUsNumber(ltp, fd)}). Re-run /tp_pb to change.` +
+        `\nApprox. PnL @ TP: ${formatApproxPnlUsdt(approxPnlTp)}` +
+        `\n0.1% slip exit ~${formatEnUsNumber(slipPx, fd)} → approx. PnL: ${formatApproxPnlUsdt(approxPnlSlip)}`
+      );
+      await this.refreshChartAndTrailingLevels();
+      return;
+    }
+
+    if (ltpBn.gte(avgBn)) {
+      const fd = this.pricePrecision;
+      this.queueMsg(
+        `Cannot set /tp_pb: LTP (${formatEnUsNumber(ltp, fd)}) must be below avg (${formatEnUsNumber(avg, fd)}) for a short. Not doing anything.`
+      );
+      return;
+    }
+    const gap = avgBn.minus(ltpBn);
+    const rawTp = avgBn.minus(gap.times(value).div(100));
+    const tp = quantizePriceByPrecision(rawTp.toNumber(), this.pricePrecision, "half");
+    this.tpPbPercent = value;
+    this.tpPbFixedPrice = tp;
+    const fd = this.pricePrecision;
+    const slipPx = tpPbAdverseSlippageExitPrice("short", tp, this.pricePrecision);
+    const approxPnlTp = calc_UnrealizedPnl(this.currActivePosition, tp);
+    const approxPnlSlip = calc_UnrealizedPnl(this.currActivePosition, slipPx);
+    this.queueMsg(
+      `TP_PB set for ${this.symbol} (short): fixed TP ${formatEnUsNumber(tp, fd)} (${formatEnUsNumber(value, 8)}% of gap ${formatEnUsNumber(gap.toNumber(), fd)} between avg ${formatEnUsNumber(avg, fd)} and LTP ${formatEnUsNumber(ltp, fd)}). Re-run /tp_pb to change.` +
+      `\nApprox. PnL @ TP: ${formatApproxPnlUsdt(approxPnlTp)}` +
+      `\n0.1% slip exit ~${formatEnUsNumber(slipPx, fd)} → approx. PnL: ${formatApproxPnlUsdt(approxPnlSlip)}`
+    );
+    await this.refreshChartAndTrailingLevels();
   }
 
   async fetchClosedPositionSnapshot(positionId: number, maxRetries = 5): Promise<IPosition | undefined> {
@@ -383,9 +493,8 @@ class CombBotInstance {
       this.resolveWsPrice = undefined;
       this.justManuallyClosedBy = undefined;
       this.temporaryTrailMultiplier = undefined;
-      this.tpPullbackPercent = 0;
-      this.highestPriceSinceEntry = undefined;
-      this.lowestPriceSinceEntry = undefined;
+      this.tpPbPercent = 0;
+      this.tpPbFixedPrice = undefined;
 
       if (!_options?.suppressStateChange) {
         this.stateBus.emit(EEventBusEventType.StateChange);
