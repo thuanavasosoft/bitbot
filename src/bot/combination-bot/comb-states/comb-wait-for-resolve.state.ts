@@ -4,6 +4,7 @@ import BigNumber from "bignumber.js";
 import { withRetries, isTransientError } from "../comb-retry";
 import type CombBotInstance from "../comb-bot-instance";
 import { TickRoundMode } from "@/bot/trail-multiplier-optimization-bot/tmob-states/tmob-wait-for-resolve.state";
+import { EEventBusEventType } from "@/utils/event-bus.util";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -20,7 +21,7 @@ class CombWaitForResolveState {
   private liquidationAlertAlreadySent = false;
   private liquidationCheckIntervalId: ReturnType<typeof setInterval> | null = null;
   private lastPrice = 0;
-  private tpPullbackCloseInProgress = false;
+  private tpPbCloseInProgress = false;
   private static readonly LIQUIDATION_CHECK_INTERVAL_MS = 5_000;
 
   constructor(private bot: CombBotInstance) { }
@@ -33,8 +34,12 @@ class CombWaitForResolveState {
   async onEnter() {
     if (!this.bot.currActivePosition) {
       const msg = `[COMB] ${this.bot.symbol} currActivePosition is not defined but entering wait for resolve state`;
-      console.log(msg);
-      throw new Error(msg);
+      console.error(msg);
+      const reason =
+        "no_active_position: entered wait-for-resolve without open position (internal state ordering error)";
+      this.bot.stopInstance(reason);
+      this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+      return;
     }
 
     const msg = `🔁 Waiting for resolve signal - monitoring price for exit...`;
@@ -129,46 +134,38 @@ class CombWaitForResolveState {
       let shouldExit = false;
       let exitReason = "";
 
-      // Take profit on pullback: close when price pulls back X% from highest (long) or lowest (short). Runs without SR.
-      if (!shouldExit && this.bot.tpPullbackPercent > 0 && !this.bot.justManuallyClosedBy) {
-        const entryPrice = this.bot.entryWsPrice?.price ?? position.avgPrice;
+      // TP_PB v2: fixed TP from avg–LTP gap at /tp_pb time; no trailing. Runs without SR.
+      if (!shouldExit && this.bot.tpPbPercent > 0 && this.bot.tpPbFixedPrice != null && !this.bot.justManuallyClosedBy) {
+        const tpBn = new BigNumber(this.bot.tpPbFixedPrice);
         if (position.side === "long") {
-          const prev = this.bot.highestPriceSinceEntry;
-          this.bot.highestPriceSinceEntry = prev != null ? Math.max(prev, price) : Math.max(entryPrice, price);
-          const threshold = this.bot.highestPriceSinceEntry * (1 - this.bot.tpPullbackPercent / 100);
-          if (priceBn.lte(threshold)) {
+          if (priceBn.lte(tpBn)) {
             shouldExit = true;
             exitReason = "tp_pullback";
-            this.bot.justManuallyClosedBy = "tp_pb"; // Set immediately to prevent concurrent price updates from re-triggering
+            this.bot.justManuallyClosedBy = "tp_pb";
             console.log(
-              `[COMB] waitForResolve TP_PB triggered (long) symbol=${this.bot.symbol} price=${price} highest=${this.bot.highestPriceSinceEntry} threshold=${threshold}`
+              `[COMB] waitForResolve TP_PB triggered (long) symbol=${this.bot.symbol} price=${price} fixedTp=${this.bot.tpPbFixedPrice}`
             );
             this.bot.queueMsg(
-              `📉 TP pullback (long) triggered\nPrice: ${price}\nHighest: ${this.bot.highestPriceSinceEntry}\nPullback: ${this.bot.tpPullbackPercent}%`
+              `📉 TP_PB (fixed) triggered (long)\nPrice: ${price}\nFixed TP: ${this.bot.tpPbFixedPrice}`
             );
           }
-        } else {
-          const prev = this.bot.lowestPriceSinceEntry;
-          this.bot.lowestPriceSinceEntry = prev != null ? Math.min(prev, price) : Math.min(entryPrice, price);
-          const threshold = this.bot.lowestPriceSinceEntry * (1 + this.bot.tpPullbackPercent / 100);
-          if (priceBn.gte(threshold)) {
-            shouldExit = true;
-            exitReason = "tp_pullback";
-            this.bot.justManuallyClosedBy = "tp_pb"; // Set immediately to prevent concurrent price updates from re-triggering
-            console.log(
-              `[COMB] waitForResolve TP_PB triggered (short) symbol=${this.bot.symbol} price=${price} lowest=${this.bot.lowestPriceSinceEntry} threshold=${threshold}`
-            );
-            this.bot.queueMsg(
-              `📈 TP pullback (short) triggered\nPrice: ${price}\nLowest: ${this.bot.lowestPriceSinceEntry}\nPullback: ${this.bot.tpPullbackPercent}%`
-            );
-          }
+        } else if (priceBn.gte(tpBn)) {
+          shouldExit = true;
+          exitReason = "tp_pullback";
+          this.bot.justManuallyClosedBy = "tp_pb";
+          console.log(
+            `[COMB] waitForResolve TP_PB triggered (short) symbol=${this.bot.symbol} price=${price} fixedTp=${this.bot.tpPbFixedPrice}`
+          );
+          this.bot.queueMsg(
+            `📈 TP_PB (fixed) triggered (short)\nPrice: ${price}\nFixed TP: ${this.bot.tpPbFixedPrice}`
+          );
         }
       }
 
       if (!this.bot.currentSupport || !this.bot.currentResistance) {
         if (shouldExit) {
           if (exitReason === "tp_pullback") {
-            await this._handleTpPullbackClose();
+            await this._handleTpPbClose();
           } else {
             this._clearPriceListener();
             await this._closeCurrPosition(exitReason);
@@ -179,7 +176,7 @@ class CombWaitForResolveState {
 
       if (this.bot.lastEntryTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastEntryTime) {
         if (shouldExit && exitReason === "tp_pullback") {
-          await this._handleTpPullbackClose();
+          await this._handleTpPbClose();
         } else if (shouldExit) {
           this._clearPriceListener();
           await this._closeCurrPosition(exitReason);
@@ -242,7 +239,7 @@ class CombWaitForResolveState {
 
       if (shouldExit) {
         if (exitReason === "tp_pullback") {
-          await this._handleTpPullbackClose();
+          await this._handleTpPbClose();
           // Do not clear price listener - watchers stay running so trailing stop can trigger and reset state
         } else {
           this._clearPriceListener();
@@ -344,6 +341,7 @@ class CombWaitForResolveState {
       return;
     }
     this.liquidationCheckInProgress = true;
+    this.bot.isClosingPosition = true;
     console.log(
       `[COMB LIQ CHECK] _runLiquidationCheck started symbol=${this.bot.symbol} positionId=${this.bot.currActivePosition.id} lastPrice=${this.lastPrice}`
     );
@@ -358,6 +356,7 @@ class CombWaitForResolveState {
       }
     } finally {
       this.liquidationCheckInProgress = false;
+      this.bot.isClosingPosition = false;
     }
   }
 
@@ -729,26 +728,45 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
   }
 
   private async _closeCurrPosition(reason: string = "support_resistance") {
+    if (this.bot.isClosingPosition) {
+      console.log(`[COMB] _closeCurrPosition skipped: lock held for ${this.bot.symbol} reason=${reason}`);
+      this.bot.queueMsg(`⚠️ [${this.bot.symbol}] Close order blocked (${reason}): another close is already in progress — lock is held.`);
+      return;
+    }
+    this.bot.isClosingPosition = true;
     const triggerTs = Date.now();
     const activePosition = this.bot.currActivePosition;
-    const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-
-    const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
-    await this.bot.finalizeClosedPosition(closedPosition, {
-      activePosition,
-      triggerTimestamp: triggerTs,
-      fillTimestamp,
-      isLiquidation: reason === "liquidation_exit",
-      exitReason: reason === "atr_trailing" ? "atr_trailing" : "signal_change",
-    });
+    try {
+      const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
+      const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
+      await this.bot.finalizeClosedPosition(closedPosition, {
+        activePosition,
+        triggerTimestamp: triggerTs,
+        fillTimestamp,
+        isLiquidation: reason === "liquidation_exit",
+        exitReason: reason === "atr_trailing" ? "atr_trailing" : "signal_change",
+      });
+    } finally {
+      this.bot.isClosingPosition = false;
+    }
   }
 
-  /** Close via TP pullback - same pattern as /close_pos: record PnL, preserve state, watchers stay running. */
-  private async _handleTpPullbackClose(): Promise<void> {
+  /** Close via TP_PB when fixed TP level is hit — same pattern as /close_pos: record PnL, preserve state, watchers stay running. */
+  private async _handleTpPbClose(): Promise<void> {
     const activePosition = this.bot.currActivePosition;
     if (!activePosition) return;
-    if (this.tpPullbackCloseInProgress) return; // Guard: prevent concurrent price updates from spamming
-    this.tpPullbackCloseInProgress = true;
+    if (this.tpPbCloseInProgress) return;
+    if (this.bot.isClosingPosition) {
+      console.log(`[COMB] _handleTpPbClose skipped: lock held for ${this.bot.symbol}`);
+      this.bot.queueMsg(`⚠️ [${this.bot.symbol}] TP_PB close blocked: another close is already in progress — lock is held.`);
+      this.bot.justManuallyClosedBy = undefined;
+      return;
+    }
+    if (!this.bot.justManuallyClosedBy) {
+      this.bot.justManuallyClosedBy = "tp_pb";
+    }
+    this.tpPbCloseInProgress = true;
+    this.bot.isClosingPosition = true;
     try {
       const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
       const netPnl = await this.bot.tmobUtils.handlePnL(
@@ -782,21 +800,23 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
         tradePnL: closedPosition.realizedPnl,
         exitReason: "tp_pullback",
       });
-      this.bot.queueMsg(`✅ TP pullback close completed for ${this.bot.symbol}. State unchanged. Watchers continue.`);
+      this.bot.queueMsg(`✅ TP_PB close completed for ${this.bot.symbol}. State unchanged. Watchers continue.`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error("[COMB] TP pullback close failed:", error);
+      console.error("[COMB] TP_PB close failed:", error);
       this.bot.justManuallyClosedBy = undefined; // Reset so user can retry
-      this.bot.queueMsg(`❌ TP pullback close failed for ${this.bot.symbol}: ${msg}`);
+      this.bot.queueMsg(`❌ TP_PB close failed for ${this.bot.symbol}: ${msg}`);
     } finally {
-      this.tpPullbackCloseInProgress = false;
+      this.tpPbCloseInProgress = false;
+      this.bot.isClosingPosition = false;
     }
   }
 
   async onExit() {
     console.log(`[COMB] CombWaitForResolveState onExit symbol=${this.bot.symbol}`);
     this._stopAllWatchers();
-    this.tpPullbackCloseInProgress = false;
+    this.tpPbCloseInProgress = false;
+    this.bot.isClosingPosition = false;
   }
 
   _quantizeToTick(price: number, mode: TickRoundMode, withLogs?: boolean): number {

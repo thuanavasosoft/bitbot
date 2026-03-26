@@ -61,7 +61,7 @@ Current trail multiplier: ${this.bot.currTrailMultiplier}
 Last optimized: ${this.bot.lastOptimizationAtMs > 0 ? toIso(this.bot.lastOptimizationAtMs + 1000) : "N/A"}
 
 === DETAILS ===
-${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP pullback"} at (${(this.bot.lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(this.bot.lastNetPnl ?? 0).toFixed(2)} USDT)]` : ""}
+${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(this.bot.lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(this.bot.lastNetPnl ?? 0).toFixed(2)} USDT)]` : ""}
 
 === PnL ===
 Run time: ${runDurationDisplay}

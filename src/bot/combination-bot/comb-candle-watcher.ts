@@ -59,25 +59,9 @@ class CombCandleWatcher {
         trailingStopBuffered = trailingTargets.bufferedLevel;
       }
 
-      let tpPullbackLevel: number | null = null;
-      if (this.bot.tpPullbackPercent > 0 && this.bot.currActivePosition) {
-        const pos = this.bot.currActivePosition;
-        const entryPrice = this.bot.entryWsPrice?.price ?? pos.avgPrice;
-        const entryTime = this.bot.lastEntryTime || 0;
-        const candlesSinceEntry = currCandles.filter((c) => c.timestamp >= entryTime);
-        if (pos.side === "long") {
-          const highest =
-            this.bot.highestPriceSinceEntry ??
-            (candlesSinceEntry.length > 0 ? Math.max(...candlesSinceEntry.map((c) => c.highPrice)) : entryPrice) ??
-            entryPrice;
-          tpPullbackLevel = highest * (1 - this.bot.tpPullbackPercent / 100);
-        } else {
-          const lowest =
-            this.bot.lowestPriceSinceEntry ??
-            (candlesSinceEntry.length > 0 ? Math.min(...candlesSinceEntry.map((c) => c.lowPrice)) : entryPrice) ??
-            entryPrice;
-          tpPullbackLevel = lowest * (1 + this.bot.tpPullbackPercent / 100);
-        }
+      let tpPbLevel: number | null = null;
+      if (this.bot.tpPbPercent > 0 && this.bot.tpPbFixedPrice != null && this.bot.currActivePosition) {
+        tpPbLevel = this.bot.tpPbFixedPrice;
       }
 
       if (rawResistance !== null) {
@@ -113,7 +97,7 @@ class CombCandleWatcher {
             this.bot.shortTrigger ?? undefined,
             trailingStopRaw ?? undefined,
             trailingStopBuffered ?? undefined,
-            tpPullbackLevel ?? undefined,
+            tpPbLevel ?? undefined,
           ),
         {
           label: "[CombCandleWatcher] refreshChart generateImage",
@@ -131,8 +115,8 @@ class CombCandleWatcher {
         trailingStopRaw !== null || trailingStopBuffered !== null
           ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
           : "";
-      const tpPullbackMsg =
-        tpPullbackLevel !== null ? `\nTP Pullback (${this.bot.tpPullbackPercent}%): ${tpPullbackLevel}` : "";
+      const tpPbMsg =
+        tpPbLevel !== null ? `\nTP_PB fixed (${this.bot.tpPbPercent}% of gap): ${tpPbLevel}` : "";
       const paramsMsg =
         `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
         `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
@@ -147,7 +131,7 @@ class CombCandleWatcher {
           })()
           : "\nLast optimized: N/A";
       const lastNetPnl = this.bot.lastNetPnl;
-      const closedIndicator = this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP pullback"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+      const closedIndicator = this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
 
       const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(4)}%` : "N/A";
 
@@ -159,7 +143,7 @@ class CombCandleWatcher {
         `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
         `ROC Val: ${rocVal}\n` +
         `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
-        `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPullbackMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
+        `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
       );
       this.bot.lastSRUpdateTime = Date.now();
     } catch (err) {
@@ -213,25 +197,9 @@ class CombCandleWatcher {
             trailingStopBuffered = trailingTargets.bufferedLevel;
           }
 
-          let tpPullbackLevel: number | null = null;
-          if (this.bot.tpPullbackPercent > 0 && this.bot.currActivePosition) {
-            const pos = this.bot.currActivePosition;
-            const entryPrice = this.bot.entryWsPrice?.price ?? pos.avgPrice;
-            const entryTime = this.bot.lastEntryTime || 0;
-            const candlesSinceEntry = currCandles.filter((c) => c.timestamp >= entryTime);
-            if (pos.side === "long") {
-              const highest =
-                this.bot.highestPriceSinceEntry ??
-                (candlesSinceEntry.length > 0 ? Math.max(...candlesSinceEntry.map((c) => c.highPrice)) : entryPrice) ??
-                entryPrice;
-              tpPullbackLevel = highest * (1 - this.bot.tpPullbackPercent / 100);
-            } else {
-              const lowest =
-                this.bot.lowestPriceSinceEntry ??
-                (candlesSinceEntry.length > 0 ? Math.min(...candlesSinceEntry.map((c) => c.lowPrice)) : entryPrice) ??
-                entryPrice;
-              tpPullbackLevel = lowest * (1 + this.bot.tpPullbackPercent / 100);
-            }
+          let tpPbLevel: number | null = null;
+          if (this.bot.tpPbPercent > 0 && this.bot.tpPbFixedPrice != null && this.bot.currActivePosition) {
+            tpPbLevel = this.bot.tpPbFixedPrice;
           }
 
           if (rawResistance !== null) {
@@ -267,7 +235,7 @@ class CombCandleWatcher {
                 this.bot.shortTrigger ?? undefined,
                 trailingStopRaw ?? undefined,
                 trailingStopBuffered ?? undefined,
-                tpPullbackLevel ?? undefined,
+                tpPbLevel ?? undefined,
               ),
             {
               label: "[CombCandleWatcher] generateImageOfCandlesWithSupportResistance",
@@ -285,8 +253,8 @@ class CombCandleWatcher {
             trailingStopRaw !== null || trailingStopBuffered !== null
               ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
               : "";
-          const tpPullbackMsg =
-            tpPullbackLevel !== null ? `\nTP Pullback (${this.bot.tpPullbackPercent}%): ${tpPullbackLevel}` : "";
+          const tpPbMsg =
+            tpPbLevel !== null ? `\nTP_PB fixed (${this.bot.tpPbPercent}% of gap): ${tpPbLevel}` : "";
           const optimizationAgeMsg =
             this.bot.lastOptimizationAtMs > 0
               ? (() => {
@@ -302,7 +270,7 @@ class CombCandleWatcher {
             `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
             `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
           const lastNetPnl = this.bot.lastNetPnl;
-          const closedIndicator = this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP pullback"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+          const closedIndicator = this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
           const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(2)}%` : "N/A";
 
           const currLtpPrice = await ExchangeService.getLTPPrice(this.bot.symbol);
@@ -313,7 +281,7 @@ class CombCandleWatcher {
             `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
             `ROC Val: ${rocVal}\n` +
             `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
-            `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPullbackMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
+            `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
           );
 
           this.bot.lastSRUpdateTime = Date.now();

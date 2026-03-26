@@ -6,7 +6,7 @@ import { randomUUID } from "crypto";
 import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
-import CombUtils from "./comb-utils";
+import CombUtils, { getLtpOrMarkPrice, quantizePriceByPrecision } from "./comb-utils";
 import CombOrderExecutor from "./comb-order-executor";
 import CombStartingState from "./comb-states/comb-starting.state";
 import CombWaitForSignalState from "./comb-states/comb-wait-for-signal.state";
@@ -16,6 +16,31 @@ import CombCandleWatcher from "./comb-candle-watcher";
 import CombOptimizationLoop from "./comb-optimization-loop";
 import CombTelegramHandler from "./comb-telegram-handler";
 import type { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
+import { calc_UnrealizedPnl } from "@/utils/maths.util";
+
+/** en-US grouping for Telegram (e.g. 6,000.5); maxFractionDigits caps decimal places. */
+function formatEnUsNumber(n: number, maxFractionDigits: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: maxFractionDigits,
+  });
+}
+
+function formatApproxPnlUsdt(pnl: number): string {
+  const icon = pnl >= 0 ? "🟩" : "🟥";
+  return `${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+}
+
+/** Adverse market exit: long sells ~0.1% below TP; short buys ~0.1% above TP. */
+const TP_PB_EXIT_SLIPPAGE_FRAC = 0.001;
+
+function tpPbAdverseSlippageExitPrice(side: TPositionSide, tp: number, pricePrecision: number): number {
+  const raw =
+    side === "long"
+      ? tp * (1 - TP_PB_EXIT_SLIPPAGE_FRAC)
+      : tp * (1 + TP_PB_EXIT_SLIPPAGE_FRAC);
+  return quantizePriceByPrecision(raw, pricePrecision, "half");
+}
 
 /** Human-readable labels for finalizeClosedPosition exit reasons (general channel / logs). */
 const EXIT_REASON_DISPLAY = new Map<string, string>([
@@ -23,7 +48,7 @@ const EXIT_REASON_DISPLAY = new Map<string, string>([
   ["signal_change", "signal/close"],
   ["liquidation_exit", "liquidation"],
   ["end", "end"],
-  ["tp_pullback", "TP pullback (state reset)"],
+  ["tp_pullback", "TP_PB (state reset)"],
   ["close_command", "close command"],
 ]);
 
@@ -74,12 +99,13 @@ class CombBotInstance {
   trailingStopMultiplier: number = 0;
   /** Temporary override for trailing stop multiplier. Cleared when position is closed. */
   temporaryTrailMultiplier?: number;
-  /** Take profit on pullback: close when price pulls back X% from highest (long) or lowest (short). 0 = disabled. */
-  tpPullbackPercent: number = 0;
-  /** Highest price since entry (for long). Used by TP_PB. */
-  highestPriceSinceEntry?: number;
-  /** Lowest price since entry (for short). Used by TP_PB. */
-  lowestPriceSinceEntry?: number;
+  /**
+   * TP_PB v2: percent of the gap between avg price and LTP at command time. 0 = disabled.
+   * Fixed take-profit price is stored in tpPbFixedPrice until disabled or position finalized.
+   */
+  tpPbPercent: number = 0;
+  /** Fixed TP price set when /tp_pb runs (does not trail with LTP). */
+  tpPbFixedPrice?: number;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -96,6 +122,30 @@ class CombBotInstance {
 
   /** Set when position closed via /close_pos or TP_PB; reset after finalizeClosedPosition cleanup. */
   justManuallyClosedBy?: JustManuallyClosedBy;
+
+  /**
+   * Mutex for the close-order flow. Set to true before any path calls triggerCloseSignal,
+   * released in its finally block. Any other path that wants to close checks this first and
+   * bails out immediately if locked — preventing two market close orders from hitting the
+   * exchange simultaneously (which would open an unintended opposite position).
+   * Reset to false on new position open and on waitForResolveState.onExit().
+   */
+  isClosingPosition: boolean = false;
+
+  /**
+   * Guards finalizeClosedPosition against concurrent calls from racing close paths
+   * (e.g. optimization loop fire-and-forget racing with trailing stop / liquidation).
+   * Reset to false whenever a new position is assigned to currActivePosition.
+   */
+  isFinalizingPosition: boolean = false;
+
+  /**
+   * Set to true once PnL has been recorded for the current position.
+   * Guards handlePnL against being called more than once per position (last-line defence
+   * against sequential races where isFinalizingPosition has already been cleared).
+   * Reset to false whenever a new position is assigned to currActivePosition.
+   */
+  isPnlRecorded: boolean = false;
 
   isStopped: boolean = false;
   stopReason?: string;
@@ -179,6 +229,90 @@ class CombBotInstance {
     await this.tmobCandleWatcher.refreshChart();
   }
 
+  /**
+   * TP_PB v2: set a fixed TP at avg + gap×pct (long) or avg − gap×pct (short) from current LTP vs avg.
+   * If LTP is not favorable vs avg (long needs LTP above avg; short needs LTP below avg), only a message is sent — no close, no TP level. percent 0 disables.
+   */
+  async applyTpPbFromTelegram(value: number): Promise<void> {
+    if (value === 0) {
+      this.tpPbPercent = 0;
+      this.tpPbFixedPrice = undefined;
+      await this.refreshChartAndTrailingLevels();
+      this.queueMsg(`TP_PB disabled for ${this.symbol}.`);
+      return;
+    }
+    if (!Number.isFinite(value) || value < 0) {
+      this.queueMsg("TP_PB: value must be a non-negative number.");
+      return;
+    }
+    if (!this.currActivePosition) {
+      this.queueMsg(`No open position for ${this.symbol}. /tp_pb ignored.`);
+      return;
+    }
+    if (this.currentState !== this.waitForResolveState) {
+      this.queueMsg(`TP_PB requires an open position in resolve state for ${this.symbol}.`);
+      return;
+    }
+    if (this.isClosingPosition) {
+      this.queueMsg(`Cannot set TP_PB for ${this.symbol}: a close is already in progress.`);
+      return;
+    }
+    const ltp = await getLtpOrMarkPrice(this.symbol);
+    const avg = this.currActivePosition.avgPrice;
+    const side = this.currActivePosition.side;
+    const ltpBn = new BigNumber(ltp);
+    const avgBn = new BigNumber(avg);
+
+    if (side === "long") {
+      if (ltpBn.lte(avgBn)) {
+        const fd = this.pricePrecision;
+        this.queueMsg(
+          `Cannot set /tp_pb: LTP (${formatEnUsNumber(ltp, fd)}) must be above avg (${formatEnUsNumber(avg, fd)}) for a long. Not doing anything.`
+        );
+        return;
+      }
+      const gap = ltpBn.minus(avgBn);
+      const rawTp = avgBn.plus(gap.times(value).div(100));
+      const tp = quantizePriceByPrecision(rawTp.toNumber(), this.pricePrecision, "half");
+      this.tpPbPercent = value;
+      this.tpPbFixedPrice = tp;
+      const fd = this.pricePrecision;
+      const slipPx = tpPbAdverseSlippageExitPrice("long", tp, this.pricePrecision);
+      const approxPnlTp = calc_UnrealizedPnl(this.currActivePosition, tp);
+      const approxPnlSlip = calc_UnrealizedPnl(this.currActivePosition, slipPx);
+      this.queueMsg(
+        `TP_PB set for ${this.symbol} (long): fixed TP ${formatEnUsNumber(tp, fd)} (${formatEnUsNumber(value, 8)}% of gap ${formatEnUsNumber(gap.toNumber(), fd)} between avg ${formatEnUsNumber(avg, fd)} and LTP ${formatEnUsNumber(ltp, fd)}). Re-run /tp_pb to change.` +
+        `\nApprox. PnL @ TP: ${formatApproxPnlUsdt(approxPnlTp)}` +
+        `\n0.1% slip exit ~${formatEnUsNumber(slipPx, fd)} → approx. PnL: ${formatApproxPnlUsdt(approxPnlSlip)}`
+      );
+      await this.refreshChartAndTrailingLevels();
+      return;
+    }
+
+    if (ltpBn.gte(avgBn)) {
+      const fd = this.pricePrecision;
+      this.queueMsg(
+        `Cannot set /tp_pb: LTP (${formatEnUsNumber(ltp, fd)}) must be below avg (${formatEnUsNumber(avg, fd)}) for a short. Not doing anything.`
+      );
+      return;
+    }
+    const gap = avgBn.minus(ltpBn);
+    const rawTp = avgBn.minus(gap.times(value).div(100));
+    const tp = quantizePriceByPrecision(rawTp.toNumber(), this.pricePrecision, "half");
+    this.tpPbPercent = value;
+    this.tpPbFixedPrice = tp;
+    const fd = this.pricePrecision;
+    const slipPx = tpPbAdverseSlippageExitPrice("short", tp, this.pricePrecision);
+    const approxPnlTp = calc_UnrealizedPnl(this.currActivePosition, tp);
+    const approxPnlSlip = calc_UnrealizedPnl(this.currActivePosition, slipPx);
+    this.queueMsg(
+      `TP_PB set for ${this.symbol} (short): fixed TP ${formatEnUsNumber(tp, fd)} (${formatEnUsNumber(value, 8)}% of gap ${formatEnUsNumber(gap.toNumber(), fd)} between avg ${formatEnUsNumber(avg, fd)} and LTP ${formatEnUsNumber(ltp, fd)}). Re-run /tp_pb to change.` +
+      `\nApprox. PnL @ TP: ${formatApproxPnlUsdt(approxPnlTp)}` +
+      `\n0.1% slip exit ~${formatEnUsNumber(slipPx, fd)} → approx. PnL: ${formatApproxPnlUsdt(approxPnlSlip)}`
+    );
+    await this.refreshChartAndTrailingLevels();
+  }
+
   async fetchClosedPositionSnapshot(positionId: number, maxRetries = 5): Promise<IPosition | undefined> {
     return this.orderExecutor.fetchClosedPositionSnapshot(positionId, maxRetries);
   }
@@ -239,117 +373,134 @@ class CombBotInstance {
       suppressStateChange?: boolean;
     }
   ): Promise<void> {
-    const exitReason = _options?.exitReason ?? "signal_change";
-    const exitReasonDisplay = formatExitReasonDisplay(exitReason);
-
-    if (this.justManuallyClosedBy) {
-      console.log(
-        `[COMB] finalizeClosedPosition: position ${closedPosition.id} already recorded (via ${this.justManuallyClosedBy}). Skipping duplicate PnL/slippage/history.`
-      );
-      this.queueMsg(
-        `⏭️ Position ${closedPosition.id} was already closed and PnL recorded (via ${this.justManuallyClosedBy}). Skipping duplicate update, clearing state only.`
-      );
-      this.onGeneralInfoMessage?.(
-        `has cleared its position due to ${exitReasonDisplay}. The instance can enter a new position again.`
-      );
+    if (this.isFinalizingPosition) {
+      const msg = `⚠️ [${this.symbol}] Close skipped (${_options?.exitReason ?? "signal_change"}): another close path is already finalizing this position — narrow time gap between two simultaneous triggers.`;
+      console.log(`[COMB] finalizeClosedPosition skipped: already in progress for ${this.symbol} positionId=${closedPosition.id} exitReason=${_options?.exitReason ?? "signal_change"}`);
+      this.queueMsg(msg);
+      return;
     }
-    const activePosition = _options?.activePosition ?? this.currActivePosition;
-    const positionSide = activePosition?.side ?? closedPosition.side;
-    const entryFill = this.entryWsPrice;
-    const fillTimestamp =
-      _options?.fillTimestamp ??
-      this.resolveWsPrice?.time?.getTime() ??
-      closedPosition.updateTime ??
-      Date.now();
-    this.lastExitTime = fillTimestamp;
-    const resolvedAtMs = Math.max(fillTimestamp, Date.now());
-    this.nextEntryAllowedAtMs = (Math.floor(resolvedAtMs / 60_000) + 1) * 60_000;
-    const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
-    const shouldTrackSlippage = !_options?.isLiquidation;
-    const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
-
-    const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
-
-    let srLevel: number | null = null;
-    if (positionSide === "long") {
-      srLevel = this.currentSupport;
-    } else if (positionSide === "short") {
-      srLevel = this.currentResistance;
+    if (!this.currActivePosition) {
+      const msg = `⚠️ [${this.symbol}] Close skipped (${_options?.exitReason ?? "signal_change"}): position already finalized by another trigger — narrow time gap between two simultaneous closes.`;
+      console.log(`[COMB] finalizeClosedPosition skipped: no active position for ${this.symbol} positionId=${closedPosition.id} exitReason=${_options?.exitReason ?? "signal_change"}`);
+      this.queueMsg(msg);
+      return;
     }
+    this.isFinalizingPosition = true;
 
-    let slippage = 0;
-    const timeDiffMs = fillTimestamp - triggerTimestamp;
+    try {
+      const exitReason = _options?.exitReason ?? "signal_change";
+      const exitReasonDisplay = formatExitReasonDisplay(exitReason);
 
-    if (!this.justManuallyClosedBy && shouldTrackSlippage) {
-      if (srLevel === null) {
-        this.queueMsg(
-          `⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`
+      if (this.justManuallyClosedBy) {
+        console.log(
+          `[COMB] finalizeClosedPosition: position ${closedPosition.id} already recorded (via ${this.justManuallyClosedBy}). Skipping duplicate PnL/slippage/history.`
         );
-      } else {
-        slippage =
-          positionSide === "short"
-            ? new BigNumber(closedPrice).minus(srLevel).toNumber()
-            : new BigNumber(srLevel).minus(closedPrice).toNumber();
+        this.queueMsg(
+          `⏭️ Position ${closedPosition.id} was already closed and PnL recorded (via ${this.justManuallyClosedBy}). Skipping duplicate update, clearing state only.`
+        );
+        this.onGeneralInfoMessage?.(
+          `has cleared its position due to ${exitReasonDisplay}. The instance can enter a new position again.`
+        );
       }
-    }
+      const activePosition = _options?.activePosition ?? this.currActivePosition;
+      const positionSide = activePosition?.side ?? closedPosition.side;
+      const entryFill = this.entryWsPrice;
+      const fillTimestamp =
+        _options?.fillTimestamp ??
+        this.resolveWsPrice?.time?.getTime() ??
+        closedPosition.updateTime ??
+        Date.now();
+      this.lastExitTime = fillTimestamp;
+      const resolvedAtMs = Math.max(fillTimestamp, Date.now());
+      this.nextEntryAllowedAtMs = (Math.floor(resolvedAtMs / 60_000) + 1) * 60_000;
+      const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
+      const shouldTrackSlippage = !_options?.isLiquidation;
+      const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
 
-    const icon = slippage <= 0 ? "🟩" : "🟥";
-    if (!this.justManuallyClosedBy && shouldTrackSlippage) {
-      if (icon === "🟥") {
-        this.slippageAccumulation += Math.abs(slippage);
-      } else {
-        this.slippageAccumulation -= Math.abs(slippage);
+      const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
+
+      let srLevel: number | null = null;
+      if (positionSide === "long") {
+        srLevel = this.currentSupport;
+      } else if (positionSide === "short") {
+        srLevel = this.currentResistance;
       }
-      this.numberOfTrades++;
-    }
 
-    if (!this.justManuallyClosedBy) {
-      await this.tmobUtils.handlePnL(
-        realizedPnl,
-        _options?.isLiquidation ?? false,
-        shouldTrackSlippage ? icon : undefined,
-        shouldTrackSlippage ? slippage : undefined,
-        shouldTrackSlippage ? timeDiffMs : undefined,
-        closedPosition.id
-      );
-      this.notifyInstanceEvent({
-        type: "position_closed",
-        closedPosition,
-        exitReason,
-        realizedPnl,
-        netPnl: this.lastNetPnl ?? realizedPnl,
-        symbol: this.symbol,
-      });
-      console.log(
-        `[COMB] finalizeClosedPosition symbol=${this.symbol} positionId=${closedPosition.id} exitReason=${exitReason} realizedPnl=${realizedPnl.toFixed(4)} totalCalculatedProfit=${this.totalActualCalculatedProfit.toFixed(4)}`
-      );
-      this.pnlHistory.push({
-        timestamp: new Date().toISOString(),
-        timestampMs: Date.now(),
-        side: positionSide as "long" | "short",
-        totalPnL: this.totalActualCalculatedProfit,
-        entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
-        entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
-        entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
-        exitTimestamp: new Date(fillTimestamp).toISOString(),
-        exitTimestampMs: fillTimestamp,
-        exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
-        tradePnL: realizedPnl,
-        exitReason,
-      });
-    }
+      let slippage = 0;
+      const timeDiffMs = fillTimestamp - triggerTimestamp;
 
-    this.currActivePosition = undefined;
-    this.entryWsPrice = undefined;
-    this.resolveWsPrice = undefined;
-    this.justManuallyClosedBy = undefined;
-    this.temporaryTrailMultiplier = undefined;
-    this.tpPullbackPercent = 0;
-    this.highestPriceSinceEntry = undefined;
-    this.lowestPriceSinceEntry = undefined;
+      if (!this.justManuallyClosedBy && shouldTrackSlippage) {
+        if (srLevel === null) {
+          this.queueMsg(
+            `⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`
+          );
+        } else {
+          slippage =
+            positionSide === "short"
+              ? new BigNumber(closedPrice).minus(srLevel).toNumber()
+              : new BigNumber(srLevel).minus(closedPrice).toNumber();
+        }
+      }
 
-    if (!_options?.suppressStateChange) {
-      this.stateBus.emit(EEventBusEventType.StateChange);
+      const icon = slippage <= 0 ? "🟩" : "🟥";
+      if (!this.justManuallyClosedBy && shouldTrackSlippage) {
+        if (icon === "🟥") {
+          this.slippageAccumulation += Math.abs(slippage);
+        } else {
+          this.slippageAccumulation -= Math.abs(slippage);
+        }
+        this.numberOfTrades++;
+      }
+
+      if (!this.justManuallyClosedBy) {
+        await this.tmobUtils.handlePnL(
+          realizedPnl,
+          _options?.isLiquidation ?? false,
+          shouldTrackSlippage ? icon : undefined,
+          shouldTrackSlippage ? slippage : undefined,
+          shouldTrackSlippage ? timeDiffMs : undefined,
+          closedPosition.id
+        );
+        this.notifyInstanceEvent({
+          type: "position_closed",
+          closedPosition,
+          exitReason,
+          realizedPnl,
+          netPnl: this.lastNetPnl ?? realizedPnl,
+          symbol: this.symbol,
+        });
+        console.log(
+          `[COMB] finalizeClosedPosition symbol=${this.symbol} positionId=${closedPosition.id} exitReason=${exitReason} realizedPnl=${realizedPnl.toFixed(4)} totalCalculatedProfit=${this.totalActualCalculatedProfit.toFixed(4)}`
+        );
+        this.pnlHistory.push({
+          timestamp: new Date().toISOString(),
+          timestampMs: Date.now(),
+          side: positionSide as "long" | "short",
+          totalPnL: this.totalActualCalculatedProfit,
+          entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
+          entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
+          entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
+          exitTimestamp: new Date(fillTimestamp).toISOString(),
+          exitTimestampMs: fillTimestamp,
+          exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
+          tradePnL: realizedPnl,
+          exitReason,
+        });
+      }
+
+      this.currActivePosition = undefined;
+      this.entryWsPrice = undefined;
+      this.resolveWsPrice = undefined;
+      this.justManuallyClosedBy = undefined;
+      this.temporaryTrailMultiplier = undefined;
+      this.tpPbPercent = 0;
+      this.tpPbFixedPrice = undefined;
+
+      if (!_options?.suppressStateChange) {
+        this.stateBus.emit(EEventBusEventType.StateChange);
+      }
+    } finally {
+      this.isFinalizingPosition = false;
     }
   }
 }

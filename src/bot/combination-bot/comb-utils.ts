@@ -22,6 +22,31 @@ function toIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
+export type CombTickRoundMode = "up" | "down" | "half";
+
+/** Quantize a price to `pricePrecision` decimal places (exchange price precision, not tick grid). */
+export function quantizePriceByPrecision(price: number, pricePrecision: number, mode: CombTickRoundMode = "half"): number {
+  if (!Number.isFinite(price)) return price;
+  if (!Number.isFinite(pricePrecision) || pricePrecision < 0) return price;
+  const p = new BigNumber(price);
+  const rm =
+    mode === "up"
+      ? BigNumber.ROUND_CEIL
+      : mode === "down"
+        ? BigNumber.ROUND_FLOOR
+        : BigNumber.ROUND_HALF_UP;
+  return p.decimalPlaces(pricePrecision, rm).toNumber();
+}
+
+/** Last traded price when available; falls back to mark price (e.g. when LTP is not implemented). */
+export async function getLtpOrMarkPrice(symbol: string): Promise<number> {
+  try {
+    return await ExchangeService.getLTPPrice(symbol);
+  } catch {
+    return await ExchangeService.getMarkPrice(symbol);
+  }
+}
+
 class CombUtils {
   constructor(private bot: CombBotInstance) { }
 
@@ -191,6 +216,14 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
     timeDiffMs?: number,
     closedPositionId?: number,
   ): Promise<number> {
+    if (this.bot.isPnlRecorded) {
+      const msg = `⚠️ [${this.bot.symbol}] Duplicate PnL recording blocked for position ${closedPositionId ?? "N/A"} — PnL was already recorded by a concurrent close trigger. Only the first close counts.`;
+      console.log(`[COMB] handlePnL skipped: isPnlRecorded=true for ${this.bot.symbol} closedPositionId=${closedPositionId ?? "N/A"}`);
+      this.bot.queueMsg(msg);
+      return this.bot.lastNetPnl ?? 0;
+    }
+    this.bot.isPnlRecorded = true;
+
     const fallbackGrossPnl = new BigNumber(PnL);
     const openFees = await this._getOrderFees(this.bot.symbol, this.bot.lastOpenClientOrderId);
 
