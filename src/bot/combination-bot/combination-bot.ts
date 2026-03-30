@@ -686,7 +686,7 @@ class CombinationBot {
           const lastNetPnl = inst.lastNetPnl;
           const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
           lines.push(
-            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT${closingIndicator}`
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT\n${closingIndicator}\n`
           );
         }
         const instancesWithOpenPosition = this.instances.filter(
