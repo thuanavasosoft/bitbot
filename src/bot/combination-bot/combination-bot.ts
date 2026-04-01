@@ -6,6 +6,7 @@ import { calc_UnrealizedPnl, getRunDuration } from "@/utils/maths.util";
 import { formatFeeAwarePnLLine } from "@/utils/strings.util";
 import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
+import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
 import type { CombInstanceConfig, CombState, CombInstanceEvent } from "./comb-types";
 
 function toIso(ms: number): string {
@@ -215,6 +216,9 @@ class CombinationBot {
         `Trail ATR: ${inst.trailingAtrLength} | Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
       );
       lines.push(
+        `Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(inst.lastOptimizationAtMs, inst.updateIntervalMinutes, Date.now()) / 1000))}`
+      );
+      lines.push(
         `Triggers: Long ${inst.longTrigger != null ? inst.longTrigger : "N/A"} | Short ${inst.shortTrigger != null ? inst.shortTrigger : "N/A"}`
       );
       if (inst.currActivePosition) {
@@ -329,41 +333,56 @@ class CombinationBot {
 
   private getHelpMessage(_options: { scope: "general" | "instance"; symbol?: string }): string {
     const symbolTag = _options.scope === "instance" && _options.symbol ? ` (${_options.symbol})` : "";
-    const lines = [
-      `[COMB] Combination bot – Telegram commands${symbolTag}`,
-      "",
-      "/help – Show this list of commands.",
-      "/chat_id – Show current chat id (Telegram global command).",
-      "",
-      "/full_update – Show a full status report.",
-      "/pnl_graph – Render the PnL progression chart.",
-      "",
-    ];
+    const header = `[COMB] Combination bot – Telegram commands${symbolTag}`;
+    const para = "\n";
 
     if (_options.scope === "general") {
-      lines.push(
-        "/close_pos all|{SYMBOL} – Close position(s) (e.g. /close_pos all or /close_pos BTCUSDT).",
-        "/temp_tm all|{SYMBOL} {value} – Set temporary trail multiplier (e.g. /temp_tm all 20 or /temp_tm BTCUSDT 20). Cleared when position closes.",
-        "/tp_pb all|{SYMBOL} {percent} – Fixed TP at % of avg–LTP gap (e.g. /tp_pb all 50). 0 = disabled.",
-        "/un_pnl – Show current unrealized PnL for all instances (one symbol per line)."
-      );
-      return lines.join("\n");
+      return [
+        header,
+        para,
+        "/help — Show this list of commands.",
+        para,
+        "/chat_id — Show current chat id (Telegram global command).",
+        para,
+        "/full_update — Show a full status report.",
+        para,
+        "/pnl_graph — Render the PnL progression chart.",
+        para,
+        "/close_pos all|{SYMBOL} — Close position(s) (e.g. /close_pos all or /close_pos BTCUSDT).",
+        para,
+        "/temp_tm all|{SYMBOL} {value} — Set temporary trail multiplier (e.g. /temp_tm all 20). Cleared when position closes.",
+        para,
+        "/tp_pb all|{SYMBOL} {percent} — Fixed TP at % of avg–LTP gap (e.g. /tp_pb all 50). 0 = disabled.",
+        para,
+        "/un_pnl — Show current unrealized PnL for all instances (one symbol per line).",
+        para,
+        "/reopt_ls — List all symbols with time until next reoptimization.",
+      ].join("\n");
     }
 
-    lines.push(
-      "",
-      "/close_pos – Close the active position for this bot instance (instance keeps running).",
-      "/temp_tm {value} – Set temporary trail multiplier (e.g. /temp_tm 100). Cleared when position closes.",
-      "/tp_pb {percent} – Fixed TP: avg ± (gap×%) where gap = |LTP−avg| at command time (e.g. /tp_pb 50). 0 = disabled.",
-      ""
-    );
-    lines.push(
+    return [
+      header,
+      para,
+      "/help — Show this list of commands.",
+      para,
+      "/chat_id — Show current chat id (Telegram global command).",
+      para,
+      "/full_update — Show a full status report.",
+      para,
+      "/pnl_graph — Render the PnL progression chart.",
+      para,
+      "/close_pos — Close the active position for this bot instance (instance keeps running).",
+      para,
+      "/temp_tm {value} — Set temporary trail multiplier (e.g. /temp_tm 100). Cleared when position closes.",
+      para,
+      "/tp_pb {percent} — Fixed TP: avg ± (gap×%) where gap = |LTP−avg| at command time (e.g. /tp_pb 50). 0 = disabled.",
+      para,
       "Notes:",
-      "- This is an instance channel. Commands act only on this symbol.",
-      "- /close_pos closes the position; the instance continues running and waits for the next signal."
-    );
-
-    return lines.join("\n");
+      "",
+      "• This is an instance channel. Commands act only on this symbol.",
+      para,
+      "• /close_pos closes the position; the instance continues running and waits for the next signal.",
+    ].join("\n");
   }
 
   private registerTelegramHandlers(): void {
@@ -669,7 +688,7 @@ class CombinationBot {
         for (const inst of this.instances) {
           const pos = inst.currActivePosition;
           if (!pos) {
-            lines.push(`${inst.symbol} - No open position`);
+            lines.push(`${inst.symbol} - No open position\n`);
             continue;
           }
           const ltpPrice = await ExchangeService.getLTPPrice(inst.symbol);
@@ -684,9 +703,9 @@ class CombinationBot {
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
           const lastNetPnl = inst.lastNetPnl;
-          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]\n` : "";
           lines.push(
-            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT\n${closingIndicator}\n`
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT\n${closingIndicator}`
           );
         }
         const instancesWithOpenPosition = this.instances.filter(
@@ -709,6 +728,27 @@ class CombinationBot {
       } catch (err) {
         TelegramService.queueMsgPriority(`Failed to get unrealized PnL: ${err instanceof Error ? err.message : String(err)}`, this.generalChatId);
       }
+    });
+
+    TelegramService.appendTgCmdHandler("reopt_ls", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /reopt_ls in the general channel.", String(chatId));
+        return;
+      }
+      const now = Date.now();
+      const lines: string[] = ["[COMB] Reoptimization due in:", ""];
+      for (const inst of this.instances) {
+        const remainingMs = getCombNextOptimizationRemainingMs(
+          inst.lastOptimizationAtMs,
+          inst.updateIntervalMinutes,
+          now
+        );
+        const nextStr = formatDurationAsHoursMinutes(Math.floor(remainingMs / 1000));
+        lines.push(`${inst.symbol} – ${nextStr}`);
+      }
+      TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
     });
   }
 

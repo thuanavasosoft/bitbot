@@ -18,6 +18,53 @@ export const COMB_DEFAULT_SIGNAL_PARAMS: Omit<CombSignalParams, "N"> = {
   vol_mult: 1.3,
 };
 
+const MS_PER_MINUTE_COMB_OPT = 60_000;
+
+/**
+ * Remaining ms until the optimization loop's next wake (matches comb-optimization-loop runLoop:
+ * nextDueMs + 1000 relative to now).
+ */
+export function getCombNextOptimizationRemainingMs(
+  lastOptimizationAtMs: number,
+  updateIntervalMinutes: number,
+  nowMs: number
+): number {
+  const nextDueMs =
+    lastOptimizationAtMs > 0
+      ? (Math.floor(lastOptimizationAtMs / MS_PER_MINUTE_COMB_OPT) + updateIntervalMinutes) * MS_PER_MINUTE_COMB_OPT
+      : Math.ceil(nowMs / MS_PER_MINUTE_COMB_OPT) * MS_PER_MINUTE_COMB_OPT;
+  const nextFireMs = nextDueMs + 1000;
+  return Math.max(0, nextFireMs - nowMs);
+}
+
+/** E.g. `11h59m` — same style as "Last optimized" lines. */
+export function formatDurationAsHoursMinutes(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  return `${hours}h${minutes}m`;
+}
+
+/**
+ * Candle/info line: last optimization age plus countdown to next reoptimization (e.g. 11h59m).
+ * `nowForAgeMs` should match the chart message timestamp (typically minute-floored `Date` used elsewhere in the watcher).
+ */
+export function formatCombOptimizationAgeMessage(bot: CombBotInstance, nowForAgeMs: number): string {
+  const remainingMs = getCombNextOptimizationRemainingMs(
+    bot.lastOptimizationAtMs,
+    bot.updateIntervalMinutes,
+    Date.now()
+  );
+  const nextIn = formatDurationAsHoursMinutes(Math.floor(remainingMs / 1000));
+  if (bot.lastOptimizationAtMs > 0) {
+    const elapsedMs = nowForAgeMs - bot.lastOptimizationAtMs;
+    const totalSeconds = Math.floor(elapsedMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    return `\nLast optimized: ${hours}h${minutes}m\nNext reoptimization in: ${nextIn}`;
+  }
+  return `\nLast optimized: N/A\nNext reoptimization in: ${nextIn}`;
+}
+
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
 }
