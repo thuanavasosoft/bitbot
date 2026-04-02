@@ -45,28 +45,37 @@ class WsServerService {
         );
       }
     });
-    this.wss.on("connection", (ws) => {
+    this.wss.on("connection", (ws, req) => {
+      const remote = req.socket.remoteAddress ?? "unknown";
+      console.log(`[WsServer] client connected — ${remote} (total: ${this.wss?.clients.size})`);
+
       ws.on("message", (raw) => {
         const str = rawDataToString(raw);
-        for (const handler of this.messageHandlers.values()) {
-          handler(str, ws);
+        for (const [id, handler] of this.messageHandlers) {
+          try {
+            handler(str, ws);
+          } catch (err) {
+            console.error(`[WsServer] handler ${id} threw:`, err);
+          }
         }
+      });
+
+      ws.on("close", (code, reason) => {
+        console.log(
+          `[WsServer] client disconnected — ${remote} code=${code} reason=${reason.toString() || "(none)"} (remaining: ${this.wss?.clients.size})`,
+        );
       });
     });
     this.wss.on("error", (err: Error) => {
-      console.error("WebSocket server error:", err);
+      console.error("[WsServer] server error:", err);
     });
-  }
-
-  private static ensureStarted(): void {
-    this.start();
   }
 
   /**
    * Sends the same payload to every connected client whose socket is open.
    */
   static broadcastMsg(body: string | Buffer | object): void {
-    this.ensureStarted();
+    this.start();
     const wss = this.wss;
     if (!wss) {
       return;
@@ -89,7 +98,7 @@ class WsServerService {
    * Returns an id for `removeMsgHandler`.
    */
   static addMsgHandler(handler: WsReceiveHandler): WsMessageHandlerId {
-    this.ensureStarted();
+    this.start();
     const id = this.nextHandlerId++;
     this.messageHandlers.set(id, handler);
     return id;
@@ -106,6 +115,9 @@ class WsServerService {
     if (!this.wss) {
       return;
     }
+    for (const client of this.wss.clients) {
+      client.terminate();
+    }
     await new Promise<void>((resolve, reject) => {
       this.wss!.close((err) => {
         if (err) {
@@ -116,6 +128,7 @@ class WsServerService {
       });
     });
     this.wss = null;
+    this.nextHandlerId = 1;
     this.messageHandlers.clear();
   }
 }
