@@ -7,10 +7,16 @@ import BreakoutBot from '@/bot/breakout-bot/breakout-bot';
 import AutoAdjustBot from '@/bot/auto-adjust-bot/auto-adjust-bot';
 import TrailMultiplierOptimizationBot from '@/bot/trail-multiplier-optimization-bot/trail-multiplier-optimization-bot';
 import CombinationBot from '@/bot/combination-bot/combination-bot';
+import WsServerService from '@/services/ws-server.service';
+import MsgBrokerService from '@/services/msg-broker.service';
 
 async function runProgram() {
   try {
     dotenv.config();
+
+    // Copy trading functionality
+    await MsgBrokerService.connect();
+    WsServerService.start();
 
     await TelegramService.initialize();
 
