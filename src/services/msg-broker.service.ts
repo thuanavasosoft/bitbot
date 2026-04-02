@@ -14,6 +14,8 @@ class MsgBrokerService {
   private static amqpUrl: string | undefined;
   /** After the first failed connection attempt with `AMQP_URL` set, no further connects are tried. */
   private static initialConnectAborted = false;
+  /** Log "not configured" only once per process. */
+  private static loggedMissingAmqpUrl = false;
 
   /** Exchanges already asserted on the current channel — avoids a round-trip on every publish. */
   private static assertedExchanges = new Set<string>();
@@ -26,6 +28,12 @@ class MsgBrokerService {
     const url = process.env.AMQP_URL?.trim();
     this.amqpUrl = url;
     if (!url) {
+      if (!this.loggedMissingAmqpUrl) {
+        this.loggedMissingAmqpUrl = true;
+        console.info(
+          "[Message broker]: not running — AMQP_URL is not set (optional; fanout publish is disabled).",
+        );
+      }
       return;
     }
     if (this.initialConnectAborted) {
@@ -47,8 +55,12 @@ class MsgBrokerService {
   private static async tryInitialConnect(): Promise<void> {
     try {
       await this.doConnect();
+      console.info("[Message broker]: running — connected to RabbitMQ.");
     } catch (err) {
-      console.warn("AMQP optional: initial connection failed, broker disabled:", err);
+      console.warn(
+        "[Message broker]: not running — initial connection failed (optional; fanout publish is disabled). Running without RabbitMQ connection.",
+        err,
+      );
       this.initialConnectAborted = true;
     }
   }
@@ -92,7 +104,7 @@ class MsgBrokerService {
       try {
         console.info(`AMQP reconnecting after ${delay}ms...`);
         await this.doConnect();
-        console.info("AMQP reconnected successfully");
+        console.info("[Message broker]: running — reconnected to RabbitMQ.");
         return;
       } catch (err) {
         console.error("AMQP reconnect attempt failed:", err);
