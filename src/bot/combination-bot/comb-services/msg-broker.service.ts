@@ -1,4 +1,6 @@
 import amqp, { type Channel, type ChannelModel, type Options } from "amqplib";
+import CombinationBot from "../combination-bot";
+import TelegramService from "@/services/telegram.service";
 
 export type MsgBrokerPublishFanoutOptions = {
   assertExchange?: Options.AssertExchange;
@@ -8,23 +10,45 @@ export type MsgBrokerPublishFanoutOptions = {
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
 class CombMsgBrokerService {
-  private static connection: ChannelModel | null = null;
-  private static channel: Channel | null = null;
-  private static connectPromise: Promise<void> | null = null;
-  private static amqpUrl: string | undefined;
+  constructor(private bot: CombinationBot) { }
+
+  private connection: ChannelModel | null = null;
+  private channel: Channel | null = null;
+  private connectPromise: Promise<void> | null = null;
+  private amqpUrl: string | undefined;
   /** After the first failed connection attempt with `AMQP_URL` set, no further connects are tried. */
-  private static initialConnectAborted = false;
+  private initialConnectAborted = false;
   /** Log "not configured" only once per process. */
-  private static loggedMissingAmqpUrl = false;
+  private loggedMissingAmqpUrl = false;
 
   /** Exchanges already asserted on the current channel — avoids a round-trip on every publish. */
-  private static assertedExchanges = new Set<string>();
+  private assertedExchanges = new Set<string>();
+
+  /**
+   * Short label for copy-trading status lines (e.g. general Telegram update).
+   */
+  getConnectionStatusText(): string {
+    const url = process.env.AMQP_URL?.trim();
+    if (!url) {
+      return "Not configured";
+    }
+    if (this.channel) {
+      return "Healthy";
+    }
+    if (this.initialConnectAborted) {
+      return "Not connected";
+    }
+    if (this.connectPromise) {
+      return "Connecting...";
+    }
+    return "Reconnecting...";
+  }
 
   /**
    * Opens a connection and channel when `AMQP_URL` is set. The broker is optional: missing URL or a
    * failed first connection disables the service without throwing.
    */
-  static async connect(): Promise<void> {
+  async connect(): Promise<void> {
     const url = process.env.AMQP_URL?.trim();
     this.amqpUrl = url;
     if (!url) {
@@ -33,6 +57,7 @@ class CombMsgBrokerService {
         console.info(
           "[Message broker]: not running — AMQP_URL is not set (optional; fanout publish is disabled).",
         );
+        TelegramService.queueMsg(`[COMB] 🐰 Message broker not running — AMQP_URL is not set (optional; fanout publish is disabled).`, this.bot.generalChatId);
       }
       return;
     }
@@ -52,10 +77,11 @@ class CombMsgBrokerService {
     await this.connectPromise;
   }
 
-  private static async tryInitialConnect(): Promise<void> {
+  private async tryInitialConnect(): Promise<void> {
     try {
       await this.doConnect();
       console.info("[Message broker]: running — connected to RabbitMQ.");
+      TelegramService.queueMsg(`[COMB] 🐰 Message broker running — connected to RabbitMQ.`, this.bot.generalChatId);
     } catch (err) {
       console.warn(
         "[Message broker]: not running — initial connection failed (optional; fanout publish is disabled). Running without RabbitMQ connection.",
@@ -65,7 +91,7 @@ class CombMsgBrokerService {
     }
   }
 
-  private static async doConnect(): Promise<void> {
+  private async doConnect(): Promise<void> {
     if (!this.amqpUrl) {
       return;
     }
@@ -75,10 +101,12 @@ class CombMsgBrokerService {
 
     connection.on("error", (err: Error) => {
       console.error("AMQP connection error:", err);
+      TelegramService.queueMsg(`[COMB] 🐰 AMQP connection error: ${err}`, this.bot.generalChatId);
     });
     connection.on("close", () => {
       if (this.connection === connection) {
         console.warn("AMQP connection closed — will reconnect on next publish");
+        TelegramService.queueMsg(`[COMB] 🐰 AMQP connection closed — will reconnect on next publish`, this.bot.generalChatId);
         this.connection = null;
         this.channel = null;
         this.assertedExchanges.clear();
@@ -95,7 +123,7 @@ class CombMsgBrokerService {
    * Retries `doConnect` with exponential backoff after an unexpected disconnect.
    * Stops once a connection is re-established.
    */
-  private static async scheduleReconnect(): Promise<void> {
+  private async scheduleReconnect(): Promise<void> {
     for (const delay of RECONNECT_DELAYS_MS) {
       await new Promise<void>((resolve) => setTimeout(resolve, delay));
       if (this.channel) {
@@ -105,19 +133,22 @@ class CombMsgBrokerService {
         console.info(`AMQP reconnecting after ${delay}ms...`);
         await this.doConnect();
         console.info("[Message broker]: running — reconnected to RabbitMQ.");
+        TelegramService.queueMsg(`[COMB] 🐰 Message broker running — reconnected to RabbitMQ.`, this.bot.generalChatId);
         return;
       } catch (err) {
         console.error("AMQP reconnect attempt failed:", err);
+        TelegramService.queueMsg(`[COMB] 🐰 AMQP reconnect attempt failed: ${err}`, this.bot.generalChatId);
       }
     }
     console.error("AMQP reconnect failed after all attempts — next publish will retry");
+    TelegramService.queueMsg(`[COMB] 🐰 AMQP reconnect failed after all attempts — next publish will retry`, this.bot.generalChatId);
   }
 
   /**
    * Asserts a fanout exchange once per connection. Subsequent calls for the same
    * exchange name are no-ops (cached in `assertedExchanges`).
    */
-  private static async ensureExchange(
+  private async ensureExchange(
     exchange: string,
     options?: Options.AssertExchange,
   ): Promise<void> {
@@ -137,7 +168,7 @@ class CombMsgBrokerService {
    * Routing key is ignored for fanout. Use the same exchange name as consumers (e.g. AMQP_EXCHANGE).
    * Messages are persistent; paired with durable subscriber queues, consumers catch up after outages.
    */
-  static async publishFanout(
+  async publishFanout(
     exchange: string,
     body: string | Buffer | object,
     options?: MsgBrokerPublishFanoutOptions,
@@ -168,7 +199,7 @@ class CombMsgBrokerService {
     }
   }
 
-  static async close(): Promise<void> {
+  async close(): Promise<void> {
     if (this.channel) {
       try {
         await this.channel.close();

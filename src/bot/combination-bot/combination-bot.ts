@@ -91,23 +91,27 @@ function discoverCombBotCount(): number {
  * All logic lives in combination-bot folder; no imports from other bots.
  */
 class CombinationBot {
+  combWsServerService: CombWsServerService;
+  combMsgBrokerService: CombMsgBrokerService;
+  connectedWsClientsAmt: number = 0;
+
   /**
    * Copy-trading infrastructure: optional RabbitMQ fanout + WebSocket server. Used only when running combination bot.
    */
   async startCopyTradingServices(): Promise<void> {
-    this.queueGeneralMessage("🗄 Starting copy trading services...");
+    TelegramService.queueMsg("🗄 Starting copy trading services...", this.generalChatId);
+    await new Promise(resolve => setTimeout(resolve, 1000));
     try {
-      await CombMsgBrokerService.connect();
-      CombWsServerService.start();
-      this.queueGeneralMessage("🗄 Copy trading services started successfully.");
+      await this.combMsgBrokerService.connect();
+      this.combWsServerService.start();
     } catch (error) {
-      this.queueGeneralMessage("🗄 Error starting copy trading services: " + error);
+      TelegramService.queueMsg("🗄 Error starting copy trading services: " + error, this.generalChatId);
     }
   }
 
   private instances: CombBotInstance[] = [];
   private chatIdToInstance: Map<string, CombBotInstance> = new Map();
-  private generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
+  generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
   /** Account total USDT balance (free + frozen) when the general bot run started (for wallet delta). */
   private startQuoteBalanceBn?: BigNumber;
 
@@ -116,6 +120,9 @@ class CombinationBot {
     if (count === 0) {
       throw new Error("At least one bot must be configured. Set COMB_BOT_1_SYMBOL (and other COMB_BOT_1_* vars).");
     }
+
+    this.combWsServerService = new CombWsServerService(this);
+    this.combMsgBrokerService = new CombMsgBrokerService(this);
 
     console.log("[COMB] Loading", count, "bot instance(s) (BOT_1, BOT_2, ...)");
 
@@ -201,7 +208,10 @@ class CombinationBot {
       );
     }
     lines.push("");
-
+    lines.push("=== COPY TRADING ===");
+    lines.push(`🐰 Message broker (RabbitMQ): ${this.combMsgBrokerService.getConnectionStatusText()}`);
+    lines.push(`🔌 Connected WS clients: ${this.connectedWsClientsAmt}`);
+    lines.push("");
     let mergedPnL = 0;
     let earliestRunStart: Date | undefined;
 
@@ -439,6 +449,40 @@ class CombinationBot {
         TelegramService.queueMsgPriority(msg, bot.telegramChatId);
       } catch (err) {
         TelegramService.queueMsg(`Failed to get update: ${err instanceof Error ? err.message : String(err)}`, String(chatId));
+      }
+    });
+
+    TelegramService.appendTgCmdHandler("send_ping_to_msg_broker", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      let replyTo: string | undefined;
+      if (this.generalChatId && String(chatId) === String(this.generalChatId)) {
+        replyTo = this.generalChatId;
+      } else {
+        const bot = this.getInstanceByChatId(chatId);
+        if (!bot) {
+          TelegramService.queueMsg("Unknown channel. This chat is not linked to any bot.", String(chatId));
+          return;
+        }
+        replyTo = bot.telegramChatId;
+      }
+      const status = this.combMsgBrokerService.getConnectionStatusText();
+      if (status !== "Healthy") {
+        TelegramService.queueMsgPriority(`[COMB] RabbitMQ: ${status}. Ping not sent.`, replyTo);
+        return;
+      }
+      const exchange = process.env.AMQP_EXCHANGE ?? "bitbot-fanout";
+      try {
+        await this.combMsgBrokerService.publishFanout(exchange, {
+          msgType: "PING",
+          sentAt: Date.now(),
+        });
+        TelegramService.queueMsgPriority(`[COMB] Ping published to fanout exchange "${exchange}".`, replyTo);
+      } catch (err) {
+        TelegramService.queueMsgPriority(
+          `[COMB] Ping failed: ${err instanceof Error ? err.message : String(err)}`,
+          replyTo,
+        );
       }
     });
 

@@ -1,4 +1,6 @@
 import WebSocket, { WebSocketServer } from "ws";
+import CombinationBot from "../combination-bot";
+import TelegramService from "@/services/telegram.service";
 
 export type WsReceiveHandler = (data: string, client: WebSocket) => void;
 
@@ -19,15 +21,17 @@ function rawDataToString(raw: WebSocket.RawData): string {
 export type WsMessageHandlerId = number;
 
 class CombWsServerService {
-  private static wss: WebSocketServer | null = null;
-  private static nextHandlerId = 1;
-  private static messageHandlers = new Map<number, WsReceiveHandler>();
+  constructor(private bot: CombinationBot) { }
+
+  private wss: WebSocketServer | null = null;
+  private nextHandlerId = 1;
+  private messageHandlers = new Map<number, WsReceiveHandler>();
 
   /**
    * Starts the WebSocket server if not already running.
    * Uses `WS_PORT` when `port` is omitted (defaults to 8090).
    */
-  static start(): void {
+  start(): void {
     if (this.wss) {
       return;
     }
@@ -39,15 +43,19 @@ class CombWsServerService {
         console.log(
           `[WsServer] WebSocket server started — listening on ${addr.address}:${addr.port} (${addr.family}), WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`,
         );
+        TelegramService.queueMsg(`[COMB] 🔌 WebSocket server started — listening on ${addr.address}:${addr.port} (${addr.family}), WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`, this.bot.generalChatId);
       } else {
         console.log(
           `[WsServer] WebSocket server started — listening on ${String(addr)}, WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`,
         );
+        TelegramService.queueMsg(`[COMB] 🔌 WebSocket server started — listening on ${String(addr)}, WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`, this.bot.generalChatId);
       }
     });
     this.wss.on("connection", (ws, req) => {
       const remote = req.socket.remoteAddress ?? "unknown";
       console.log(`[WsServer] client connected — ${remote} (total: ${this.wss?.clients.size})`);
+      this.bot.connectedWsClientsAmt = this.wss?.clients.size ?? 0;
+      TelegramService.queueMsg(`[COMB] ➕ New WS client connected — ${remote} (total: ${this.wss?.clients.size})`, this.bot.generalChatId);
 
       ws.on("message", (raw) => {
         const str = rawDataToString(raw);
@@ -56,6 +64,7 @@ class CombWsServerService {
             handler(str, ws);
           } catch (err) {
             console.error(`[WsServer] handler ${id} threw:`, err);
+            TelegramService.queueMsg(`[COMB] 🔌 WsServer handler ${id} threw: ${err}`, this.bot.generalChatId);
           }
         }
       });
@@ -64,17 +73,20 @@ class CombWsServerService {
         console.log(
           `[WsServer] client disconnected — ${remote} code=${code} reason=${reason.toString() || "(none)"} (remaining: ${this.wss?.clients.size})`,
         );
+        TelegramService.queueMsg(`[COMB] ➖ WS client disconnected — ${remote} code=${code} reason=${reason.toString() || "(none)"} (remaining: ${this.wss?.clients.size})`, this.bot.generalChatId);
+        this.bot.connectedWsClientsAmt = this.wss?.clients.size ?? 0;
       });
     });
     this.wss.on("error", (err: Error) => {
       console.error("[WsServer] server error:", err);
+      TelegramService.queueMsg(`[COMB] 🔌 Error starting copy trading services: ${err}`, this.bot.generalChatId);
     });
   }
 
   /**
    * Sends the same payload to every connected client whose socket is open.
    */
-  static broadcastMsg(body: string | Buffer | object): void {
+  broadcastMsg(body: string | Buffer | object): void {
     this.start();
     const wss = this.wss;
     if (!wss) {
@@ -97,7 +109,7 @@ class CombWsServerService {
    * Registers a handler for incoming client messages. Multiple handlers may be active; each receives every message.
    * Returns an id for `removeMsgHandler`.
    */
-  static addMsgHandler(handler: WsReceiveHandler): WsMessageHandlerId {
+  addMsgHandler(handler: WsReceiveHandler): WsMessageHandlerId {
     this.start();
     const id = this.nextHandlerId++;
     this.messageHandlers.set(id, handler);
@@ -107,11 +119,11 @@ class CombWsServerService {
   /**
    * Removes a handler previously added with `addMsgHandler`. No-op if the id is unknown.
    */
-  static removeMsgHandler(id: WsMessageHandlerId): void {
+  removeMsgHandler(id: WsMessageHandlerId): void {
     this.messageHandlers.delete(id);
   }
 
-  static async close(): Promise<void> {
+  async close(): Promise<void> {
     if (!this.wss) {
       return;
     }
