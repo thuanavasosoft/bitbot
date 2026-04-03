@@ -7,7 +7,7 @@ export type MsgBrokerPublishFanoutOptions = {
 
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
-class MsgBrokerService {
+class CombMsgBrokerService {
   private static connection: ChannelModel | null = null;
   private static channel: Channel | null = null;
   private static connectPromise: Promise<void> | null = null;
@@ -189,4 +189,4 @@ class MsgBrokerService {
   }
 }
 
-export default MsgBrokerService;
+export default CombMsgBrokerService;

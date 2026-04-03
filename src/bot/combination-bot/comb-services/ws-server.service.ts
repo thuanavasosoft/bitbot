@@ -18,7 +18,7 @@ function rawDataToString(raw: WebSocket.RawData): string {
 /** Opaque id returned by `addMsgHandler` for use with `removeMsgHandler`. */
 export type WsMessageHandlerId = number;
 
-class WsServerService {
+class CombWsServerService {
   private static wss: WebSocketServer | null = null;
   private static nextHandlerId = 1;
   private static messageHandlers = new Map<number, WsReceiveHandler>();
@@ -133,4 +133,4 @@ class WsServerService {
   }
 }
 
-export default WsServerService;
+export default CombWsServerService;

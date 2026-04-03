@@ -8,6 +8,8 @@ import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
 import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
 import type { CombInstanceConfig, CombState, CombInstanceEvent } from "./comb-types";
+import CombMsgBrokerService from "./comb-services/msg-broker.service";
+import CombWsServerService from "./comb-services/ws-server.service";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -89,6 +91,20 @@ function discoverCombBotCount(): number {
  * All logic lives in combination-bot folder; no imports from other bots.
  */
 class CombinationBot {
+  /**
+   * Copy-trading infrastructure: optional RabbitMQ fanout + WebSocket server. Used only when running combination bot.
+   */
+  async startCopyTradingServices(): Promise<void> {
+    this.queueGeneralMessage("🗄 Starting copy trading services...");
+    try {
+      await CombMsgBrokerService.connect();
+      CombWsServerService.start();
+      this.queueGeneralMessage("🗄 Copy trading services started successfully.");
+    } catch (error) {
+      this.queueGeneralMessage("🗄 Error starting copy trading services: " + error);
+    }
+  }
+
   private instances: CombBotInstance[] = [];
   private chatIdToInstance: Map<string, CombBotInstance> = new Map();
   private generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
@@ -753,8 +769,11 @@ class CombinationBot {
   }
 
   async startMakeMoney(): Promise<void> {
-    console.log("[COMB] Starting", this.instances.length, "instance(s)");
     this.queueGeneralMessage(`🚀 Starting Combination Bot for ${this.instances.length} instance(s)`);
+    await this.startCopyTradingServices();
+
+    await new Promise(resolve => setTimeout(resolve, 10000000));
+    console.log("[COMB] Starting", this.instances.length, "instance(s)");
 
     if (this.instances.length > 0) {
       const startBal = await this.instances[0].tmobUtils.getExchTotalUsdtBalance();
