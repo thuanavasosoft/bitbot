@@ -111,11 +111,13 @@ class CombinationBot {
         if (msg.type === "halo") {
           console.log("halo message received", msg);
 
-          this.connectedCopyTraderAmt += 1;
-          this.queueGeneralMessage(`🔌 [COMB] Copy trader connected ${msg.data.label} (total traders: ${this.connectedCopyTraderAmt})`);
           const leverageMap: ILeverageMap = {};
-          for (const inst of this.instances) {
-            leverageMap[inst.symbol] = inst.leverage;
+          if (msg.data.label !== "__verify_connection__") {
+            this.connectedCopyTraderAmt += 1;
+            this.queueGeneralMessage(`🔌 [COMB] Copy trader connected ${msg.data.label} (total traders: ${this.connectedCopyTraderAmt})`);
+            for (const inst of this.instances) {
+              leverageMap[inst.symbol] = inst.leverage;
+            }
           }
 
           client.send(JSON.stringify({
