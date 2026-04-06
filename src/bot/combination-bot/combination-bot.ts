@@ -93,7 +93,7 @@ function discoverCombBotCount(): number {
 class CombinationBot {
   combWsServerService: CombWsServerService;
   combMsgBrokerService: CombMsgBrokerService;
-  connectedCopyTraderAmt: number = 0;
+  connectedCopyTraderLabels: Set<string> = new Set();
   label: string = envStrRequired("COMB_BOT_LABEL") ?? "Combination Bot " + generateRandomString(10);
 
   /**
@@ -111,8 +111,8 @@ class CombinationBot {
         if (msg.type === "halo") {
           console.log("halo message received", msg);
 
-          this.connectedCopyTraderAmt += 1;
-          this.queueGeneralMessage(`🔌 [COMB] Copy trader connected ${msg.data.label} (total traders: ${this.connectedCopyTraderAmt})`);
+          this.connectedCopyTraderLabels.add(msg.data.label);
+          this.queueGeneralMessage(`🔌 [COMB] Copy trader connected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
           const leverageMap: ILeverageMap = {};
           for (const inst of this.instances) {
             leverageMap[inst.symbol] = inst.leverage;
@@ -128,8 +128,8 @@ class CombinationBot {
         if (msg.type === "bye") {
           console.log("bye message received", msg);
 
-          this.connectedCopyTraderAmt -= 1;
-          this.queueGeneralMessage(`🔌 [COMB] Copy trader disconnected ${msg.data.label} (total traders: ${this.connectedCopyTraderAmt})`);
+          this.connectedCopyTraderLabels.delete(msg.data.label);
+          this.queueGeneralMessage(`🔌 [COMB] Copy trader disconnected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
         }
       })
     } catch (error) {
@@ -238,8 +238,9 @@ class CombinationBot {
     lines.push("");
     lines.push("=== COPY TRADING ===");
     lines.push(`🐰 Message broker (RabbitMQ): ${this.combMsgBrokerService.getConnectionStatusText()}`);
-    lines.push(`🔌 Connected Copy traders: ${this.connectedCopyTraderAmt}`);
+    lines.push(`🔌 Connected Copy traders: ${this.connectedCopyTraderLabels.size}`);
     lines.push("");
+    const nowMs = Date.now();
     let mergedPnL = 0;
     let earliestRunStart: Date | undefined;
 
@@ -270,7 +271,7 @@ class CombinationBot {
         `Trail ATR: ${inst.trailingAtrLength} | Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
       );
       lines.push(
-        `Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(inst.lastOptimizationAtMs, inst.updateIntervalMinutes, Date.now()) / 1000))}`
+        `Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(inst.lastOptimizationAtMs, inst.updateIntervalMinutes, nowMs) / 1000))}`
       );
       lines.push(
         `Triggers: Long ${inst.longTrigger != null ? inst.longTrigger : "N/A"} | Short ${inst.shortTrigger != null ? inst.shortTrigger : "N/A"}`

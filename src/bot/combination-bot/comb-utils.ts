@@ -21,18 +21,21 @@ export const COMB_DEFAULT_SIGNAL_PARAMS: Omit<CombSignalParams, "N"> = {
 const MS_PER_MINUTE_COMB_OPT = 60_000;
 
 /**
- * Remaining ms until the optimization loop's next wake (matches comb-optimization-loop runLoop:
- * nextDueMs + 1000 relative to now).
+ * Remaining ms until the next optimization fire. Uses `lastOptimizationAtMs + interval + 1s`, matching
+ * `comb-optimization-loop` log line and `updateCurrTrailMultiplier` timing (not UTC minute snapping),
+ * so the countdown moves smoothly with `nowMs`.
  */
 export function getCombNextOptimizationRemainingMs(
   lastOptimizationAtMs: number,
   updateIntervalMinutes: number,
   nowMs: number
 ): number {
-  const nextDueMs =
-    lastOptimizationAtMs > 0
-      ? (Math.floor(lastOptimizationAtMs / MS_PER_MINUTE_COMB_OPT) + updateIntervalMinutes) * MS_PER_MINUTE_COMB_OPT
-      : Math.ceil(nowMs / MS_PER_MINUTE_COMB_OPT) * MS_PER_MINUTE_COMB_OPT;
+  const intervalMs = updateIntervalMinutes * MS_PER_MINUTE_COMB_OPT;
+  if (lastOptimizationAtMs > 0) {
+    const nextFireMs = lastOptimizationAtMs + intervalMs + 1000;
+    return Math.max(0, nextFireMs - nowMs);
+  }
+  const nextDueMs = Math.ceil(nowMs / MS_PER_MINUTE_COMB_OPT) * MS_PER_MINUTE_COMB_OPT;
   const nextFireMs = nextDueMs + 1000;
   return Math.max(0, nextFireMs - nowMs);
 }
@@ -52,7 +55,7 @@ export function formatCombOptimizationAgeMessage(bot: CombBotInstance, nowForAge
   const remainingMs = getCombNextOptimizationRemainingMs(
     bot.lastOptimizationAtMs,
     bot.updateIntervalMinutes,
-    Date.now()
+    nowForAgeMs
   );
   const nextIn = formatDurationAsHoursMinutes(Math.floor(remainingMs / 1000));
   if (bot.lastOptimizationAtMs > 0) {
