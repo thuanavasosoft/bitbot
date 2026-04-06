@@ -80,8 +80,6 @@ class CombWsServerService {
     this.wss.on("connection", (ws, req) => {
       const remote = req.socket.remoteAddress ?? "unknown";
       console.log(`[WsServer] client connected — ${remote} (total: ${this.wss?.clients.size})`);
-      TelegramService.queueMsg(`[COMB] ➕ A WS client connected (total clients: ${this.wss?.clients.size})`, this.bot.generalChatId);
-
       ws.on("message", (raw) => {
         const str = rawDataToString(raw);
         for (const [id, handler] of this.messageHandlers) {
@@ -98,7 +96,6 @@ class CombWsServerService {
         console.log(
           `[WsServer] client disconnected — ${remote} code=${code} reason=${reason.toString() || "(none)"} (total clients: ${this.wss?.clients.size})`,
         );
-        TelegramService.queueMsg(`[COMB] ➖ A WS client disconnected (total clients: ${this.wss?.clients.size})`, this.bot.generalChatId);
       });
     });
     this.wss.on("error", (err: Error) => {
