@@ -113,7 +113,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
         this.bot.queueMsgPriority(`Closing active position for ${this.bot.symbol}...`);
         const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
         this.bot.justManuallyClosedBy = "close_pos";
-        const netPnl = await this.bot.tmobUtils.handlePnL(
+        const netPnl = await this.bot.combUtils.handlePnL(
           typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
           false,
           undefined,

@@ -109,8 +109,8 @@ class CombUtils {
       endFetchCandles.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000
     );
 
-    await this.bot.tmobCandles.ensurePopulated();
-    const filteredCandles = await this.bot.tmobCandles.getCandles(optimizationWindowStartDate, endFetchCandles);
+    await this.bot.combCandles.ensurePopulated();
+    const filteredCandles = await this.bot.combCandles.getCandles(optimizationWindowStartDate, endFetchCandles);
 
     const { min: multMin, max: multMax } = this.bot.trailMultiplierBounds;
     const step = Number.isFinite(this.bot.trailBoundStepSize) && this.bot.trailBoundStepSize > 0 ? this.bot.trailBoundStepSize : 1;
@@ -253,6 +253,18 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
       new BigNumber(0)
     );
     return { grossPnl, closeFees };
+  }
+
+  async broadcastToCopyTraders(msg: string): Promise<void> {
+    try {
+      console.log("broadcastToCopyTraders: ", msg);
+      this.bot.queueMsg(`🚀 broadcastToCopyTraders async: ${msg}`);
+      await this.bot.combinationBot.combWsServerService.broadcastMsg(msg);
+      await this.bot.combinationBot.combMsgBrokerService.publishFanout(msg);
+    } catch (error) {
+      console.log(error);
+      this.bot.queueMsg(`[COMB] broadcastToCopyTraders error: ${String(error)}`);
+    }
   }
 
   async handlePnL(

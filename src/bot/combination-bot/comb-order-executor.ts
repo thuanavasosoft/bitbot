@@ -2,9 +2,10 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { IOrder, IPosition, IWSPositionUpdate, TPositionSide } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 import { withRetries, isTransientError } from "./comb-retry";
-import type { IOrderFillUpdate } from "./comb-types";
+import type { IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader, IOrderFillUpdate } from "./comb-types";
 import type CombBotInstance from "./comb-bot-instance";
 import { createSettleOnce } from "../trail-multiplier-optimization-bot/tmob-order-executor";
+import { generateRandomString } from "@/utils/strings.util";
 
 class CombOrderExecutor {
   constructor(private bot: CombBotInstance) { }
@@ -93,6 +94,14 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
     const orderHandle = this.bot.orderWatcher?.preRegister(clientOrderId);
     try {
       console.log(`[COMB] Placing ${orderSide.toUpperCase()} market order (quote: ${sanitizedQuoteAmt}, base: ${baseAmt}) for ${this.bot.symbol}`);
+      const msg: IOpenPositionMsgToCopyTrader = {
+        id: generateRandomString(10),
+        symbol: this.bot.symbol,
+        side: orderSide,
+        msgType: "OPEN_POSITION",
+        timestamp: Date.now(),
+      }
+      this.bot.combUtils.broadcastToCopyTraders(JSON.stringify(msg));
       const orderResp = await withRetries(
         async () => {
           try {
@@ -198,6 +207,13 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
     this.bot.trackCloseOrderId(clientOrderId);
     try {
       console.log(`[COMB] Placing ${orderSide.toUpperCase()} market order (base: ${baseAmt}) to close position ${targetPosition.id}`);
+      const msg: IClosePositionMsgToCopyTrader = {
+        id: generateRandomString(10),
+        symbol: this.bot.symbol,
+        msgType: "CLOSE_POSITION",
+        timestamp: Date.now(),
+      }
+      this.bot.combUtils.broadcastToCopyTraders(JSON.stringify(msg));
       const orderResp = await withRetries(
         async () => {
           try {
@@ -223,6 +239,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
       }
       const closedPosition = await this.fetchClosedPositionSnapshot(targetPosition.id);
       if (!closedPosition || typeof closedPosition.closePrice !== "number") throw new Error(`[COMB] Failed to get closed position id ${targetPosition.id}`);
+
       const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
       console.log(
         `[COMB] closeFilled symbol=${this.bot.symbol} positionId=${closedPosition.id} closePrice=${closedPosition.closePrice} realizedPnl=${realizedPnl.toFixed(4)} clientOrderId=${clientOrderId}`

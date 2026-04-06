@@ -20,10 +20,10 @@ class CombCandleWatcher {
   async refreshChart(): Promise<void> {
     try {
       const now = new Date();
-      await this.bot.tmobCandles.ensurePopulated();
+      await this.bot.combCandles.ensurePopulated();
       now.setSeconds(0);
       now.setMilliseconds(0);
-      let currCandles = await this.bot.tmobCandles.getCandles(
+      let currCandles = await this.bot.combCandles.getCandles(
         new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000),
         now
       );
@@ -152,10 +152,10 @@ class CombCandleWatcher {
       while (!this.bot.isStopped) {
         try {
           const now = new Date();
-          await this.bot.tmobCandles.ensurePopulated();
+          await this.bot.combCandles.ensurePopulated();
           now.setSeconds(0);
           now.setMilliseconds(0);
-          let currCandles = await this.bot.tmobCandles.getCandles(new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000), now);
+          let currCandles = await this.bot.combCandles.getCandles(new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000), now);
           if (currCandles.length <= this.bot.nSignal) {
             const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
             currCandles.push({

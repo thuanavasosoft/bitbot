@@ -11,7 +11,7 @@ class CombStartingState {
   constructor(private bot: CombBotInstance) { }
 
   private async _ensureMarginAvailable() {
-    const bal = await this.bot.tmobUtils.getExchFreeUsdtBalance();
+    const bal = await this.bot.combUtils.getExchFreeUsdtBalance();
     if (bal.lt(this.bot.margin)) throw new Error(`Exchange balance ${bal} < margin ${this.bot.margin}`);
   }
 
@@ -44,7 +44,7 @@ class CombStartingState {
       this._loadSymbolInfo(),
     ]);
     if (this.bot.currTrailMultiplier === undefined) {
-      await this.bot.tmobUtils.updateCurrTrailMultiplier();
+      await this.bot.combUtils.updateCurrTrailMultiplier();
       if (this.bot.currTrailMultiplier !== undefined) {
         this.bot.trailingStopMultiplier = this.bot.currTrailMultiplier;
         const intervalMs = this.bot.updateIntervalMinutes * 60_000;

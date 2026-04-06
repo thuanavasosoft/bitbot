@@ -17,6 +17,7 @@ import CombOptimizationLoop from "./comb-optimization-loop";
 import CombTelegramHandler from "./comb-telegram-handler";
 import type { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
 import { calc_UnrealizedPnl } from "@/utils/maths.util";
+import CombinationBot from "./combination-bot";
 
 /** en-US grouping for Telegram (e.g. 6,000.5); maxFractionDigits caps decimal places. */
 function formatEnUsNumber(n: number, maxFractionDigits: number): string {
@@ -152,8 +153,8 @@ class CombBotInstance {
   stopAtMs?: number;
 
   orderWatcher: CombOrderWatcher;
-  tmobCandles: CombCandles;
-  tmobUtils: CombUtils;
+  combCandles: CombCandles;
+  combUtils: CombUtils;
   orderExecutor: CombOrderExecutor;
   startingState: CombStartingState;
   waitForSignalState: CombWaitForSignalState;
@@ -163,13 +164,15 @@ class CombBotInstance {
   optimizationLoop: CombOptimizationLoop;
   telegramHandler: CombTelegramHandler;
   currentState: CombState;
+  combinationBot: CombinationBot;
 
   /** Optional callback for the general bot to receive instance events (position opened/closed, liquidated). */
   onInstanceEvent?: (event: CombInstanceEvent) => void;
   /** Optional: send a short line to the general COMB channel (e.g. state cleared after prior manual/TP-PB close). */
   onGeneralInfoMessage?: (message: string) => void;
 
-  constructor(config: CombInstanceConfig) {
+  constructor(config: CombInstanceConfig, combinationBot: CombinationBot) {
+    this.combinationBot = combinationBot;
     this.runId = randomUUID();
     this.stateBus = new EventEmitter();
     this.symbol = config.SYMBOL;
@@ -188,8 +191,8 @@ class CombBotInstance {
 
     this.orderWatcher = new CombOrderWatcher();
 
-    this.tmobCandles = new CombCandles(this);
-    this.tmobUtils = new CombUtils(this);
+    this.combCandles = new CombCandles(this);
+    this.combUtils = new CombUtils(this);
     this.orderExecutor = new CombOrderExecutor(this);
     this.startingState = new CombStartingState(this);
     this.waitForSignalState = new CombWaitForSignalState(this);
@@ -453,7 +456,7 @@ class CombBotInstance {
       }
 
       if (!this.justManuallyClosedBy) {
-        await this.tmobUtils.handlePnL(
+        await this.combUtils.handlePnL(
           realizedPnl,
           _options?.isLiquidation ?? false,
           shouldTrackSlippage ? icon : undefined,

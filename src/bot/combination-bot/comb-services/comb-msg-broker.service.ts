@@ -12,6 +12,7 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 class CombMsgBrokerService {
   constructor(private bot: CombinationBot) { }
 
+  private exchange = process.env.AMQP_EXCHANGE ?? "comb.copy.trading";
   private connection: ChannelModel | null = null;
   private channel: Channel | null = null;
   private connectPromise: Promise<void> | null = null;
@@ -149,18 +150,17 @@ class CombMsgBrokerService {
    * exchange name are no-ops (cached in `assertedExchanges`).
    */
   private async ensureExchange(
-    exchange: string,
     options?: Options.AssertExchange,
   ): Promise<void> {
-    if (this.assertedExchanges.has(exchange)) {
+    if (this.assertedExchanges.has(this.exchange)) {
       return;
     }
     const ch = this.channel;
     if (!ch) {
       throw new Error("AMQP channel is not available");
     }
-    await ch.assertExchange(exchange, "fanout", options ?? { durable: true });
-    this.assertedExchanges.add(exchange);
+    await ch.assertExchange(this.exchange, "fanout", options ?? { durable: true });
+    this.assertedExchanges.add(this.exchange);
   }
 
   /**
@@ -169,7 +169,6 @@ class CombMsgBrokerService {
    * Messages are persistent; paired with durable subscriber queues, consumers catch up after outages.
    */
   async publishFanout(
-    exchange: string,
     body: string | Buffer | object,
     options?: MsgBrokerPublishFanoutOptions,
   ): Promise<void> {
@@ -178,7 +177,7 @@ class CombMsgBrokerService {
     if (!ch) {
       return;
     }
-    await this.ensureExchange(exchange, options?.assertExchange);
+    await this.ensureExchange(options?.assertExchange);
 
     const buffer =
       typeof body === "string"
@@ -187,7 +186,7 @@ class CombMsgBrokerService {
           ? body
           : Buffer.from(JSON.stringify(body), "utf8");
 
-    const ok = ch.publish(exchange, "", buffer, {
+    const ok = ch.publish(this.exchange, "", buffer, {
       persistent: true,
       ...options?.publish,
     });

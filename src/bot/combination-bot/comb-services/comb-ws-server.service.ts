@@ -4,6 +4,32 @@ import TelegramService from "@/services/telegram.service";
 
 export type WsReceiveHandler = (data: string, client: WebSocket) => void;
 
+
+export interface IWSMessage {
+  type: "halo" | "welcome" | "bye";
+  data: any;
+}
+
+export interface ILeverageMap {
+  [symbol: string]: number
+}
+
+export interface IWSHaloMessage extends IWSMessage {
+  type: "halo";
+  data: { label: string };
+}
+
+export interface IWSByeMessage extends IWSMessage {
+  type: "bye";
+  data: { label: string };
+}
+
+export interface IWSWelcomeMessage {
+  type: "welcome";
+  data: ILeverageMap;
+  label: string;
+}
+
 function rawDataToString(raw: WebSocket.RawData): string {
   if (typeof raw === "string") {
     return raw;
@@ -54,8 +80,7 @@ class CombWsServerService {
     this.wss.on("connection", (ws, req) => {
       const remote = req.socket.remoteAddress ?? "unknown";
       console.log(`[WsServer] client connected — ${remote} (total: ${this.wss?.clients.size})`);
-      this.bot.connectedWsClientsAmt = this.wss?.clients.size ?? 0;
-      TelegramService.queueMsg(`[COMB] ➕ New WS client connected — ${remote} (total: ${this.wss?.clients.size})`, this.bot.generalChatId);
+      TelegramService.queueMsg(`[COMB] ➕ A WS client connected (total clients: ${this.wss?.clients.size})`, this.bot.generalChatId);
 
       ws.on("message", (raw) => {
         const str = rawDataToString(raw);
@@ -71,10 +96,9 @@ class CombWsServerService {
 
       ws.on("close", (code, reason) => {
         console.log(
-          `[WsServer] client disconnected — ${remote} code=${code} reason=${reason.toString() || "(none)"} (remaining: ${this.wss?.clients.size})`,
+          `[WsServer] client disconnected — ${remote} code=${code} reason=${reason.toString() || "(none)"} (total clients: ${this.wss?.clients.size})`,
         );
-        TelegramService.queueMsg(`[COMB] ➖ WS client disconnected — ${remote} code=${code} reason=${reason.toString() || "(none)"} (remaining: ${this.wss?.clients.size})`, this.bot.generalChatId);
-        this.bot.connectedWsClientsAmt = this.wss?.clients.size ?? 0;
+        TelegramService.queueMsg(`[COMB] ➖ A WS client disconnected (total clients: ${this.wss?.clients.size})`, this.bot.generalChatId);
       });
     });
     this.wss.on("error", (err: Error) => {
@@ -100,6 +124,8 @@ class CombWsServerService {
           : JSON.stringify(body);
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
+        console.log("Sending message to client", payload);
+
         client.send(payload);
       }
     }
