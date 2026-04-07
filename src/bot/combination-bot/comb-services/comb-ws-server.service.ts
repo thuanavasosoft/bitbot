@@ -55,26 +55,26 @@ class CombWsServerService {
 
   /**
    * Starts the WebSocket server if not already running.
-   * Uses `WS_PORT` when `port` is omitted (defaults to 8090).
+   * Uses `COMB_WS_PORT` when `port` is omitted (defaults to 8090).
    */
   start(): void {
     if (this.wss) {
       return;
     }
-    const p = Number(process.env.WS_PORT) || 8090;
+    const p = Number(process.env.COMB_WS_PORT) || 8090;
     this.wss = new WebSocketServer({ port: p });
     this.wss.on("listening", () => {
       const addr = this.wss?.address();
       if (addr && typeof addr === "object") {
         console.log(
-          `[WsServer] WebSocket server started — listening on ${addr.address}:${addr.port} (${addr.family}), WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`,
+          `[WsServer] WebSocket server started — listening on ${addr.address}:${addr.port} (${addr.family}), COMB_WS_PORT=${process.env.COMB_WS_PORT ?? "(unset, using 8090)"}`,
         );
-        TelegramService.queueMsg(`[COMB] 🔌 WebSocket server started — listening on ${addr.address}:${addr.port} (${addr.family}), WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`, this.bot.generalChatId);
+        TelegramService.queueMsg(`[COMB] 🔌 WebSocket server started — listening on ${addr.address}:${addr.port} (${addr.family}), COMB_WS_PORT=${process.env.COMB_WS_PORT ?? "(unset, using 8090)"}`, this.bot.generalChatId);
       } else {
         console.log(
-          `[WsServer] WebSocket server started — listening on ${String(addr)}, WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`,
+          `[WsServer] WebSocket server started — listening on ${String(addr)}, COMB_WS_PORT=${process.env.COMB_WS_PORT ?? "(unset, using 8090)"}`,
         );
-        TelegramService.queueMsg(`[COMB] 🔌 WebSocket server started — listening on ${String(addr)}, WS_PORT=${process.env.WS_PORT ?? "(unset, using 8090)"}`, this.bot.generalChatId);
+        TelegramService.queueMsg(`[COMB] 🔌 WebSocket server started — listening on ${String(addr)}, COMB_WS_PORT=${process.env.COMB_WS_PORT ?? "(unset, using 8090)"}`, this.bot.generalChatId);
       }
     });
     this.wss.on("connection", (ws, req) => {
