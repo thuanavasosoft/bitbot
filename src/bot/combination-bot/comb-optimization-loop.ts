@@ -100,7 +100,7 @@ class CombOptimizationLoop {
     }
 
     if (this.abort || this.bot.isStopped) return;
-    await this.bot.tmobUtils.updateCurrTrailMultiplier();
+    await this.bot.combUtils.updateCurrTrailMultiplier();
 
     if (this.bot.currTrailMultiplier !== undefined) {
       this.bot.trailingStopMultiplier = this.bot.currTrailMultiplier;

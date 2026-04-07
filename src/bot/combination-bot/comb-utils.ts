@@ -18,6 +18,56 @@ export const COMB_DEFAULT_SIGNAL_PARAMS: Omit<CombSignalParams, "N"> = {
   vol_mult: 1.3,
 };
 
+const MS_PER_MINUTE_COMB_OPT = 60_000;
+
+/**
+ * Remaining ms until the next optimization fire. Uses `lastOptimizationAtMs + interval + 1s`, matching
+ * `comb-optimization-loop` log line and `updateCurrTrailMultiplier` timing (not UTC minute snapping),
+ * so the countdown moves smoothly with `nowMs`.
+ */
+export function getCombNextOptimizationRemainingMs(
+  lastOptimizationAtMs: number,
+  updateIntervalMinutes: number,
+  nowMs: number
+): number {
+  const intervalMs = updateIntervalMinutes * MS_PER_MINUTE_COMB_OPT;
+  if (lastOptimizationAtMs > 0) {
+    const nextFireMs = lastOptimizationAtMs + intervalMs + 1000;
+    return Math.max(0, nextFireMs - nowMs);
+  }
+  const nextDueMs = Math.ceil(nowMs / MS_PER_MINUTE_COMB_OPT) * MS_PER_MINUTE_COMB_OPT;
+  const nextFireMs = nextDueMs + 1000;
+  return Math.max(0, nextFireMs - nowMs);
+}
+
+/** E.g. `11h59m` — same style as "Last optimized" lines. */
+export function formatDurationAsHoursMinutes(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  return `${hours}h${minutes}m`;
+}
+
+/**
+ * Candle/info line: last optimization age plus countdown to next reoptimization (e.g. 11h59m).
+ * `nowForAgeMs` should match the chart message timestamp (typically minute-floored `Date` used elsewhere in the watcher).
+ */
+export function formatCombOptimizationAgeMessage(bot: CombBotInstance, nowForAgeMs: number): string {
+  const remainingMs = getCombNextOptimizationRemainingMs(
+    bot.lastOptimizationAtMs,
+    bot.updateIntervalMinutes,
+    nowForAgeMs
+  );
+  const nextIn = formatDurationAsHoursMinutes(Math.floor(remainingMs / 1000));
+  if (bot.lastOptimizationAtMs > 0) {
+    const elapsedMs = nowForAgeMs - bot.lastOptimizationAtMs;
+    const totalSeconds = Math.floor(elapsedMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    return `\nLast optimized: ${hours}h${minutes}m\nNext reoptimization in: ${nextIn}`;
+  }
+  return `\nLast optimized: N/A\nNext reoptimization in: ${nextIn}`;
+}
+
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
 }
@@ -62,8 +112,8 @@ class CombUtils {
       endFetchCandles.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000
     );
 
-    await this.bot.tmobCandles.ensurePopulated();
-    const filteredCandles = await this.bot.tmobCandles.getCandles(optimizationWindowStartDate, endFetchCandles);
+    await this.bot.combCandles.ensurePopulated();
+    const filteredCandles = await this.bot.combCandles.getCandles(optimizationWindowStartDate, endFetchCandles);
 
     const { min: multMin, max: multMax } = this.bot.trailMultiplierBounds;
     const step = Number.isFinite(this.bot.trailBoundStepSize) && this.bot.trailBoundStepSize > 0 ? this.bot.trailBoundStepSize : 1;
@@ -206,6 +256,18 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
       new BigNumber(0)
     );
     return { grossPnl, closeFees };
+  }
+
+  async broadcastToCopyTraders(msg: string): Promise<void> {
+    try {
+      console.log("broadcastToCopyTraders: ", msg);
+      this.bot.queueMsg(`🚀 broadcastToCopyTraders async: ${msg}`);
+      await this.bot.combinationBot.combWsServerService.broadcastMsg(msg);
+      await this.bot.combinationBot.combMsgBrokerService.publishFanout(msg);
+    } catch (error) {
+      console.log(error);
+      this.bot.queueMsg(`[COMB] broadcastToCopyTraders error: ${String(error)}`);
+    }
   }
 
   async handlePnL(

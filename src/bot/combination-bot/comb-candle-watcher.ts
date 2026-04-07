@@ -2,7 +2,7 @@ import ExchangeService from "@/services/exchange-service/exchange-service";
 import { withRetries, isTransientError } from "./comb-retry";
 import { generateImageOfCandlesWithSupportResistance } from "@/utils/image-generator.util";
 import { calculateBreakoutSignal } from "./comb-backtest";
-import { COMB_DEFAULT_SIGNAL_PARAMS } from "./comb-utils";
+import { COMB_DEFAULT_SIGNAL_PARAMS, formatCombOptimizationAgeMessage } from "./comb-utils";
 import BigNumber from "bignumber.js";
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import type CombBotInstance from "./comb-bot-instance";
@@ -20,10 +20,10 @@ class CombCandleWatcher {
   async refreshChart(): Promise<void> {
     try {
       const now = new Date();
-      await this.bot.tmobCandles.ensurePopulated();
+      await this.bot.combCandles.ensurePopulated();
       now.setSeconds(0);
       now.setMilliseconds(0);
-      let currCandles = await this.bot.tmobCandles.getCandles(
+      let currCandles = await this.bot.combCandles.getCandles(
         new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000),
         now
       );
@@ -120,16 +120,7 @@ class CombCandleWatcher {
       const paramsMsg =
         `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
         `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
-      const optimizationAgeMsg =
-        this.bot.lastOptimizationAtMs > 0
-          ? (() => {
-            const elapsedMs = now.getTime() - this.bot.lastOptimizationAtMs;
-            const totalSeconds = Math.floor(elapsedMs / 1000);
-            const hours = Math.floor(totalSeconds / 3600);
-            const minutes = Math.floor((totalSeconds % 3600) / 60);
-            return `\nLast optimized: ${hours}h${minutes}m`;
-          })()
-          : "\nLast optimized: N/A";
+      const optimizationAgeMsg = formatCombOptimizationAgeMessage(this.bot, now.getTime());
       const lastNetPnl = this.bot.lastNetPnl;
       const closedIndicator = this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
 
@@ -161,10 +152,10 @@ class CombCandleWatcher {
       while (!this.bot.isStopped) {
         try {
           const now = new Date();
-          await this.bot.tmobCandles.ensurePopulated();
+          await this.bot.combCandles.ensurePopulated();
           now.setSeconds(0);
           now.setMilliseconds(0);
-          let currCandles = await this.bot.tmobCandles.getCandles(new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000), now);
+          let currCandles = await this.bot.combCandles.getCandles(new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000), now);
           if (currCandles.length <= this.bot.nSignal) {
             const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
             currCandles.push({
@@ -255,16 +246,7 @@ class CombCandleWatcher {
               : "";
           const tpPbMsg =
             tpPbLevel !== null ? `\nTP_PB fixed (${this.bot.tpPbPercent}% of gap): ${tpPbLevel}` : "";
-          const optimizationAgeMsg =
-            this.bot.lastOptimizationAtMs > 0
-              ? (() => {
-                const elapsedMs = now.getTime() - this.bot.lastOptimizationAtMs;
-                const totalSeconds = Math.floor(elapsedMs / 1000);
-                const hours = Math.floor(totalSeconds / 3600);
-                const minutes = Math.floor((totalSeconds % 3600) / 60);
-                return `\nLast optimized: ${hours}h${minutes}m`;
-              })()
-              : "\nLast optimized: N/A";
+          const optimizationAgeMsg = formatCombOptimizationAgeMessage(this.bot, now.getTime());
           const effectiveMult = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
           const paramsMsg =
             `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +

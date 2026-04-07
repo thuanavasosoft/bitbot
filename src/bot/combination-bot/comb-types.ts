@@ -139,3 +139,20 @@ export type CombInstanceEvent =
     netPnl: number;
     symbol: string;
   };
+
+
+
+export interface IOpenPositionMsgToCopyTrader {
+  id: string;
+  symbol: string;
+  side: string;
+  msgType: "OPEN_POSITION";
+  timestamp: number;
+}
+
+export interface IClosePositionMsgToCopyTrader {
+  id: string;
+  symbol: string;
+  msgType: "CLOSE_POSITION";
+  timestamp: number;
+}

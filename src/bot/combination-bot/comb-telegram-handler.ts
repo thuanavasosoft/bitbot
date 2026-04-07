@@ -6,6 +6,7 @@ import { generatePnLProgressionChart } from "@/utils/image-generator.util";
 import { withRetries, isTransientError } from "./comb-retry";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import type CombBotInstance from "./comb-bot-instance";
+import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -39,6 +40,7 @@ class CombTelegramHandler {
   }
 
   async getFullUpdateMessage(): Promise<string> {
+    const nowMs = Date.now();
     const totalProfit = new BigNumber(this.bot.totalActualCalculatedProfit);
     const runStart = this.bot.runStartTs ?? new Date();
     const { runDurationDisplay } = getRunDuration(runStart);
@@ -59,6 +61,7 @@ Update interval: ${this.bot.updateIntervalMinutes} min
 Trail ATR length: ${this.bot.trailingAtrLength}
 Current trail multiplier: ${this.bot.currTrailMultiplier}
 Last optimized: ${this.bot.lastOptimizationAtMs > 0 ? toIso(this.bot.lastOptimizationAtMs + 1000) : "N/A"}
+Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(this.bot.lastOptimizationAtMs, this.bot.updateIntervalMinutes, nowMs) / 1000))}
 
 === DETAILS ===
 ${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(this.bot.lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(this.bot.lastNetPnl ?? 0).toFixed(2)} USDT)]` : ""}
@@ -111,7 +114,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
         this.bot.queueMsgPriority(`Closing active position for ${this.bot.symbol}...`);
         const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
         this.bot.justManuallyClosedBy = "close_pos";
-        const netPnl = await this.bot.tmobUtils.handlePnL(
+        const netPnl = await this.bot.combUtils.handlePnL(
           typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
           false,
           undefined,

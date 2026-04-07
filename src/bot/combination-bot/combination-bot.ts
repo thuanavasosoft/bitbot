@@ -3,10 +3,13 @@ import TelegramService, { ETGCommand } from "@/services/telegram.service";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
 import { calc_UnrealizedPnl, getRunDuration } from "@/utils/maths.util";
-import { formatFeeAwarePnLLine } from "@/utils/strings.util";
+import { formatFeeAwarePnLLine, generateRandomString } from "@/utils/strings.util";
 import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
-import type { CombInstanceConfig, CombState, CombInstanceEvent } from "./comb-types";
+import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
+import type { CombInstanceConfig, CombState, CombInstanceEvent, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader } from "./comb-types";
+import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
+import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -88,9 +91,57 @@ function discoverCombBotCount(): number {
  * All logic lives in combination-bot folder; no imports from other bots.
  */
 class CombinationBot {
+  combWsServerService: CombWsServerService;
+  combMsgBrokerService: CombMsgBrokerService;
+  connectedCopyTraderLabels: Set<string> = new Set();
+  label: string = envStrRequired("COMB_BOT_LABEL") ?? "Combination Bot " + generateRandomString(10);
+
+  /**
+   * Copy-trading infrastructure: optional RabbitMQ fanout + WebSocket server. Used only when running combination bot.
+   */
+  async startCopyTradingServices(): Promise<void> {
+    TelegramService.queueMsg("🗄 Starting copy trading services...", this.generalChatId);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      await this.combMsgBrokerService.connect();
+
+      this.combWsServerService.start();
+      this.combWsServerService.addMsgHandler((rawMsg, client) => {
+        const msg: IWSMessage = JSON.parse(rawMsg);
+        if (msg.type === "halo") {
+          console.log("halo message received", msg);
+
+          const leverageMap: ILeverageMap = {};
+          if (msg.data.label !== "__verify_connection__") {
+            this.connectedCopyTraderLabels.add(msg.data.label);
+            this.queueGeneralMessage(`🔌 [COMB] Copy trader connected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
+            for (const inst of this.instances) {
+              leverageMap[inst.symbol] = inst.leverage;
+            }
+          }
+
+          client.send(JSON.stringify({
+            type: "welcome",
+            data: leverageMap,
+            label: this.label,
+          } as IWSWelcomeMessage));
+        }
+
+        if (msg.type === "bye") {
+          console.log("bye message received", msg);
+
+          this.connectedCopyTraderLabels.delete(msg.data.label);
+          this.queueGeneralMessage(`🔌 [COMB] Copy trader disconnected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
+        }
+      })
+    } catch (error) {
+      TelegramService.queueMsg("🗄 Error starting copy trading services: " + error, this.generalChatId);
+    }
+  }
+
   private instances: CombBotInstance[] = [];
   private chatIdToInstance: Map<string, CombBotInstance> = new Map();
-  private generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
+  generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
   /** Account total USDT balance (free + frozen) when the general bot run started (for wallet delta). */
   private startQuoteBalanceBn?: BigNumber;
 
@@ -100,11 +151,14 @@ class CombinationBot {
       throw new Error("At least one bot must be configured. Set COMB_BOT_1_SYMBOL (and other COMB_BOT_1_* vars).");
     }
 
+    this.combWsServerService = new CombWsServerService(this);
+    this.combMsgBrokerService = new CombMsgBrokerService(this);
+
     console.log("[COMB] Loading", count, "bot instance(s) (BOT_1, BOT_2, ...)");
 
     for (let i = 1; i <= count; i++) {
       const config = loadCombConfigForBot(i);
-      const instance = new CombBotInstance(config);
+      const instance = new CombBotInstance(config, this);
       const botIndex = i;
       instance.onInstanceEvent = (event) => this.handleInstanceEvent(botIndex, instance, event);
       instance.onGeneralInfoMessage = (msg) =>
@@ -164,10 +218,10 @@ class CombinationBot {
 
   private async getGeneralFullUpdateMessage(): Promise<string> {
     const lines: string[] = ["[COMB] General – full update", ""];
-
+    lines.push(`Label: ${this.label}`);
     const currBalanceBn =
       this.instances.length > 0
-        ? await this.instances[0].tmobUtils.getExchTotalUsdtBalance()
+        ? await this.instances[0].combUtils.getExchTotalUsdtBalance()
         : new BigNumber(0);
     const currQuoteBalance = currBalanceBn.decimalPlaces(4, BigNumber.ROUND_HALF_UP).toFixed(4);
     const startQuote = this.startQuoteBalanceBn ?? null;
@@ -184,7 +238,11 @@ class CombinationBot {
       );
     }
     lines.push("");
-
+    lines.push("=== COPY TRADING ===");
+    lines.push(`🐰 Message broker (RabbitMQ): ${this.combMsgBrokerService.getConnectionStatusText()}`);
+    lines.push(`🔌 Connected Copy traders: ${this.connectedCopyTraderLabels.size}`);
+    lines.push("");
+    const nowMs = Date.now();
     let mergedPnL = 0;
     let earliestRunStart: Date | undefined;
 
@@ -213,6 +271,9 @@ class CombinationBot {
       );
       lines.push(
         `Trail ATR: ${inst.trailingAtrLength} | Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
+      );
+      lines.push(
+        `Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(inst.lastOptimizationAtMs, inst.updateIntervalMinutes, nowMs) / 1000))}`
       );
       lines.push(
         `Triggers: Long ${inst.longTrigger != null ? inst.longTrigger : "N/A"} | Short ${inst.shortTrigger != null ? inst.shortTrigger : "N/A"}`
@@ -329,41 +390,56 @@ class CombinationBot {
 
   private getHelpMessage(_options: { scope: "general" | "instance"; symbol?: string }): string {
     const symbolTag = _options.scope === "instance" && _options.symbol ? ` (${_options.symbol})` : "";
-    const lines = [
-      `[COMB] Combination bot – Telegram commands${symbolTag}`,
-      "",
-      "/help – Show this list of commands.",
-      "/chat_id – Show current chat id (Telegram global command).",
-      "",
-      "/full_update – Show a full status report.",
-      "/pnl_graph – Render the PnL progression chart.",
-      "",
-    ];
+    const header = `[COMB] Combination bot – Telegram commands${symbolTag}`;
+    const para = "\n";
 
     if (_options.scope === "general") {
-      lines.push(
-        "/close_pos all|{SYMBOL} – Close position(s) (e.g. /close_pos all or /close_pos BTCUSDT).",
-        "/temp_tm all|{SYMBOL} {value} – Set temporary trail multiplier (e.g. /temp_tm all 20 or /temp_tm BTCUSDT 20). Cleared when position closes.",
-        "/tp_pb all|{SYMBOL} {percent} – Fixed TP at % of avg–LTP gap (e.g. /tp_pb all 50). 0 = disabled.",
-        "/un_pnl – Show current unrealized PnL for all instances (one symbol per line)."
-      );
-      return lines.join("\n");
+      return [
+        header,
+        para,
+        "/help — Show this list of commands.",
+        para,
+        "/chat_id — Show current chat id (Telegram global command).",
+        para,
+        "/full_update — Show a full status report.",
+        para,
+        "/pnl_graph — Render the PnL progression chart.",
+        para,
+        "/close_pos all|{SYMBOL} — Close position(s) \n(e.g. /close_pos all or /close_pos BTCUSDT).",
+        para,
+        "/temp_tm all|{SYMBOL} {value} — Set temporary trail multiplier \n(e.g. /temp_tm all 20). Cleared when position closes.",
+        para,
+        "/tp_pb all|{SYMBOL} {percent} — Fixed TP at % of avg–LTP gap \n(e.g. /tp_pb all 50). 0 = disabled.",
+        para,
+        "/un_pnl — Show current unrealized PnL for all instances (one symbol per line).",
+        para,
+        "/reopt_ls — List all symbols with time until next reoptimization.",
+      ].join("\n");
     }
 
-    lines.push(
-      "",
-      "/close_pos – Close the active position for this bot instance (instance keeps running).",
-      "/temp_tm {value} – Set temporary trail multiplier (e.g. /temp_tm 100). Cleared when position closes.",
-      "/tp_pb {percent} – Fixed TP: avg ± (gap×%) where gap = |LTP−avg| at command time (e.g. /tp_pb 50). 0 = disabled.",
-      ""
-    );
-    lines.push(
+    return [
+      header,
+      para,
+      "/help — Show this list of commands.",
+      para,
+      "/chat_id — Show current chat id (Telegram global command).",
+      para,
+      "/full_update — Show a full status report.",
+      para,
+      "/pnl_graph — Render the PnL progression chart.",
+      para,
+      "/close_pos — Close the active position for this bot instance (instance keeps running).",
+      para,
+      "/temp_tm {value} — Set temporary trail multiplier \n(e.g. /temp_tm 100). Cleared when position closes.",
+      para,
+      "/tp_pb {percent} — Fixed TP: avg ± (gap×%) where gap = |LTP−avg| at command time \n(e.g. /tp_pb 50). 0 = disabled.",
+      para,
       "Notes:",
-      "- This is an instance channel. Commands act only on this symbol.",
-      "- /close_pos closes the position; the instance continues running and waits for the next signal."
-    );
-
-    return lines.join("\n");
+      "",
+      "• This is an instance channel. Commands act only on this symbol.",
+      para,
+      "• /close_pos closes the position; the instance continues running and waits for the next signal.",
+    ].join("\n");
   }
 
   private registerTelegramHandlers(): void {
@@ -405,6 +481,42 @@ class CombinationBot {
       } catch (err) {
         TelegramService.queueMsg(`Failed to get update: ${err instanceof Error ? err.message : String(err)}`, String(chatId));
       }
+    });
+
+    TelegramService.appendTgCmdHandler("broadcast_open_position", async (ctx) => {
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+      const symbol = parts[1];
+      const side = parts[2];
+
+      const msg: IOpenPositionMsgToCopyTrader = {
+        id: generateRandomString(10),
+        symbol,
+        side: side ?? "BUY",
+        msgType: "OPEN_POSITION",
+        timestamp: Date.now(),
+      }
+
+      console.log("broadcast_open_position", msg);
+      this.combWsServerService.broadcastMsg(JSON.stringify(msg));
+      this.combMsgBrokerService.publishFanout(JSON.stringify(msg));
+    });
+
+    TelegramService.appendTgCmdHandler("broadcast_close_position", async (ctx) => {
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+      const symbol = parts[1];
+
+      const msg: IClosePositionMsgToCopyTrader = {
+        id: generateRandomString(10),
+        symbol,
+        msgType: "CLOSE_POSITION",
+        timestamp: Date.now(),
+      }
+
+      console.log("broadcast_close_position", msg);
+      this.combWsServerService.broadcastMsg(JSON.stringify(msg));
+      this.combMsgBrokerService.publishFanout(JSON.stringify(msg));
     });
 
     TelegramService.appendTgCmdHandler("pnl_graph", async (ctx) => {
@@ -669,7 +781,7 @@ class CombinationBot {
         for (const inst of this.instances) {
           const pos = inst.currActivePosition;
           if (!pos) {
-            lines.push(`${inst.symbol} - No open position`);
+            lines.push(`${inst.symbol} - No open position\n`);
             continue;
           }
           const ltpPrice = await ExchangeService.getLTPPrice(inst.symbol);
@@ -684,9 +796,9 @@ class CombinationBot {
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
           const lastNetPnl = inst.lastNetPnl;
-          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]\n` : "";
           lines.push(
-            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT\n${closingIndicator}\n`
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT\n${closingIndicator}`
           );
         }
         const instancesWithOpenPosition = this.instances.filter(
@@ -710,14 +822,37 @@ class CombinationBot {
         TelegramService.queueMsgPriority(`Failed to get unrealized PnL: ${err instanceof Error ? err.message : String(err)}`, this.generalChatId);
       }
     });
+
+    TelegramService.appendTgCmdHandler("reopt_ls", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /reopt_ls in the general channel.", String(chatId));
+        return;
+      }
+      const now = Date.now();
+      const lines: string[] = ["[COMB] Reoptimization due in:", ""];
+      for (const inst of this.instances) {
+        const remainingMs = getCombNextOptimizationRemainingMs(
+          inst.lastOptimizationAtMs,
+          inst.updateIntervalMinutes,
+          now
+        );
+        const nextStr = formatDurationAsHoursMinutes(Math.floor(remainingMs / 1000));
+        lines.push(`${inst.symbol} – ${nextStr}`);
+      }
+      TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
+    });
   }
 
   async startMakeMoney(): Promise<void> {
-    console.log("[COMB] Starting", this.instances.length, "instance(s)");
     this.queueGeneralMessage(`🚀 Starting Combination Bot for ${this.instances.length} instance(s)`);
+    await this.startCopyTradingServices();
+
+    console.log("[COMB] Starting", this.instances.length, "instance(s)");
 
     if (this.instances.length > 0) {
-      const startBal = await this.instances[0].tmobUtils.getExchTotalUsdtBalance();
+      const startBal = await this.instances[0].combUtils.getExchTotalUsdtBalance();
       this.startQuoteBalanceBn = startBal;
       console.log(
         `[COMB] General bot startQuoteBalance=${startBal.decimalPlaces(8, BigNumber.ROUND_HALF_UP).toFixed(8)} USDT`

@@ -769,7 +769,7 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
     this.bot.isClosingPosition = true;
     try {
       const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-      const netPnl = await this.bot.tmobUtils.handlePnL(
+      const netPnl = await this.bot.combUtils.handlePnL(
         typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
         false,
         undefined,
