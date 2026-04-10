@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { Context, Telegraf } from 'telegraf';
 import type { Update } from 'telegraf/types';
 
@@ -7,11 +8,13 @@ export enum ETGCommand {
   ChatID = "chat_id",
 }
 
+type TelegramQueuedItem = { message: string | Buffer };
+
 class TelegramService {
   private static chatId: string;
   private static botToken: string;
-  private static messageQueue: { message: string | Buffer, chatId: string }[] = [];
-  private static isProcessing: boolean = false;
+  private static queuesByChat = new Map<string, TelegramQueuedItem[]>();
+  private static chatProcessorsActive = new Set<string>();
   private static appendedTgCmdHandler: { [cmd: string]: (ctx: Context<Update>) => Promise<void> | void } = {};
 
   private static bot: Telegraf<Context<Update>>
@@ -26,24 +29,43 @@ class TelegramService {
     this.startTgBot(); // Start the bot
   }
 
-  static queueMsg(message: string | Buffer, chatId?: string): void {
-    TelegramService.messageQueue.push({ message: message, chatId: chatId || this.chatId || process.env.TELEGRAM_CHAT_ID! });
-    if (!TelegramService.isProcessing) {
-      TelegramService.processQueue();
+  private static resolveChatId(chatId?: string): string {
+    return chatId || this.chatId || process.env.TELEGRAM_CHAT_ID!;
+  }
+
+  private static enqueue(chatId: string, item: TelegramQueuedItem, atFront: boolean): void {
+    let q = this.queuesByChat.get(chatId);
+    if (!q) {
+      q = [];
+      this.queuesByChat.set(chatId, q);
     }
+    if (atFront) {
+      q.unshift(item);
+    } else {
+      q.push(item);
+    }
+    void this.processChatQueue(chatId);
+  }
+
+  static queueMsg(message: string | Buffer, chatId?: string): void {
+    this.enqueue(this.resolveChatId(chatId), { message }, false);
   }
 
   /** Queue a message at the front so it is sent before other queued messages (higher priority). */
   static queueMsgPriority(message: string | Buffer, chatId?: string): void {
-    const resolvedChatId = chatId || this.chatId || process.env.TELEGRAM_CHAT_ID!;
-    TelegramService.messageQueue.unshift({ message, chatId: resolvedChatId });
-    if (!TelegramService.isProcessing) {
-      TelegramService.processQueue();
-    }
+    this.enqueue(this.resolveChatId(chatId), { message }, true);
   }
 
   /** Telegram message length limit. */
   private static readonly TG_MAX_MESSAGE_LENGTH = 4096;
+
+  /** JPEG quality (1–100) for outgoing photos; 50 ≈ 50% of max quality for smaller uploads. */
+  private static readonly TELEGRAM_PHOTO_JPEG_QUALITY = 50;
+
+  /** Minimum gap between sends to the same chat (reduces 429s; chats are independent). */
+  private static readonly MIN_SEND_INTERVAL_MS = 150;
+
+  private static readonly TG_429_PREFIX = "Error: 429: Too Many Requests: retry after ";
 
   /**
    * Queue a long string as multiple priority messages (each under Telegram's limit).
@@ -76,68 +98,101 @@ class TelegramService {
     }
     if (chunk) chunks.push(chunk);
     for (let i = chunks.length - 1; i >= 0; i--) {
-      TelegramService.messageQueue.unshift({ message: chunks[i], chatId: resolvedChatId });
-    }
-    if (!TelegramService.isProcessing) {
-      TelegramService.processQueue();
+      this.enqueue(resolvedChatId, { message: chunks[i] }, true);
     }
   }
 
-  private static async processQueue(): Promise<void> {
-    this.isProcessing = true;
+  private static parse429RetryAfterMs(error: unknown): number | null {
+    const stringError = String(error);
+    if (!stringError.includes(this.TG_429_PREFIX)) {
+      return null;
+    }
+    const parts = stringError.split(this.TG_429_PREFIX);
+    const retrySeconds = Number(parts[1]?.trim().split(/\s/)[0]);
+    if (!Number.isFinite(retrySeconds) || retrySeconds < 0) {
+      return null;
+    }
+    return retrySeconds * 1000;
+  }
 
-    while (this.messageQueue.length > 0) {
-      const message = this.messageQueue.shift();
-      if (message) {
+  /**
+   * Serializes sends per chatId; multiple chats run in parallel.
+   * On 429, only this chat waits retry_after; the failed item is retried first.
+   */
+  private static async processChatQueue(chatId: string): Promise<void> {
+    if (this.chatProcessorsActive.has(chatId)) {
+      return;
+    }
+    this.chatProcessorsActive.add(chatId);
+    try {
+      while (true) {
+        const q = this.queuesByChat.get(chatId);
+        if (!q || q.length === 0) {
+          this.queuesByChat.delete(chatId);
+          break;
+        }
+        const item = q.shift()!;
         try {
-          if (typeof message.message === 'string') {
-            await this.sendMsg(message.message, message.chatId);
-          } else if (Buffer.isBuffer(message.message)) {
-            await this.sendImg(message.message, message.chatId);
+          if (typeof item.message === "string") {
+            await this.sendMsg(item.message, chatId);
+          } else if (Buffer.isBuffer(item.message)) {
+            await this.sendImg(item.message, chatId);
           }
         } catch (error) {
-          const stringError = error + ""
-          console.log("stringError: ", stringError, `On sending message: ${message.message}`);
-
-          const errMsg = "Error: 429: Too Many Requests: retry after "
-          if ((stringError).includes(errMsg)) {
-            const splitted = stringError.split(errMsg)
-            console.log("splitted: ", splitted);
-
-            const retryNumber = splitted[1]
-            console.log("retryNumber: ", retryNumber);
-            const sleepTime = Number(retryNumber) * 1000
-            console.log("sleepTime: ", sleepTime);
-
-            await new Promise(r => setTimeout(r, sleepTime));
-            this.messageQueue.unshift(message)
+          const stringError = String(error);
+          console.log(
+            "stringError:",
+            stringError,
+            typeof item.message === "string"
+              ? `On sending message: ${item.message}`
+              : `On sending image (buffer length: ${item.message.length})`
+          );
+          const retryMs = this.parse429RetryAfterMs(error);
+          if (retryMs !== null) {
+            console.log("Telegram 429 retry after ms: ", retryMs);
+            await new Promise((r) => setTimeout(r, retryMs));
+            q.unshift(item);
           }
         }
 
-        await new Promise(r => setTimeout(r, 1000));
+        const stillQueued = this.queuesByChat.get(chatId);
+        if (stillQueued && stillQueued.length > 0) {
+          await new Promise((r) => setTimeout(r, this.MIN_SEND_INTERVAL_MS));
+        }
+      }
+    } finally {
+      this.chatProcessorsActive.delete(chatId);
+      if (this.queuesByChat.get(chatId)?.length) {
+        void this.processChatQueue(chatId);
       }
     }
+  }
 
-    this.isProcessing = false;
+  private static totalQueuedCount(): number {
+    let n = 0;
+    for (const q of this.queuesByChat.values()) {
+      n += q.length;
+    }
+    return n;
   }
 
   static async waitForQueueIdle(timeoutMs = 15000, pollMs = 200): Promise<boolean> {
     const start = Date.now();
-    while (this.isProcessing || this.messageQueue.length > 0) {
+    while (this.totalQueuedCount() > 0 || this.chatProcessorsActive.size > 0) {
       if (Date.now() - start >= timeoutMs) {
         return false;
       }
-      await new Promise(r => setTimeout(r, pollMs));
+      await new Promise((r) => setTimeout(r, pollMs));
     }
     return true;
   }
 
   static async sendImg(img: Buffer, chatId: string): Promise<void> {
-    try {
-      await this.bot.telegram.sendPhoto(chatId, { source: img });
-    } catch (error) {
-      throw error;
-    }
+    const compressed = await sharp(img)
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .jpeg({ quality: this.TELEGRAM_PHOTO_JPEG_QUALITY, mozjpeg: true })
+      .toBuffer();
+    await this.bot.telegram.sendPhoto(chatId, { source: compressed });
   }
 
   static async sendMsg(message: string, chatId: string): Promise<void> {
