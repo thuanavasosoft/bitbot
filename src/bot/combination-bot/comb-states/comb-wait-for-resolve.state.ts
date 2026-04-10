@@ -5,6 +5,8 @@ import { withRetries, isTransientError } from "../comb-retry";
 import type CombBotInstance from "../comb-bot-instance";
 import { TickRoundMode } from "@/bot/trail-multiplier-optimization-bot/tmob-states/tmob-wait-for-resolve.state";
 import { EEventBusEventType } from "@/utils/event-bus.util";
+import { IClosePositionMsgToCopyTrader } from "../comb-types";
+import { generateRandomString } from "@/utils/strings.util";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -457,6 +459,13 @@ class CombWaitForResolveState {
         isLiquidation: true,
         exitReason: "liquidation_exit",
       });
+
+      this.bot.combUtils.broadcastToCopyTraders(JSON.stringify({
+        id: generateRandomString(10),
+        symbol: this.bot.symbol,
+        msgType: "CLOSE_POSITION",
+        timestamp: Date.now(),
+      } as IClosePositionMsgToCopyTrader));
       return true;
     } catch (error) {
       console.error("[COMB LIQ CHECK] _checkAndFinalizeLiquidationByPrice error:", error);
@@ -694,9 +703,18 @@ class CombWaitForResolveState {
           fillTimestamp: update.updateTime ?? Date.now(),
           isLiquidation,
           exitReason: isLiquidation ? "liquidation_exit" : "signal_change",
-          suppressStateChange: true,
+          suppressStateChange: isLiquidation ? false : true,
         });
-        this._stopAllWatchers();
+
+        if (isLiquidation) {
+          this._stopAllWatchers();
+          this.bot.combUtils.broadcastToCopyTraders(JSON.stringify({
+            id: generateRandomString(10),
+            symbol: this.bot.symbol,
+            msgType: "CLOSE_POSITION",
+            timestamp: Date.now(),
+          } as IClosePositionMsgToCopyTrader));
+        }
       }
 
       this._clearLiquidationCheckInterval();
