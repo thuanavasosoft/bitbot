@@ -11,6 +11,8 @@ export interface IWSTradeTick {
   timestamp: number;
 }
 
+export type TTimeInForce = "GTC" | "IOC" | "FOK";
+
 export interface IPlaceOrderParams {
   symbol: string;
   clientOrderId: string;
@@ -19,6 +21,7 @@ export interface IPlaceOrderParams {
   baseAmt?: number;
   quoteAmt?: number;
   orderPrice?: number;
+  timeInForce?: TTimeInForce;
 }
 
 export interface IPlaceOrderResponse {
