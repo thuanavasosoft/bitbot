@@ -7,6 +7,7 @@ import BreakoutBot from '@/bot/breakout-bot/breakout-bot';
 import AutoAdjustBot from '@/bot/auto-adjust-bot/auto-adjust-bot';
 import TrailMultiplierOptimizationBot from '@/bot/trail-multiplier-optimization-bot/trail-multiplier-optimization-bot';
 import CombinationBot from '@/bot/combination-bot/combination-bot';
+import FollowMartingaleBot from '@/bot/follow-martingale/follow-martingale-bot';
 
 async function runProgram() {
   try {
@@ -55,6 +56,9 @@ async function runProgram() {
       await bot.startMakeMoney();
     } else if (botMode === "combination_bot") {
       const bot = new CombinationBot();
+      await bot.startMakeMoney();
+    } else if (botMode === "follow_martingale_bot") {
+      const bot = new FollowMartingaleBot();
       await bot.startMakeMoney();
     }
 

@@ -139,6 +139,7 @@ export async function generateImageOfCandlesWithSupportResistance(
   trailingStopRaw?: number | null,
   trailingStopBuffered?: number | null,
   tpPbLevel?: number | null,
+  takeProfitLevel?: number | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
   const ctx = canvas.getContext('2d');
@@ -327,6 +328,33 @@ export async function generateImageOfCandlesWithSupportResistance(
         backgroundColor: tpColor,
         color: "#FFFFFF",
         xAdjust: -4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
+  if (takeProfitLevel !== null && takeProfitLevel !== undefined) {
+    const tpColor = "#8A2BE2"; // BlueViolet
+    annotations.takeProfit = {
+      type: 'line' as any,
+      yMin: takeProfitLevel,
+      yMax: takeProfitLevel,
+      borderColor: tpColor,
+      borderWidth: 2,
+      borderDash: [6, 3],
+      label: {
+        display: true,
+        content: [`Take Profit: ${takeProfitLevel}`],
+        position: "end",
+        backgroundColor: tpColor,
+        color: "#FFFFFF",
+        xAdjust: 4,
         font: {
           size: 11,
           weight: "bold",
