@@ -11,7 +11,7 @@ const CANDLE_WATCHER_DELAY_AFTER_MINUTE_MS = 500;
 class FMCandleWatcher {
   isCandleWatcherStarted = false;
 
-  constructor(private bot: FollowMartingaleBot) {}
+  constructor(private bot: FollowMartingaleBot) { }
 
   private async getChartCandles(now: Date): Promise<ICandleInfo[]> {
     await this.bot.candles.ensurePopulated();
@@ -84,11 +84,12 @@ class FMCandleWatcher {
       const activeCycleMsg = activeSide ? `\nActive side: ${activeSide.toUpperCase()}` : "";
       const avgMsg = this.bot.currActivePosition ? `\nAvg price: ${this.bot.currActivePosition.avgPrice}` : "";
       const tpMsg = takeProfitLevel != null ? `\nTake profit: ${takeProfitLevel}` : "";
+      const liqMsg = this.bot.currActivePosition ? `\nLiquidation: ${this.bot.currActivePosition.liquidationPrice}` : "";
 
       TelegramService.queueMsg(
         `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
         `Resistance: ${this.bot.currentResistance ?? "N/A"}\nLong Trigger: ${this.bot.currentLongTrigger ?? "N/A"}\n` +
-        `Support: ${this.bot.currentSupport ?? "N/A"}\nShort Trigger: ${this.bot.currentShortTrigger ?? "N/A"}${activeCycleMsg}${avgMsg}${tpMsg}`
+        `Support: ${this.bot.currentSupport ?? "N/A"}\nShort Trigger: ${this.bot.currentShortTrigger ?? "N/A"}${activeCycleMsg}${avgMsg}${tpMsg}${liqMsg}`
       );
     } catch (error) {
       this.bot.queueMsg(`⚠️ Failed to refresh martingale chart: ${error instanceof Error ? error.message : String(error)}`);

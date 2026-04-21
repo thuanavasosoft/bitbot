@@ -1,26 +1,9 @@
 import { RingBuffer } from "@/utils/ring-buffer.util";
 import type { ICandleInfo, TCandleResolution } from "@/services/exchange-service/exchange-type";
 import ExchangeService from "@/services/exchange-service/exchange-service";
+import { AsyncMutex } from "@/utils/async-mutex.util";
 import { isTransientError, withRetries } from "./fm-retry";
 import type FollowMartingaleBot from "./follow-martingale-bot";
-
-class AsyncMutex {
-  private queue: Array<() => void> = [];
-  private locked = false;
-
-  async acquire(): Promise<void> {
-    if (!this.locked) {
-      this.locked = true;
-      return;
-    }
-    return new Promise<void>((resolve) => this.queue.push(resolve));
-  }
-
-  release(): void {
-    if (this.queue.length > 0) this.queue.shift()!();
-    else this.locked = false;
-  }
-}
 
 const RESOLUTION_TO_MS: Record<TCandleResolution, number> = {
   "1Min": 60_000,

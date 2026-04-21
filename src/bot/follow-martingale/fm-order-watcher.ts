@@ -32,14 +32,14 @@ class FMOrderWatcher {
     if (!clientOrderId) {
       return {
         wait: () => Promise.reject(new Error("[FMOrderWatcher] Invalid clientOrderId supplied")),
-        cancel: () => {},
+        cancel: () => { },
       };
     }
 
     if (this.pendingRequests.has(clientOrderId)) {
       return {
         wait: () => Promise.reject(new Error(`[FMOrderWatcher] Already awaiting clientOrderId ${clientOrderId}`)),
-        cancel: () => {},
+        cancel: () => { },
       };
     }
 
@@ -67,7 +67,9 @@ class FMOrderWatcher {
         return Promise.reject(pending.earlyResult.value);
       }
 
-      const waitTimeout = timeoutMs ?? this.defaultTimeoutMs;
+      let waitTimeout = timeoutMs ?? this.defaultTimeoutMs;
+      if (Number.isNaN(waitTimeout)) waitTimeout = 30_000;
+
       pending.timeoutHandle = setTimeout(() => {
         this.pendingRequests.delete(clientOrderId);
         rejectPromise(new Error(`[FMOrderWatcher] Timed out waiting for fill (clientOrderId=${clientOrderId})`));

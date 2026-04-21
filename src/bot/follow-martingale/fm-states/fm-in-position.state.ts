@@ -7,12 +7,15 @@ class FMInPositionState {
   private orderUpdateRemover?: () => void;
   private positionUpdateRemover?: () => void;
   private refreshLoopAbort = false;
+  private tpRestLoopAbort = false;
   private liquidationCheckInProgress = false;
+  private tpRestCheckInProgress = false;
 
-  constructor(private bot: FollowMartingaleBot) {}
+  constructor(private bot: FollowMartingaleBot) { }
 
   async onEnter(): Promise<void> {
     this.refreshLoopAbort = false;
+    this.tpRestLoopAbort = false;
     if (!this.bot.currActivePosition) {
       throw new Error("[FM] Cannot enter in-position state without an active position");
     }
@@ -38,6 +41,7 @@ class FMInPositionState {
     await this.bot.refreshSignalLevels();
     await this.bot.queueTakeProfitRefresh("state enter", false);
     void this.runRefreshLoop();
+    void this.runTpRestCheckLoop();
   }
 
   private async runRefreshLoop(): Promise<void> {
@@ -84,21 +88,63 @@ class FMInPositionState {
     if (this.bot.isFinalizingPosition) return;
 
     try {
-      this.bot.isClosingPosition = true;
-      const closedPosition = await this.bot.orderExecutor.fetchClosedPositionSnapshot(this.bot.currActivePosition.id);
-      if (!closedPosition) {
-        throw new Error(`[FM] Could not fetch closed position snapshot for TP fill ${this.bot.currActivePosition.id}`);
-      }
-      this.bot.queueMsg(
-        `✅ TP limit filled\nTP: ${this.bot.activeTpPrice}\nExecution: ${update.executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice}`
-      );
-      const fillTimestamp = update.updateTime ?? Date.now();
-      const snapshot = this.bot.buildExitSnapshot(closedPosition, "tp_limit", fillTimestamp, fillTimestamp, false);
-      await this.bot.finalizeClosedPosition(snapshot);
+      await this.finalizeTpFill(update.executionPrice, update.updateTime, "ws");
     } catch (error) {
       console.error("[FM] TP fill finalization failed:", error);
       this.bot.queueMsg(`⚠️ Failed to finalize TP close: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  private async runTpRestCheckLoop(): Promise<void> {
+    const intervalMs = 30_000;
+    while (!this.tpRestLoopAbort) {
+      try {
+        await this.checkTpOrderViaRest();
+      } catch (error) {
+        console.error("[FM] REST TP check failed:", error);
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
+  private async checkTpOrderViaRest(): Promise<void> {
+    if (this.tpRestCheckInProgress) return;
+    if (!this.bot.currActivePosition || this.bot.isFinalizingPosition) return;
+    if (!this.bot.activeTpClientOrderId) return;
+
+    this.tpRestCheckInProgress = true;
+    try {
+      const clientOrderId = this.bot.activeTpClientOrderId;
+      const order = await ExchangeService.getOrderDetail(this.bot.symbol, clientOrderId);
+      if (!order || order.clientOrderId !== clientOrderId) return;
+      if (order.status !== "filled") return;
+      await this.finalizeTpFill(order.avgPrice, order.updateTs, "rest");
+    } finally {
+      this.tpRestCheckInProgress = false;
+    }
+  }
+
+  private async finalizeTpFill(executionPrice?: number, fillTimestampRaw?: number, source: "ws" | "rest" = "ws"): Promise<void> {
+    if (!this.bot.currActivePosition || this.bot.isFinalizingPosition) return;
+    this.bot.isClosingPosition = true;
+
+    const closedPosition = await this.bot.orderExecutor.fetchClosedPositionSnapshot(this.bot.currActivePosition.id);
+    if (!closedPosition) {
+      throw new Error(`[FM] Could not fetch closed position snapshot for TP fill ${this.bot.currActivePosition.id}`);
+    }
+
+    const tpPrice = this.bot.activeTpPrice;
+    this.bot.queueMsg(
+      `✅ TP limit filled (${source.toUpperCase()})\nTP: ${tpPrice}\nExecution: ${executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice}`
+    );
+
+    this.bot.activeTpClientOrderId = undefined;
+    this.bot.activeTpPrice = undefined;
+    this.bot.activeTpQty = undefined;
+
+    const fillTimestamp = fillTimestampRaw ?? Date.now();
+    const snapshot = this.bot.buildExitSnapshot(closedPosition, "tp_limit", fillTimestamp, fillTimestamp, false);
+    await this.bot.finalizeClosedPosition(snapshot);
   }
 
   private async handleTradePrice(price: number, tradeTimeMs: number): Promise<void> {
@@ -107,17 +153,21 @@ class FMInPositionState {
       this.bot.latestTradeTimeMs = tradeTimeMs;
 
       if (!this.bot.currActivePosition || this.bot.isFinalizingPosition) return;
+      await this.bot.lockSignalRefresh();
+      try {
+        await this.maybeCheckLiquidation(price);
+        if (!this.bot.currActivePosition || this.bot.isFinalizingPosition) return;
 
-      await this.maybeCheckLiquidation(price);
-      if (!this.bot.currActivePosition || this.bot.isFinalizingPosition) return;
+        if (!this.bot.isClosingPosition && this.shouldTriggerStopLoss(price)) {
+          await this.triggerStopLossClose();
+          return;
+        }
 
-      if (!this.bot.isClosingPosition && this.shouldTriggerStopLoss(price)) {
-        await this.triggerStopLossClose();
-        return;
-      }
-
-      if (!this.bot.isClosingPosition && !this.bot.isAddInFlight && this.shouldAddLeg(price)) {
-        await this.addNextLeg();
+        if (!this.bot.isClosingPosition && !this.bot.isAddInFlight && this.shouldAddLeg(price)) {
+          await this.addNextLeg();
+        }
+      } finally {
+        this.bot.releaseSignalRefresh();
       }
     } catch (error) {
       console.error("[FM] handleTradePrice failed:", error);
@@ -299,6 +349,7 @@ TP: ${this.bot.activeTpPrice}`
 
   async onExit(): Promise<void> {
     this.refreshLoopAbort = true;
+    this.tpRestLoopAbort = true;
     this.tradeListenerRemover?.();
     this.orderUpdateRemover?.();
     this.positionUpdateRemover?.();

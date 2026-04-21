@@ -433,6 +433,10 @@ class BinanceExchange implements IExchangeInstance {
       newClientOrderId: params.clientOrderId,
     };
 
+    if (params.orderType !== "market" && params.timeInForce) {
+      payload.timeInForce = params.timeInForce;
+    }
+
     let orderQuantity = typeof params.baseAmt === "number" ? params.baseAmt : undefined;
 
     if (typeof orderQuantity !== "number" && typeof params.quoteAmt === "number") {

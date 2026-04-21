@@ -12,6 +12,7 @@ import TelegramService from "@/services/telegram.service";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import { formatFeeAwarePnLLine, getPositionDetailMsg } from "@/utils/strings.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
+import { AsyncMutex } from "@/utils/async-mutex.util";
 import FMCandles from "./fm-candles";
 import FMOrderExecutor from "./fm-order-executor";
 import FMOrderWatcher from "./fm-order-watcher";
@@ -102,6 +103,8 @@ class FollowMartingaleBot {
   isFinalizingPosition = false;
   isAddInFlight = false;
   isStopped = false;
+
+  private signalRefreshMutex = new AsyncMutex();
 
   orderWatcher: FMOrderWatcher;
   candles: FMCandles;
@@ -310,9 +313,9 @@ class FollowMartingaleBot {
     );
     this.queueMsg(
       `🥳 Leg 1 entered (${targetSide.toUpperCase()}) — reconciled from exchange\nAvg Price: ${pos.avgPrice}\nQty: ${baseQty}\n` +
-        (this.cycleWalletAtOpenUsdt !== undefined
-          ? `Cycle wallet at open: ${this.cycleWalletAtOpenUsdt.toFixed(4)} USDT`
-          : "")
+      (this.cycleWalletAtOpenUsdt !== undefined
+        ? `Cycle wallet at open: ${this.cycleWalletAtOpenUsdt.toFixed(4)} USDT`
+        : "")
     );
     await this.queueTakeProfitRefresh("initial entry (reconciled)", true);
     this.stateBus.emit(EEventBusEventType.StateChange);
@@ -425,7 +428,7 @@ class FollowMartingaleBot {
     await this.queueTakeProfitRefresh(`leg ${legIndex} entered (reconciled)`, true);
     this.queueMsg(
       `➕ Added leg ${legIndex}/${this.maxLegs} — reconciled from exchange\nFill: ${fillPrice}\nNew avg: ${pos.avgPrice}\n` +
-        `Added qty (approx): ${deltaQty}\nPosition size: ${newSizeAbs}\nTP: ${this.activeTpPrice}`
+      `Added qty (approx): ${deltaQty}\nPosition size: ${newSizeAbs}\nTP: ${this.activeTpPrice}`
     );
     return true;
   }
@@ -471,17 +474,34 @@ class FollowMartingaleBot {
     return lastLeg.enteredAtMs + this.signalN * this.candles.intervalMs;
   }
 
-  async refreshSignalLevels(): Promise<void> {
-    await this.candles.ensurePopulated();
-    const candles = await this.candles.toArray();
-    if (candles.length < this.signalN) return;
+  async lockSignalRefresh(): Promise<void> {
+    await this.signalRefreshMutex.acquire();
+  }
 
-    const window = candles.slice(-this.signalN);
-    this.currentResistance = Math.max(...window.map((c) => c.highPrice));
-    this.currentSupport = Math.min(...window.map((c) => c.lowPrice));
-    this.currentLongTrigger = this.currentResistance;
-    this.currentShortTrigger = this.currentSupport;
-    this.lastSignalUpdateTime = Date.now();
+  releaseSignalRefresh(): void {
+    this.signalRefreshMutex.release();
+  }
+
+  async refreshSignalLevels(): Promise<void> {
+    await this.lockSignalRefresh();
+    try {
+      await this.candles.ensurePopulated();
+      const candles = await this.candles.toArray();
+      if (candles.length < this.signalN) return;
+
+      const window = candles.slice(-this.signalN);
+      this.currentResistance = Math.max(...window.map((c) => c.highPrice));
+      this.currentSupport = Math.min(...window.map((c) => c.lowPrice));
+
+      this.currentResistance = this.currentResistance
+      this.currentSupport = this.currentSupport
+
+      this.currentLongTrigger = this.currentResistance;
+      this.currentShortTrigger = this.currentSupport;
+      this.lastSignalUpdateTime = Date.now();
+    } finally {
+      this.releaseSignalRefresh();
+    }
   }
 
   async queueTakeProfitRefresh(reason: string, force = false): Promise<void> {
@@ -509,6 +529,7 @@ class FollowMartingaleBot {
     if (!force && this.activeTpClientOrderId && samePrice && sameQty) return;
 
     const prevTpPrice = this.activeTpPrice;
+    const prevTPId = this.activeTpClientOrderId;
     if (this.activeTpClientOrderId) {
       await this.cancelActiveTpOrder("replacing TP");
     }
@@ -518,18 +539,20 @@ class FollowMartingaleBot {
     this.activeTpPrice = tpPrice;
     this.activeTpQty = tpQty;
 
-    if (prevTpPrice !== undefined) {
+    if (prevTpPrice !== undefined && prevTPId !== clientOrderId) {
       this.queueMsg(
-        `🎯 TP updated (${reason})\nOld TP: ${prevTpPrice}\nNew TP: ${tpPrice}\nQty: ${tpQty}`
+        `🎯 TP limit updated (${reason})\nOld TP ID: $${prevTPId}\nOld Price: ${prevTpPrice} \nNew TP ID: ${clientOrderId}\nNew Price:${tpPrice}\nNewQty: ${tpQty}`
       );
     } else {
-      this.queueMsg(`🎯 TP limit placed (${reason})\nTP: ${tpPrice}\nQty: ${tpQty}`);
+      this.queueMsg(`🎯 TP limit placed (${reason})\nClient ID: ${clientOrderId}\nPrice: ${tpPrice}\nQty: ${tpQty}`);
     }
   }
 
   async cancelActiveTpOrder(reason = "clearing TP"): Promise<void> {
     if (!this.activeTpClientOrderId) return;
+    console.log(`Canceling active tp order (${this.activeTpClientOrderId}) reason: ${reason}`);
     const clientOrderId = this.activeTpClientOrderId;
+    let shouldClearTpState = false;
     try {
       await withRetries(() => ExchangeService.cancelOrder(this.symbol, clientOrderId), {
         label: "[FM] cancelOrder (tp)",
@@ -540,10 +563,24 @@ class FollowMartingaleBot {
           console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
       });
       this.queueMsg(`🧹 TP limit canceled (${reason})\nClient Order ID: ${clientOrderId}`);
+      shouldClearTpState = true;
     } catch (error) {
       console.warn(`[FM] Failed to cancel TP ${clientOrderId}:`, error);
+      try {
+        const order = await withRetries(() => ExchangeService.getOrderDetail(this.symbol, clientOrderId), {
+          label: "[FM] getOrderDetail (tp cancel verify)",
+          retries: 2,
+          minDelayMs: 2000,
+          isTransientError,
+          onRetry: ({ attempt, delayMs, error: verifyError, label }) =>
+            console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, verifyError),
+        });
+        shouldClearTpState = order?.status === "canceled" || order?.status === "filled";
+      } catch (verifyError) {
+        console.warn(`[FM] Failed to verify TP status ${clientOrderId}:`, verifyError);
+      }
     } finally {
-      if (this.activeTpClientOrderId === clientOrderId) {
+      if (shouldClearTpState && this.activeTpClientOrderId === clientOrderId) {
         this.activeTpClientOrderId = undefined;
         this.activeTpPrice = undefined;
         this.activeTpQty = undefined;
@@ -665,8 +702,8 @@ class FollowMartingaleBot {
         this.queueMsg(pnlChartImage);
         this.queueMsg(
           `📊 PnL Progression Chart (last ${rollingHistory.length} resolves, max 500)\n` +
-            `Total resolves recorded: ${this.pnlHistory.length}\n` +
-            `Current PnL: ${this.totalActualCalculatedProfit >= 0 ? "🟩" : "🟥"} ${this.totalActualCalculatedProfit.toFixed(4)} USDT`
+          `Total resolves recorded: ${this.pnlHistory.length}\n` +
+          `Current PnL: ${this.totalActualCalculatedProfit >= 0 ? "🟩" : "🟥"} ${this.totalActualCalculatedProfit.toFixed(4)} USDT`
         );
       } catch (error) {
         console.error("[FM] Failed to generate PnL chart:", error);

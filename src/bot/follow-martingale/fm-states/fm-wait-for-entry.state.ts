@@ -7,7 +7,7 @@ class FMWaitForEntryState {
   private refreshLoopAbort = false;
   private openingInProgress = false;
 
-  constructor(private bot: FollowMartingaleBot) {}
+  constructor(private bot: FollowMartingaleBot) { }
 
   async onEnter(): Promise<void> {
     this.refreshLoopAbort = false;
@@ -36,6 +36,8 @@ class FMWaitForEntryState {
     let rawTrigger: number | undefined;
     let triggerTimestamp = 0;
     try {
+      await this.bot.lockSignalRefresh();
+
       this.bot.latestTradePrice = price;
       this.bot.latestTradeTimeMs = tradeTimeMs;
       if (this.openingInProgress || this.bot.currActivePosition) return;
@@ -93,7 +95,7 @@ class FMWaitForEntryState {
       );
       this.bot.queueMsg(
         `🥳 Leg 1 entered (${targetSide!.toUpperCase()})\nAvg Price: ${openResult.position.avgPrice}\nQty: ${Math.abs(openResult.position.size)}\n` +
-          `Cycle wallet at open: ${this.bot.cycleWalletAtOpenUsdt.toFixed(4)} USDT`
+        `Cycle wallet at open: ${this.bot.cycleWalletAtOpenUsdt.toFixed(4)} USDT`
       );
       await this.bot.queueTakeProfitRefresh("initial entry", true);
       this.bot.stateBus.emit(EEventBusEventType.StateChange);
@@ -115,13 +117,16 @@ class FMWaitForEntryState {
       }
     } finally {
       this.openingInProgress = false;
+      this.bot.releaseSignalRefresh();
     }
   }
 
   async onExit(): Promise<void> {
+    console.log("Exiting FMWaitForEntryState");
     this.refreshLoopAbort = true;
     this.tradeListenerRemover?.();
     this.tradeListenerRemover = undefined;
+    console.log("Exiting FMWaitForEntryState done");
   }
 }
 

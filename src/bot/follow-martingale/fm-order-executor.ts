@@ -22,7 +22,7 @@ class FMOrderExecutor {
   REST_POLL_INTERVAL_MS = 5_000;
   REST_POLL_ATTEMPTS = 12;
 
-  constructor(private bot: FollowMartingaleBot) {}
+  constructor(private bot: FollowMartingaleBot) { }
 
   private formatWithPrecision(value: number, precision?: number): number {
     if (!Number.isFinite(value) || precision === undefined) return value;
@@ -177,7 +177,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
     const orderHandle = this.bot.orderWatcher.preRegister(clientOrderId);
 
     try {
-      await withRetries(
+      const placeOrderResp = await withRetries(
         async () => {
           try {
             return await ExchangeService.placeOrder({
@@ -188,6 +188,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
               clientOrderId,
             });
           } catch (error) {
+            console.log("Error upon placing order: ", error);
             const existing = await this.verifyExistingOrder(clientOrderId);
             if (existing) return;
             throw error;
@@ -202,11 +203,14 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
         }
       );
 
+      console.log("[FM Order Executor] Open Signal Market placeOrderResp: ", placeOrderResp);
+
       this.bot.lastOpenClientOrderId = clientOrderId;
 
       let fillUpdate: IFMOrderFillUpdate;
       try {
         const fill = await orderHandle.wait();
+        if (!fill) throw new Error("[FM] Failed to get fill update using ws");
         fillUpdate = {
           updateTime: fill.updateTime ?? 0,
           executionPrice: fill.executionPrice ?? 0,
@@ -252,7 +256,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
     const orderHandle = this.bot.orderWatcher.preRegister(clientOrderId);
 
     try {
-      await withRetries(
+      const placeOrderResp = await withRetries(
         async () => {
           try {
             return await ExchangeService.placeOrder({
@@ -276,6 +280,8 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
           onRetry: (o) => console.warn(`${o.label} retrying:`, o.error),
         }
       );
+
+      console.log("[FM Order Executor] Add Signal Market placeOrderResp: ", placeOrderResp);
 
       this.bot.lastAddLegClientOrderId = clientOrderId;
 
@@ -324,7 +330,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
     const clientOrderId = await ExchangeService.generateClientOrderId();
     const orderSide: TOrderSide = side === "long" ? "sell" : "buy";
 
-    await withRetries(
+    const tpOrderResp = await withRetries(
       async () => {
         try {
           return await ExchangeService.placeOrder({
@@ -334,6 +340,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
             baseAmt: this.sanitizeBaseQty(baseAmt, "limit"),
             orderPrice: this.formatPrice(orderPrice) ?? orderPrice,
             clientOrderId,
+            timeInForce: "GTC",
           });
         } catch (error) {
           const existing = await this.verifyExistingOrder(clientOrderId);
@@ -349,6 +356,8 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
         onRetry: (o) => console.warn(`${o.label} retrying:`, o.error),
       }
     );
+
+    console.log("[FM Order Executor] Take Profit Limit placeOrderResp: ", tpOrderResp);
 
     return clientOrderId;
   }
@@ -390,7 +399,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
     const orderHandle = this.bot.orderWatcher.preRegister(clientOrderId);
 
     try {
-      await withRetries(
+      const placeOrderResp = await withRetries(
         async () => {
           try {
             return await ExchangeService.placeOrder({
@@ -414,6 +423,8 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
           onRetry: (o) => console.warn(`${o.label} retrying:`, o.error),
         }
       );
+
+      console.log("[FM Order Executor] Close Signal Market placeOrderResp: ", placeOrderResp);
 
       let fillUpdate: IFMOrderFillUpdate;
       try {
