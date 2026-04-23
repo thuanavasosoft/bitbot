@@ -6,12 +6,14 @@ class FMWaitForEntryState {
   private tradeListenerRemover?: () => void;
   private refreshLoopAbort = false;
   private openingInProgress = false;
+  private addCooldownTelegramSent = false;
 
   constructor(private bot: FollowMartingaleBot) { }
 
   async onEnter(): Promise<void> {
     this.refreshLoopAbort = false;
     this.openingInProgress = false;
+    this.addCooldownTelegramSent = false;
     this.bot.queueMsg(`🔜 Waiting for AUTO entry signal (long or short breakout)...`);
     await this.bot.refreshSignalLevels();
     this.tradeListenerRemover = ExchangeService.hookTradeListener(this.bot.symbol, (trade) => {
@@ -41,6 +43,22 @@ class FMWaitForEntryState {
       this.bot.latestTradePrice = price;
       this.bot.latestTradeTimeMs = tradeTimeMs;
       if (this.openingInProgress || this.bot.currActivePosition) return;
+
+      const now = Date.now();
+      const nextAddAllowedAt = this.bot.getNextAddAllowedAtMs();
+      const inAddCooldown = nextAddAllowedAt !== undefined && now < nextAddAllowedAt;
+      if (!inAddCooldown) {
+        this.addCooldownTelegramSent = false;
+      }
+      if (inAddCooldown) {
+        if (!this.addCooldownTelegramSent) {
+          this.bot.queueMsg(
+            `⏳ AUTO entry paused until ${new Date(nextAddAllowedAt!).toISOString()} (add cooldown).`
+          );
+          this.addCooldownTelegramSent = true;
+        }
+        return;
+      }
 
       const longTrigger = this.bot.getEntryRawTrigger("long");
       const shortTrigger = this.bot.getEntryRawTrigger("short");
@@ -76,15 +94,17 @@ class FMWaitForEntryState {
         time: new Date(openResult.fillUpdate.updateTime || Date.now()),
       };
       this.bot.lastEntryFillWsPrice = this.bot.entryWsPrice;
+      const leg1EnteredAtMs = this.bot.entryWsPrice.time.getTime();
       this.bot.legs = [
         {
           index: 1,
           baseQty: openResult.baseQty,
           entryPrice: this.bot.entryWsPrice.price,
-          enteredAtMs: this.bot.entryWsPrice.time.getTime(),
+          enteredAtMs: leg1EnteredAtMs,
           clientOrderId: openResult.clientOrderId,
         },
       ];
+      this.bot.recordLastEntryOrAdd(leg1EnteredAtMs);
       this.bot.cycleEntryClientOrderIds = [openResult.clientOrderId];
       this.bot.cycleWalletAtOpenUsdt = (await this.bot.getExchTotalUsdtBalance()).toNumber();
       this.bot.recordEntrySlippage(
