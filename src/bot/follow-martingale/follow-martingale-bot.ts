@@ -73,6 +73,8 @@ class FollowMartingaleBot {
   resolveWsPrice?: FMTradeFill;
 
   legs: FMLeg[] = [];
+  /** Wall-clock ms after the last successful leg-1 open or add-leg (not derived from `legs`). Used for add cooldown. */
+  lastEntryOrAddAtMs?: number;
   cycleWalletAtOpenUsdt?: number;
   cycleEntryClientOrderIds: string[] = [];
 
@@ -299,6 +301,7 @@ class FollowMartingaleBot {
         clientOrderId: legCoid,
       },
     ];
+    this.recordLastEntryOrAdd(enteredAtMs);
     this.cycleEntryClientOrderIds = [legCoid];
     try {
       this.cycleWalletAtOpenUsdt = (await this.getExchTotalUsdtBalance()).toNumber();
@@ -417,6 +420,7 @@ class FollowMartingaleBot {
       enteredAtMs: fillTimeMs,
       clientOrderId: legCoid,
     });
+    this.recordLastEntryOrAdd(fillTimeMs);
     this.cycleEntryClientOrderIds.push(legCoid);
 
     this.recordEntrySlippage(
@@ -469,9 +473,12 @@ class FollowMartingaleBot {
   }
 
   getNextAddAllowedAtMs(): number | undefined {
-    const lastLeg = this.legs[this.legs.length - 1];
-    if (!lastLeg) return undefined;
-    return lastLeg.enteredAtMs + this.signalN * this.candles.intervalMs;
+    if (this.lastEntryOrAddAtMs === undefined) return undefined;
+    return this.lastEntryOrAddAtMs + this.signalN * this.candles.intervalMs;
+  }
+
+  recordLastEntryOrAdd(atMs: number): void {
+    this.lastEntryOrAddAtMs = atMs;
   }
 
   async lockSignalRefresh(): Promise<void> {
