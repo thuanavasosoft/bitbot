@@ -452,12 +452,14 @@ class CombWaitForResolveState {
         exitReason: "liquidation_exit",
       });
 
-      this.bot.combUtils.broadcastToCopyTraders(JSON.stringify({
-        id: generateRandomString(10),
-        symbol: this.bot.symbol,
-        msgType: "CLOSE_POSITION",
-        timestamp: Date.now(),
-      } as IClosePositionMsgToCopyTrader));
+      if (!this.bot.justManuallyClosedBy) {
+        this.bot.combUtils.broadcastToCopyTraders(JSON.stringify({
+          id: generateRandomString(10),
+          symbol: this.bot.symbol,
+          msgType: "CLOSE_POSITION",
+          timestamp: Date.now(),
+        } as IClosePositionMsgToCopyTrader));
+      }
       return true;
     } catch (error) {
       console.error("[COMB LIQ CHECK] _checkAndFinalizeLiquidationByPrice error:", error);
