@@ -105,7 +105,6 @@ class CombWaitForResolveState {
       const priceBn = new BigNumber(price);
       const liqBn = new BigNumber(position.liquidationPrice);
       const priceInLiquidationZone =
-        !this.bot.justManuallyClosedBy &&
         hasValidLiquidationPrice &&
         ((position.side === "long" && priceBn.lte(liqBn)) || (position.side === "short" && priceBn.gte(liqBn)));
 
@@ -323,7 +322,6 @@ class CombWaitForResolveState {
   }
 
   private async _runLiquidationCheck(): Promise<void> {
-    if (this.bot.justManuallyClosedBy) return
     if (this.liquidationCheckInProgress || !this.bot.currActivePosition) {
       if (!this.bot.currActivePosition) {
         console.log("[COMB LIQ CHECK] _runLiquidationCheck skipped: no currActivePosition");
@@ -361,27 +359,31 @@ class CombWaitForResolveState {
     try {
       // Check 1: Try positionId-based lookup (most reliable)
       let closedPosition: IPosition | null = null;
-      const positionHistoryById = await withRetries(
-        () => ExchangeService.getPositionsHistory({ positionId: activePosition.id }),
-        {
-          label: "[COMB] getPositionsHistory (positionId)",
-          retries: 5,
-          minDelayMs: 5000,
-          isTransientError,
-          onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
-        }
-      );
-      console.log(
-        `[COMB LIQ CHECK] check 1 (positionId): historyCount=${positionHistoryById.length}`
-      );
-      if (positionHistoryById.length > 0) {
-        const found = positionHistoryById.find((p) => p.id === activePosition.id) ?? positionHistoryById[0];
-        const isLiq = this._isLiquidationClose({ ...found, liquidationPrice: activePosition.liquidationPrice });
-        console.log(
-          `[COMB LIQ CHECK] check 1 found closedPosition id=${found.id} closePrice=${found.closePrice} isLiquidationClose=${isLiq}`
+      if (this.bot.justManuallyClosedBy) {
+        closedPosition = this.bot.currActivePosition || null;
+      } else {
+        const positionHistoryById = await withRetries(
+          () => ExchangeService.getPositionsHistory({ positionId: activePosition.id }),
+          {
+            label: "[COMB] getPositionsHistory (positionId)",
+            retries: 5,
+            minDelayMs: 5000,
+            isTransientError,
+            onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
+          }
         );
-        if (isLiq) {
-          closedPosition = found;
+        console.log(
+          `[COMB LIQ CHECK] check 1 (positionId): historyCount=${positionHistoryById.length}`
+        );
+        if (positionHistoryById.length > 0) {
+          const found = positionHistoryById.find((p) => p.id === activePosition.id) ?? positionHistoryById[0];
+          const isLiq = this._isLiquidationClose({ ...found, liquidationPrice: activePosition.liquidationPrice });
+          console.log(
+            `[COMB LIQ CHECK] check 1 found closedPosition id=${found.id} closePrice=${found.closePrice} isLiquidationClose=${isLiq}`
+          );
+          if (isLiq) {
+            closedPosition = found;
+          }
         }
       }
 
