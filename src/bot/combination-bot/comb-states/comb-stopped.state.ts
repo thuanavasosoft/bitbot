@@ -14,10 +14,8 @@ class CombStoppedState {
     this.bot.currentResistance = null;
     this.bot.longTrigger = null;
     this.bot.shortTrigger = null;
-    this.bot.bufferedExitLevels = undefined;
 
     this.bot.resetTrailingStopTracking();
-    this.bot.lastTrailingStopUpdateTime = 0;
     this.bot.trailingStopBreachCount = 0;
 
     this.bot.entryWsPrice = undefined;

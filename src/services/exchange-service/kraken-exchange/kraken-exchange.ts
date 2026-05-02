@@ -341,6 +341,7 @@ class KrakenExchange implements IExchangeInstance {
       minNotionalValue: 0,
       maxMktOrderQty: Number(instrument.maxPositionSize ?? 0),
       maxLimitOrderQty: Number(instrument.maxPositionSize ?? 0),
+      maintenanceMarginRate: 0,
     };
   }
 

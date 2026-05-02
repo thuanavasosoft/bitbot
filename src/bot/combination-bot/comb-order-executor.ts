@@ -195,6 +195,9 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
           return closedPosition;
         }
       }
+      if (this.bot.justManuallyClosedBy === "minority_prevention") {
+        return this.bot.currActivePosition!;
+      }
       throw new Error("[COMB] No active position to close");
     }
     const targetPosition = livePosition;
@@ -203,6 +206,7 @@ Updated: ${new Date(order.updateTs).toISOString()}`;
     const orderSide = targetPosition.side === "long" ? "sell" : "buy";
     const clientOrderId = await ExchangeService.generateClientOrderId();
     this.bot.lastCloseClientOrderId = clientOrderId;
+    this.bot.lastClosedPositionId = targetPosition.id;
     const orderHandle = this.bot.orderWatcher?.preRegister(clientOrderId);
     this.bot.trackCloseOrderId(clientOrderId);
     try {

@@ -132,6 +132,7 @@ export interface ISymbolInfo {
   minNotionalValue: number;
   maxMktOrderQty: number;
   maxLimitOrderQty: number;
+  maintenanceMarginRate: number;
 }
 
 export interface IGetPositionHistoryParams {
