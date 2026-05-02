@@ -3,7 +3,7 @@ import { EEventBusEventType } from "@/utils/event-bus.util";
 import TelegramService from "@/services/telegram.service";
 import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
-import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy } from "./comb-types";
+import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
 import CombUtils, { getLtpOrMarkPrice, quantizePriceByPrecision } from "./comb-utils";
@@ -16,7 +16,7 @@ import CombCandleWatcher from "./comb-candle-watcher";
 import CombOptimizationLoop from "./comb-optimization-loop";
 import CombTelegramHandler from "./comb-telegram-handler";
 import type { ICandleInfo, IPosition, ISymbolInfo, TPositionSide } from "@/services/exchange-service/exchange-type";
-import { calc_UnrealizedPnl } from "@/utils/maths.util";
+import { calc_UnrealizedPnl, calcLiquidationPrice } from "@/utils/maths.util";
 import CombinationBot from "./combination-bot";
 
 /** en-US grouping for Telegram (e.g. 6,000.5); maxFractionDigits caps decimal places. */
@@ -43,6 +43,15 @@ function tpPbAdverseSlippageExitPrice(side: TPositionSide, tp: number, pricePrec
   return quantizePriceByPrecision(raw, pricePrecision, "half");
 }
 
+/** Adverse virtual entry vs reference: long fills ~0.1% above; short ~0.1% below (same frac as TP_PB exit). */
+function adverseSlippageEntryAvgPrice(side: TPositionSide, refPrice: number, pricePrecision: number): number {
+  const raw =
+    side === "long"
+      ? refPrice * (1 + TP_PB_EXIT_SLIPPAGE_FRAC)
+      : refPrice * (1 - TP_PB_EXIT_SLIPPAGE_FRAC);
+  return quantizePriceByPrecision(raw, pricePrecision, "half");
+}
+
 /** Human-readable labels for finalizeClosedPosition exit reasons (general channel / logs). */
 const EXIT_REASON_DISPLAY = new Map<string, string>([
   ["atr_trailing", "trailing stop"],
@@ -51,10 +60,30 @@ const EXIT_REASON_DISPLAY = new Map<string, string>([
   ["end", "end"],
   ["tp_pullback", "TP_PB (state reset)"],
   ["close_command", "close command"],
+  ["minority_prevention", "minority prevention"],
 ]);
 
 function formatExitReasonDisplay(exitReason: string): string {
   return EXIT_REASON_DISPLAY.get(exitReason) ?? exitReason;
+}
+
+/** Maps virtual-close exit reason to `justManuallyClosedBy` when state should stay preserved until trailing/resolve. */
+function justManuallyClosedByFromVirtualExitReason(
+  exitReason: CombClosedExitReason
+): JustManuallyClosedBy | undefined {
+  switch (exitReason) {
+    case "close_command":
+      return "close_pos";
+    case "minority_prevention":
+      return "minority_prevention";
+    case "tp_pullback":
+      return "tp_pb";
+    case "atr_trailing":
+    case "signal_change":
+    case "end":
+    case "liquidation_exit":
+      return undefined;
+  }
 }
 
 class CombBotInstance {
@@ -90,11 +119,9 @@ class CombBotInstance {
   currActivePosition?: IPosition;
   entryWsPrice?: { price: number; time: Date };
   resolveWsPrice?: { price: number; time: Date };
-  bufferedExitLevels?: { support: number | null; resistance: number | null };
   trailingStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number; updatedAt: number };
   trailingAtrWindow: ICandleInfo[] = [];
   trailingCloseWindow: number[] = [];
-  lastTrailingStopUpdateTime: number = 0;
   trailingStopBreachCount: number = 0;
   currTrailMultiplier?: number;
   trailingStopMultiplier: number = 0;
@@ -132,6 +159,12 @@ class CombBotInstance {
    * Reset to false on new position open and on waitForResolveState.onExit().
    */
   isClosingPosition: boolean = false;
+
+  /**
+   * Guards the entry flow against concurrent trade ticks opening multiple positions before
+   * currActivePosition is assigned and the state transition reaches wait-for-resolve.
+   */
+  isOpeningPosition: boolean = false;
 
   /**
    * Guards finalizeClosedPosition against concurrent calls from racing close paths
@@ -260,6 +293,10 @@ class CombBotInstance {
       this.queueMsg(`Cannot set TP_PB for ${this.symbol}: a close is already in progress.`);
       return;
     }
+    if (this.justManuallyClosedBy) {
+      this.queueMsg(`Cannot set TP_PB for ${this.symbol}: a position was already closed via ${this.justManuallyClosedBy}. Not doing anything..`);
+      return;
+    }
     const ltp = await getLtpOrMarkPrice(this.symbol);
     const avg = this.currActivePosition.avgPrice;
     const side = this.currActivePosition.side;
@@ -371,7 +408,7 @@ class CombBotInstance {
       triggerTimestamp?: number;
       fillTimestamp?: number;
       isLiquidation?: boolean;
-      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "tp_pullback" | "close_command";
+      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "tp_pullback" | "close_command" | "minority_prevention";
       /** When true, does not emit a state transition event. Caller must handle state transition explicitly. */
       suppressStateChange?: boolean;
     }
@@ -399,7 +436,7 @@ class CombBotInstance {
           `[COMB] finalizeClosedPosition: position ${closedPosition.id} already recorded (via ${this.justManuallyClosedBy}). Skipping duplicate PnL/slippage/history.`
         );
         this.queueMsg(
-          `⏭️ Position ${closedPosition.id} was already closed and PnL recorded (via ${this.justManuallyClosedBy}). Skipping duplicate update, clearing state only.`
+          `⏭️ Position ${closedPosition.id} was already closed (via ${this.justManuallyClosedBy}) and PnL recorded. Skipping duplicate update, clearing state only.`
         );
         this.onGeneralInfoMessage?.(
           `has cleared its position due to ${exitReasonDisplay}. The instance can enter a new position again.`
@@ -496,6 +533,7 @@ class CombBotInstance {
       this.resolveWsPrice = undefined;
       this.justManuallyClosedBy = undefined;
       this.temporaryTrailMultiplier = undefined;
+      this.isPnlRecorded = false;
       this.tpPbPercent = 0;
       this.tpPbFixedPrice = undefined;
 
@@ -504,6 +542,159 @@ class CombBotInstance {
       }
     } finally {
       this.isFinalizingPosition = false;
+    }
+  }
+
+  async activateDummyPosition(args: {
+    requestedSide: TPositionSide;
+    price: number;
+    trigger: number | null;
+    activePositionsText?: string;
+    blockedReason?: string;
+  }): Promise<void> {
+    if (this.currActivePosition) return;
+
+    const { requestedSide, price, trigger, activePositionsText, blockedReason } = args;
+    const now = new Date();
+    const entryAvgPrice = adverseSlippageEntryAvgPrice(requestedSide, price, this.pricePrecision);
+    const simulatedNotional = new BigNumber(this.margin).times(this.leverage);
+    const simulatedSize =
+      entryAvgPrice > 0
+        ? simulatedNotional.div(entryAvgPrice).decimalPlaces(this.symbolInfo?.basePrecision ?? 8, BigNumber.ROUND_DOWN).toNumber()
+        : 0;
+    const simulatedInitialMargin = this.margin;
+    const maintenanceMarginRate = this.symbolInfo?.maintenanceMarginRate ?? 0;
+    const simulatedMaintenanceMargin = new BigNumber(simulatedNotional).times(maintenanceMarginRate).toNumber();
+    const simulatedLiquidationPrice =
+      this.leverage > 1 && entryAvgPrice > 0
+        ? calcLiquidationPrice(requestedSide, entryAvgPrice, this.leverage)
+        : 0;
+
+    const virtualPosition: IPosition = {
+      id: -now.getTime(),
+      symbol: this.symbol,
+      size: simulatedSize,
+      side: requestedSide,
+      notional: simulatedNotional.toNumber(),
+      leverage: this.leverage,
+      unrealizedPnl: 0,
+      realizedPnl: 0,
+      avgPrice: entryAvgPrice,
+      liquidationPrice: simulatedLiquidationPrice,
+      maintenanceMargin: simulatedMaintenanceMargin,
+      initialMargin: simulatedInitialMargin,
+      marginMode: "virtual",
+      createTime: now.getTime(),
+      updateTime: now.getTime(),
+    };
+
+    this.currActivePosition = virtualPosition;
+    this.justManuallyClosedBy = "minority_prevention";
+
+    this.isClosingPosition = false;
+    this.isFinalizingPosition = false;
+    this.isPnlRecorded = false;
+    this.nextEntryAllowedAtMs = undefined;
+    this.resetTrailingStopTracking();
+    this.tpPbPercent = 0;
+    this.tpPbFixedPrice = undefined;
+    this.lastEntryTime = Date.now();
+    this.numberOfTrades++;
+
+    this.lastCloseClientOrderId = undefined;
+    this.lastClosedPositionId = undefined;
+    this.lastOpenClientOrderId = undefined;
+
+    await this.combUtils.handlePnL(
+      0,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      -now.getTime(),
+    );
+
+    const entryFill = this.entryWsPrice;
+    this.pnlHistory.push({
+      timestamp: new Date().toISOString(),
+      timestampMs: Date.now(),
+      side: requestedSide,
+      totalPnL: this.totalActualCalculatedProfit,
+      entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
+      entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
+      entryFillPrice: 0,
+      exitTimestamp: new Date().toISOString(),
+      exitTimestampMs: now.getTime(),
+      exitFillPrice: 0,
+      tradePnL: 0,
+      exitReason: "minority_prevention",
+    });
+
+    const instanceLabel = `${this.symbol}`;
+    const message =
+      `🛡️ Minority prevention blocked entry and simulated an opened ${requestedSide.toUpperCase()} virtual position\n` +
+      `No exchange order was placed.\n` +
+      `Instance: ${instanceLabel}\n` +
+      `Symbol: ${this.symbol}\n` +
+      `Requested side: ${requestedSide.toUpperCase()}\n` +
+      `Virtual position ID: ${virtualPosition.id}\n` +
+      `Reference price: ${price}\n` +
+      `Simulated avg entry (0.1% adverse slippage): ${entryAvgPrice}\n` +
+      `Trigger: ${trigger ?? "N/A"}\n` +
+      `${activePositionsText ? `Active comb positions: ${activePositionsText}\n` : ""}` +
+      `${blockedReason ? `Reason: ${blockedReason}\n` : ""}` +
+      `State will clear only on trailing stop or re-optimization.`;
+    this.queueMsg(message);
+    this.combinationBot.queueGeneralMessage(`[COMB] ${this.symbol} ${message}`);
+  }
+
+  async virtualClosePosition(exitReason: CombClosedExitReason): Promise<void> {
+    const activePosition = this.currActivePosition;
+    if (this.justManuallyClosedBy) {
+      this.queueMsg(`Cannot virtually close position for ${this.symbol}: a position was already closed via ${this.justManuallyClosedBy}. Not doing anything..`);
+      return;
+    }
+
+    if (activePosition) {
+      this.queueMsgPriority(`Closing active position for ${this.symbol}...`);
+      const closedPosition = await this.orderExecutor.triggerCloseSignal(activePosition);
+      this.justManuallyClosedBy = justManuallyClosedByFromVirtualExitReason(exitReason);
+      const netPnl = await this.combUtils.handlePnL(
+        typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        closedPosition.id,
+      );
+
+      this.notifyInstanceEvent({
+        type: "position_closed",
+        closedPosition,
+        exitReason,
+        realizedPnl: closedPosition.realizedPnl,
+        netPnl: netPnl,
+        symbol: this.symbol,
+      });
+      const entryFill = this.entryWsPrice;
+      this.pnlHistory.push({
+        timestamp: new Date().toISOString(),
+        timestampMs: Date.now(),
+        side: closedPosition.side,
+        totalPnL: this.totalActualCalculatedProfit,
+        entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
+        entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
+        entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
+        exitTimestamp: new Date(closedPosition.updateTime).toISOString(),
+        exitTimestampMs: closedPosition.updateTime,
+        exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
+        tradePnL: closedPosition.realizedPnl,
+        exitReason,
+      });
+
+      this.queueMsgPriority(`✅ ${exitReason} Close request completed for ${this.symbol}. State unchanged.`);
+    } else {
+      this.queueMsgPriority(`No active position for ${this.symbol}. State unchanged.`);
     }
   }
 }

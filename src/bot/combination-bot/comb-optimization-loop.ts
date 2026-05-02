@@ -46,7 +46,7 @@ class CombOptimizationLoop {
     }
   }
 
-  private async optimizeLiveParams(force = false): Promise<void> {
+  private async optimizeLiveParams(force = false, attempts: number = 0): Promise<void> {
     if (this.abort || this.bot.isStopped) return;
     const intervalMs = this.bot.updateIntervalMinutes * 60_000;
     const elapsedSinceLastMs = this.bot.lastOptimizationAtMs > 0 ? Date.now() - this.bot.lastOptimizationAtMs : Infinity;
@@ -93,6 +93,11 @@ class CombOptimizationLoop {
         } catch (closeErr) {
           console.error(`[COMB] optimizeLiveParams symbol=${this.bot.symbol} failed to close position before reoptimize:`, closeErr);
           this.bot.queueMsg(`⚠️ Failed to close position before re-optimization: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`);
+          if (attempts <= 5) {
+            await new Promise((resolve) => setTimeout(resolve, 10_000));
+            this.bot.isClosingPosition = false;
+            await this.optimizeLiveParams(force, attempts + 1);
+          }
         } finally {
           this.bot.isClosingPosition = false;
         }

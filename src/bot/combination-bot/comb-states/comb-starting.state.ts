@@ -64,7 +64,7 @@ class CombStartingState {
         this.bot.queueMsg(`⚠️ Candle watcher crashed: ${err instanceof Error ? err.message : String(err)}`);
       });
     }
-    this.bot.runStartTs = new Date();
+    if (!this.bot.runStartTs) this.bot.runStartTs = new Date();
     this.bot.queueMsg("⚙️ Starting Combination Bot (instance)");
     const msg = `
 🟢 COMB BOT INSTANCE STARTED

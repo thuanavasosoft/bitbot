@@ -186,18 +186,6 @@ class CombWaitForResolveState {
         return;
       }
 
-      const one = new BigNumber(1);
-      const bufferPct = new BigNumber(this.bot.triggerBufferPercentage || 0).div(100);
-      const resistanceBn = this.bot.currentResistance !== null ? new BigNumber(this.bot.currentResistance) : null;
-      const supportBn = this.bot.currentSupport !== null ? new BigNumber(this.bot.currentSupport) : null;
-      const bufferedResistance = resistanceBn ? resistanceBn.times(one.minus(bufferPct)) : null;
-      const bufferedSupport = supportBn ? supportBn.times(one.plus(bufferPct)) : null;
-
-      this.bot.bufferedExitLevels = {
-        resistance: bufferedResistance ? bufferedResistance.toNumber() : null,
-        support: bufferedSupport ? bufferedSupport.toNumber() : null,
-      };
-
       if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
         const { bufferedLevel, rawLevel } = this.bot.trailingStopTargets;
         if (position.side === "long") {
@@ -371,27 +359,31 @@ class CombWaitForResolveState {
     try {
       // Check 1: Try positionId-based lookup (most reliable)
       let closedPosition: IPosition | null = null;
-      const positionHistoryById = await withRetries(
-        () => ExchangeService.getPositionsHistory({ positionId: activePosition.id }),
-        {
-          label: "[COMB] getPositionsHistory (positionId)",
-          retries: 5,
-          minDelayMs: 5000,
-          isTransientError,
-          onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
-        }
-      );
-      console.log(
-        `[COMB LIQ CHECK] check 1 (positionId): historyCount=${positionHistoryById.length}`
-      );
-      if (positionHistoryById.length > 0) {
-        const found = positionHistoryById.find((p) => p.id === activePosition.id) ?? positionHistoryById[0];
-        const isLiq = this._isLiquidationClose({ ...found, liquidationPrice: activePosition.liquidationPrice });
-        console.log(
-          `[COMB LIQ CHECK] check 1 found closedPosition id=${found.id} closePrice=${found.closePrice} isLiquidationClose=${isLiq}`
+      if (this.bot.justManuallyClosedBy) {
+        closedPosition = this.bot.currActivePosition || null;
+      } else {
+        const positionHistoryById = await withRetries(
+          () => ExchangeService.getPositionsHistory({ positionId: activePosition.id }),
+          {
+            label: "[COMB] getPositionsHistory (positionId)",
+            retries: 5,
+            minDelayMs: 5000,
+            isTransientError,
+            onRetry: ({ attempt, delayMs, error, label }) => console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
+          }
         );
-        if (isLiq) {
-          closedPosition = found;
+        console.log(
+          `[COMB LIQ CHECK] check 1 (positionId): historyCount=${positionHistoryById.length}`
+        );
+        if (positionHistoryById.length > 0) {
+          const found = positionHistoryById.find((p) => p.id === activePosition.id) ?? positionHistoryById[0];
+          const isLiq = this._isLiquidationClose({ ...found, liquidationPrice: activePosition.liquidationPrice });
+          console.log(
+            `[COMB LIQ CHECK] check 1 found closedPosition id=${found.id} closePrice=${found.closePrice} isLiquidationClose=${isLiq}`
+          );
+          if (isLiq) {
+            closedPosition = found;
+          }
         }
       }
 
@@ -460,12 +452,14 @@ class CombWaitForResolveState {
         exitReason: "liquidation_exit",
       });
 
-      this.bot.combUtils.broadcastToCopyTraders(JSON.stringify({
-        id: generateRandomString(10),
-        symbol: this.bot.symbol,
-        msgType: "CLOSE_POSITION",
-        timestamp: Date.now(),
-      } as IClosePositionMsgToCopyTrader));
+      if (!this.bot.justManuallyClosedBy) {
+        this.bot.combUtils.broadcastToCopyTraders(JSON.stringify({
+          id: generateRandomString(10),
+          symbol: this.bot.symbol,
+          msgType: "CLOSE_POSITION",
+          timestamp: Date.now(),
+        } as IClosePositionMsgToCopyTrader));
+      }
       return true;
     } catch (error) {
       console.error("[COMB LIQ CHECK] _checkAndFinalizeLiquidationByPrice error:", error);
@@ -607,7 +601,6 @@ class CombWaitForResolveState {
     }
 
     this.bot.trailingCloseWindow = closesSinceEntry.slice(-this.bot.trailingHighestLookback);
-    this.bot.lastTrailingStopUpdateTime = finishedCandles[finishedCandles.length - 1]?.timestamp || now;
 
     const atrValue = this._calculateAtrValue(this.bot.trailingAtrWindow, this.bot.trailingAtrLength);
     if (atrValue === null || !Number.isFinite(atrValue) || atrValue <= 0) {
@@ -657,6 +650,7 @@ class CombWaitForResolveState {
   }
 
   private async _handleExternalOrderUpdate(update: IWSOrderUpdate) {
+    if (this.bot.justManuallyClosedBy) return;
     if (!this.bot.currActivePosition) return;
     if (update.orderStatus !== "filled") return;
 
@@ -786,39 +780,7 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
     this.tpPbCloseInProgress = true;
     this.bot.isClosingPosition = true;
     try {
-      const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-      const netPnl = await this.bot.combUtils.handlePnL(
-        typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
-        false,
-        undefined,
-        undefined,
-        undefined,
-        closedPosition.id,
-      );
-      this.bot.notifyInstanceEvent({
-        type: "position_closed",
-        closedPosition,
-        exitReason: "tp_pullback",
-        realizedPnl: closedPosition.realizedPnl,
-        netPnl,
-        symbol: this.bot.symbol,
-      });
-      const entryFill = this.bot.entryWsPrice;
-      this.bot.pnlHistory.push({
-        timestamp: new Date().toISOString(),
-        timestampMs: Date.now(),
-        side: closedPosition.side,
-        totalPnL: this.bot.totalActualCalculatedProfit,
-        entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
-        entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
-        entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
-        exitTimestamp: new Date(closedPosition.updateTime).toISOString(),
-        exitTimestampMs: closedPosition.updateTime,
-        exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
-        tradePnL: closedPosition.realizedPnl,
-        exitReason: "tp_pullback",
-      });
-      this.bot.queueMsg(`✅ TP_PB close completed for ${this.bot.symbol}. State unchanged. Watchers continue.`);
+      this.bot.virtualClosePosition("tp_pullback");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       console.error("[COMB] TP_PB close failed:", error);
