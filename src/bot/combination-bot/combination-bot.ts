@@ -1,15 +1,18 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
+import type { IPosition, TPositionSide } from "@/services/exchange-service/exchange-type";
 import TelegramService, { ETGCommand } from "@/services/telegram.service";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import { generatePnLProgressionChart } from "@/utils/image-generator.util";
 import { calc_UnrealizedPnl, getRunDuration } from "@/utils/maths.util";
 import { formatFeeAwarePnLLine, generateRandomString } from "@/utils/strings.util";
+import { AsyncMutex } from "@/utils/async-mutex.util";
 import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
 import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
 import type { CombInstanceConfig, CombState, CombInstanceEvent, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader } from "./comb-types";
 import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
 import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
+import { formatCombJustManuallyClosedIndicator } from "./comb-candle-watcher";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -26,6 +29,37 @@ function envStrRequired(key: string): string | undefined {
   const v = process.env[key];
   return (v !== undefined && v !== "") ? v : undefined;
 }
+
+function envBool(key: string, fallback: boolean): boolean {
+  const value = process.env[key]?.trim().toLowerCase();
+  if (value === undefined || value === "") return fallback;
+  return value === "true" || value === "1" || value === "yes";
+}
+
+type ActiveCombPosition = {
+  inst: CombBotInstance;
+  position: IPosition;
+};
+
+type CombPositionCounts = {
+  long: number;
+  short: number;
+};
+
+type CombClosedExitReason = Extract<CombInstanceEvent, { type: "position_closed" }>["exitReason"];
+type MinorityEntryGuardResult = {
+  allowed: boolean;
+  release: () => void;
+  blockedCounts?: CombPositionCounts;
+  blockedActivePositionsText?: string;
+  blockedReason?: string;
+};
+
+const COMB_EXIT_REASON_LABELS: Partial<Record<CombClosedExitReason, string>> = {
+  atr_trailing: "Trailing stop",
+  signal_change: "Signal/close",
+  minority_prevention: "Minority prevention",
+};
 
 /** Required env keys: COMB_BOT_N_<KEY>. Keys match CombInstanceConfig. */
 const COMB_REQUIRED_KEYS: { env: string; type: "string" | "number" }[] = [
@@ -95,6 +129,7 @@ class CombinationBot {
   combMsgBrokerService: CombMsgBrokerService;
   connectedCopyTraderLabels: Set<string> = new Set();
   label: string = envStrRequired("COMB_BOT_LABEL") ?? "Combination Bot " + generateRandomString(10);
+  isPreventMinorityEnabled: boolean = envBool("COMBINATION_BOT_IS_PREVENT_MINORITY", true);
 
   /**
    * Copy-trading infrastructure: optional RabbitMQ fanout + WebSocket server. Used only when running combination bot.
@@ -141,6 +176,7 @@ class CombinationBot {
 
   private instances: CombBotInstance[] = [];
   private chatIdToInstance: Map<string, CombBotInstance> = new Map();
+  private minorityPreventionEntryMutex = new AsyncMutex();
   generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
   /** Account total USDT balance (free + frozen) when the general bot run started (for wallet delta). */
   private startQuoteBalanceBn?: BigNumber;
@@ -179,6 +215,127 @@ class CombinationBot {
     }
   }
 
+  private getInstanceLabel(inst: CombBotInstance): string {
+    const index = this.instances.indexOf(inst);
+    return index >= 0 ? `BOT_${index + 1} (${inst.symbol})` : inst.symbol;
+  }
+
+  private getActiveCombPositions(): ActiveCombPosition[] {
+    return this.instances.flatMap((inst) => {
+      if (!inst.currActivePosition || inst.justManuallyClosedBy === "minority_prevention") return [];
+      return [{ inst, position: inst.currActivePosition }];
+    });
+  }
+
+  private countActivePositions(activePositions = this.getActiveCombPositions()): CombPositionCounts {
+    return activePositions.reduce<CombPositionCounts>(
+      (counts, { position }) => ({
+        long: counts.long + (position.side === "long" ? 1 : 0),
+        short: counts.short + (position.side === "short" ? 1 : 0),
+      }),
+      { long: 0, short: 0 }
+    );
+  }
+
+  private formatActivePositionCounts(counts = this.countActivePositions()): string {
+    return `${counts.long} long / ${counts.short} short`;
+  }
+
+  getMinorityPreventionStatusText(): string {
+    return `${this.isPreventMinorityEnabled ? "ENABLED" : "DISABLED"} (COMBINATION_BOT_IS_PREVENT_MINORITY=${this.isPreventMinorityEnabled ? "true" : "false"}, strategy-active: ${this.formatActivePositionCounts()})`;
+  }
+
+  async beginMinorityProtectedEntry(
+    requestedSide: TPositionSide,
+  ): Promise<MinorityEntryGuardResult> {
+    if (!this.isPreventMinorityEnabled) {
+      return { allowed: true, release: () => { } };
+    }
+
+    await this.minorityPreventionEntryMutex.acquire();
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.minorityPreventionEntryMutex.release();
+    };
+
+    const counts = this.countActivePositions();
+    const oppositeSide = requestedSide === "long" ? "short" : "long";
+    if (counts[oppositeSide] >= 2) {
+      const oppositeSymbols = this.getActiveCombPositions()
+        .filter(({ position }) => position.side === oppositeSide)
+        .map(({ inst }) => inst.symbol)
+        .join(", ");
+      return {
+        allowed: false,
+        release,
+        blockedCounts: counts,
+        blockedActivePositionsText: this.formatActivePositionCounts(counts),
+        blockedReason: `${counts[oppositeSide]} strategy-active ${oppositeSide.toUpperCase()} positions already exist (${oppositeSymbols}), so opening ${requestedSide.toUpperCase()} would create a minority hedge.`,
+      };
+    }
+
+    return { allowed: true, release };
+  }
+
+  async handleMinorityPreventionAfterOpen(openedInst: CombBotInstance): Promise<void> {
+    if (!this.isPreventMinorityEnabled) return;
+
+    const activePositions = this.getActiveCombPositions();
+    const counts = this.countActivePositions(activePositions);
+    const majorityCount = Math.max(counts.long, counts.short);
+    if (counts.long === counts.short || majorityCount < 2) return;
+
+    const minoritySide: TPositionSide = counts.long < counts.short ? "long" : "short";
+    const minorityPositions = activePositions.filter(
+      ({ inst, position }) => position.side === minoritySide && !inst.justManuallyClosedBy
+    );
+    if (minorityPositions.length === 0) return;
+
+    for (const { inst, position } of minorityPositions) {
+      await this.closeMinorityPosition(inst, position, counts);
+    }
+  }
+
+  private async closeMinorityPosition(
+    inst: CombBotInstance,
+    activePosition: IPosition,
+    counts: CombPositionCounts
+  ): Promise<void> {
+    if (inst.isClosingPosition) {
+      const message =
+        `⚠️ Minority prevention could not close ${this.getInstanceLabel(inst)} because another close is already in progress.\n` +
+        `Strategy-active comb positions: ${this.formatActivePositionCounts(counts)}`;
+      inst.queueMsgPriority(message);
+      this.queueGeneralMessage(`[COMB] ${message}`);
+      return;
+    }
+
+    inst.isClosingPosition = true;
+    const startMessage =
+      `🛡️ Minority prevention closing this ${activePosition.side.toUpperCase()} position immediately.\n` +
+      `Position ID: ${activePosition.id}\n` +
+      `Strategy-active comb positions before clMinority prevention closingose: ${this.formatActivePositionCounts(counts)}`;
+    inst.queueMsgPriority(startMessage);
+    this.queueGeneralMessage(`[COMB] ${this.getInstanceLabel(inst)} ${startMessage}`);
+
+    try {
+      inst.virtualClosePosition("minority_prevention");
+    } catch (error) {
+      const message =
+        `❌ Minority prevention failed to close ${this.getInstanceLabel(inst)}: ${error instanceof Error ? error.message : String(error)}`;
+      inst.queueMsgPriority(message);
+      this.queueGeneralMessage(`[COMB] ${message}`);
+    } finally {
+      inst.isClosingPosition = false;
+    }
+  }
+
+  private formatExitReason(exitReason: CombClosedExitReason): string {
+    return COMB_EXIT_REASON_LABELS[exitReason] ?? exitReason;
+  }
+
   private handleInstanceEvent(botIndex: number, inst: CombBotInstance, event: CombInstanceEvent): void {
     const prefix = `[COMB] BOT_${botIndex} (${inst.symbol})`;
     if (event.type === "position_opened") {
@@ -196,7 +353,7 @@ class CombinationBot {
           `${prefix} 🤯 Liquidated | Close: ${closedPosition.closePrice ?? closedPosition.avgPrice} | Exit net PnL: ${pnlStr}`
         );
       } else {
-        const reasonStr = exitReason === "atr_trailing" ? "Trailing stop" : exitReason === "signal_change" ? "Signal/close" : exitReason;
+        const reasonStr = this.formatExitReason(exitReason);
         this.queueGeneralMessage(
           `${prefix} ✅ Position closed (${reasonStr}) | Exit net PnL: ${pnlStr}`
         );
@@ -219,6 +376,10 @@ class CombinationBot {
   private async getGeneralFullUpdateMessage(): Promise<string> {
     const lines: string[] = ["[COMB] General – full update", ""];
     lines.push(`Label: ${this.label}`);
+    lines.push(
+      `Minority prevention: ${this.isPreventMinorityEnabled ? "ENABLED" : "DISABLED"} (COMBINATION_BOT_IS_PREVENT_MINORITY=${this.isPreventMinorityEnabled ? "true" : "false"})`
+    );
+    lines.push(`Strategy-active comb positions: ${this.formatActivePositionCounts()}`);
     const currBalanceBn =
       this.instances.length > 0
         ? await this.instances[0].combUtils.getExchTotalUsdtBalance()
@@ -285,9 +446,7 @@ class CombinationBot {
         lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
         if (inst.justManuallyClosedBy) {
           const lastNetPnl = inst.lastNetPnl;
-          lines.push(
-            `⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]`
-          );
+          lines.push("\n" + formatCombJustManuallyClosedIndicator(inst.justManuallyClosedBy, lastNetPnl));
         }
       } else {
         lines.push("Position: No open position");
@@ -560,9 +719,9 @@ class CombinationBot {
           return;
         }
         if (target.toLowerCase() === "all") {
-          const instancesWithPosition = this.instances.filter((i) => i.currActivePosition);
+          const instancesWithPosition = this.instances.filter((i) => i.currActivePosition && !i.justManuallyClosedBy);
           if (instancesWithPosition.length === 0) {
-            TelegramService.queueMsgPriority("No instances with open position.", this.generalChatId);
+            TelegramService.queueMsgPriority("No instances with live open position.", this.generalChatId);
             return;
           }
           for (const inst of instancesWithPosition) {
@@ -775,7 +934,7 @@ class CombinationBot {
         return;
       }
       try {
-        const lines: string[] = ["Current unrealized PnL (USDT):", ""];
+        const lines: string[] = ["Current strategy unrealized PnL (USDT):", ""];
         let totalUnrealizedPnl = 0;
         let totalBufferedUnrealizedPnl = 0;
         for (const inst of this.instances) {
@@ -796,9 +955,9 @@ class CombinationBot {
           const icon = pnl >= 0 ? "🟩" : "🟥";
           const side = pos.side.toUpperCase();
           const lastNetPnl = inst.lastNetPnl;
-          const closingIndicator = inst.justManuallyClosedBy ? ` ⚠️ [closed via ${inst.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]\n` : "";
+          const closingIndicator = inst.justManuallyClosedBy ? formatCombJustManuallyClosedIndicator(inst.justManuallyClosedBy, lastNetPnl) + "\n" : "";
           lines.push(
-            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT\n${closingIndicator}`
+            `${inst.symbol} (${side === "LONG" ? "🟢" : "🔴"} ${side}) - ${icon} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT\n${closingIndicator}\n`
           );
         }
         const instancesWithOpenPosition = this.instances.filter(

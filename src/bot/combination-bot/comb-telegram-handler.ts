@@ -7,6 +7,7 @@ import { withRetries, isTransientError } from "./comb-retry";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import type CombBotInstance from "./comb-bot-instance";
 import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
+import { formatCombJustManuallyClosedIndicator } from "./comb-candle-watcher";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -33,7 +34,7 @@ class CombTelegramHandler {
     if (this.bot.currentState === this.bot.startingState) return "Bot in starting state.";
     if (this.bot.currentState === this.bot.waitForSignalState) return "Waiting for entry signal.";
     if (this.bot.currentState === this.bot.waitForResolveState) {
-      const position = await withRetries(() => ExchangeService.getPosition(this.bot.symbol), { label: "[COMB] getPosition", retries: 3, minDelayMs: 2000, isTransientError, onRetry: (o) => console.warn(o.label, o.error) });
+      const position = await withRetries(() => ExchangeService.getPosition(this.bot.symbol), { label: "[COMB] getPosition", retries: 3, minDelayMs: 2000, isTransientError, onRetry: (o) => console.warn(o.label, o.error) }) || this.bot.currActivePosition;
       return `Waiting for resolve.\n${position ? getPositionDetailMsg(position, { feeSummary: this.getFeeSummary() }) : ""}`;
     }
     return "State details unavailable.";
@@ -64,7 +65,7 @@ Last optimized: ${this.bot.lastOptimizationAtMs > 0 ? toIso(this.bot.lastOptimiz
 Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(this.bot.lastOptimizationAtMs, this.bot.updateIntervalMinutes, nowMs) / 1000))}
 
 === DETAILS ===
-${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(this.bot.lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(this.bot.lastNetPnl ?? 0).toFixed(2)} USDT)]` : ""}
+${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedBy ? "\n" + formatCombJustManuallyClosedIndicator(this.bot.justManuallyClosedBy, this.bot.lastNetPnl) : ""}
 
 === PnL ===
 Run time: ${runDurationDisplay}
@@ -99,10 +100,9 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
   }
 
   async handleClosePositionCommand(): Promise<void> {
-    const activePosition = this.bot.currActivePosition;
     try {
       if (this.bot.justManuallyClosedBy) {
-        this.bot.queueMsgPriority(`Position for ${this.bot.symbol} was already closed. State unchanged.`);
+        this.bot.queueMsgPriority(`Position for ${this.bot.symbol} was already closed via ${this.bot.justManuallyClosedBy}. Not doing anything..`);
         return;
       }
       if (this.bot.isStopped) {
@@ -110,47 +110,7 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
         return;
       }
 
-      if (activePosition) {
-        this.bot.queueMsgPriority(`Closing active position for ${this.bot.symbol}...`);
-        const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
-        this.bot.justManuallyClosedBy = "close_pos";
-        const netPnl = await this.bot.combUtils.handlePnL(
-          typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
-          false,
-          undefined,
-          undefined,
-          undefined,
-          closedPosition.id,
-        );
-
-        this.bot.notifyInstanceEvent({
-          type: "position_closed",
-          closedPosition,
-          exitReason: "close_command",
-          realizedPnl: closedPosition.realizedPnl,
-          netPnl: netPnl,
-          symbol: this.bot.symbol,
-        });
-        const entryFill = this.bot.entryWsPrice;
-        this.bot.pnlHistory.push({
-          timestamp: new Date().toISOString(),
-          timestampMs: Date.now(),
-          side: closedPosition.side,
-          totalPnL: this.bot.totalActualCalculatedProfit,
-          entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
-          entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
-          entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
-          exitTimestamp: new Date(closedPosition.updateTime).toISOString(),
-          exitTimestampMs: closedPosition.updateTime,
-          exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
-          tradePnL: closedPosition.realizedPnl,
-          exitReason: "close_command",
-        });
-
-        this.bot.queueMsgPriority(`✅ Close request completed for ${this.bot.symbol}. State unchanged.`);
-      } else {
-        this.bot.queueMsgPriority(`No active position for ${this.bot.symbol}. State unchanged.`);
-      }
+      await this.bot.virtualClosePosition("close_command");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (msg.includes("No active position")) {

@@ -51,11 +51,11 @@ export type CombPnlHistoryPoint = {
   exitTimestampMs: number;
   exitFillPrice: number;
   tradePnL: number;
-  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback";
+  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention";
 };
 
 /** Indicates position was closed but state should be preserved until trailing stop triggers. */
-export type JustManuallyClosedBy = "close_pos" | "tp_pb";
+export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention";
 
 export type CombRunBacktestArgs = {
   symbol: string;
@@ -127,13 +127,15 @@ export interface IOrderFillUpdate {
   executionPrice: number;
 }
 
+export type CombClosedExitReason = "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention";
+
 /** Event emitted by an instance so the general bot can notify the general channel. */
 export type CombInstanceEvent =
   | { type: "position_opened"; position: IPosition; symbol: string }
   | {
     type: "position_closed";
     closedPosition: IPosition;
-    exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback";
+    exitReason: CombClosedExitReason;
     realizedPnl: number;
     /** Net PnL after fees (matches Total calculated PnL / wallet impact). */
     netPnl: number;

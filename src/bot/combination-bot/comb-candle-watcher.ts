@@ -6,10 +6,33 @@ import { COMB_DEFAULT_SIGNAL_PARAMS, formatCombOptimizationAgeMessage } from "./
 import BigNumber from "bignumber.js";
 import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import type CombBotInstance from "./comb-bot-instance";
+import type { JustManuallyClosedBy } from "./comb-types";
 import { calc_UnrealizedPnl } from "@/utils/maths.util";
 
 /** Delay in ms after the minute mark before running each candle watcher iteration (e.g. 500 => 00:01:00.500). */
 const CANDLE_WATCHER_DELAY_AFTER_MINUTE_MS = 500;
+
+function justManuallyClosedViaLabel(by: JustManuallyClosedBy): string {
+  switch (by) {
+    case "close_pos":
+      return "/close_pos";
+    case "tp_pb":
+      return "TP_PB";
+    case "minority_prevention":
+      return "minority prevention";
+  }
+}
+
+/** Telegram suffix line when the instance is in “closed but trailing context preserved” mode. */
+export function formatCombJustManuallyClosedIndicator(
+  justManuallyClosedBy: JustManuallyClosedBy | undefined,
+  lastNetPnl: number | null | undefined
+): string {
+  if (!justManuallyClosedBy) return "";
+  const pnl = lastNetPnl ?? 0;
+  const pnlEmoji = pnl >= 0 ? "🟩" : "🟥";
+  return `⚠️ [closed via ${justManuallyClosedViaLabel(justManuallyClosedBy)} at (${pnlEmoji} ${pnl.toFixed(2)} USDT)]`;
+}
 
 class CombCandleWatcher {
   isCandleWatcherStarted = false;
@@ -121,8 +144,7 @@ class CombCandleWatcher {
         `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
         `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
       const optimizationAgeMsg = formatCombOptimizationAgeMessage(this.bot, now.getTime());
-      const lastNetPnl = this.bot.lastNetPnl;
-      const closedIndicator = this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+      const closedIndicator = formatCombJustManuallyClosedIndicator(this.bot.justManuallyClosedBy, this.bot.lastNetPnl);
 
       const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(4)}%` : "N/A";
 
@@ -134,7 +156,7 @@ class CombCandleWatcher {
         `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
         `ROC Val: ${rocVal}\n` +
         `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
-        `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
+        `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}\n${closedIndicator}`
       );
       this.bot.lastSRUpdateTime = Date.now();
     } catch (err) {
@@ -251,8 +273,7 @@ class CombCandleWatcher {
           const paramsMsg =
             `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
             `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
-          const lastNetPnl = this.bot.lastNetPnl;
-          const closedIndicator = this.bot.justManuallyClosedBy ? `\n⚠️ [closed via ${this.bot.justManuallyClosedBy === "close_pos" ? "/close_pos" : "TP_PB"} at (${(lastNetPnl ?? 0) >= 0 ? "🟩" : "🟥"} ${(lastNetPnl ?? 0).toFixed(2)} USDT)]` : "";
+          const closedIndicator = formatCombJustManuallyClosedIndicator(this.bot.justManuallyClosedBy, this.bot.lastNetPnl);
           const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(2)}%` : "N/A";
 
           const currLtpPrice = await ExchangeService.getLTPPrice(this.bot.symbol);
@@ -263,7 +284,7 @@ class CombCandleWatcher {
             `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
             `ROC Val: ${rocVal}\n` +
             `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
-            `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}${closedIndicator}`
+            `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}\n${closedIndicator}`
           );
 
           this.bot.lastSRUpdateTime = Date.now();

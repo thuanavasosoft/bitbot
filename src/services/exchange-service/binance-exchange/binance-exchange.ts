@@ -392,7 +392,13 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   async getSymbolInfo(symbol: string): Promise<ISymbolInfo> {
+    const normalizedSymbol = this._normalizeSymbol(symbol);
     const info = await this._getSymbolExchangeInfo(symbol);
+    const leverageBrackets = await this._client.getNotionalAndLeverageBrackets({ symbol: normalizedSymbol });
+    const symbolLeverageBracket = Array.isArray(leverageBrackets)
+      ? leverageBrackets.find((item) => item.symbol === normalizedSymbol) ?? leverageBrackets[0]
+      : leverageBrackets;
+    const maintenanceMarginRate = Number(symbolLeverageBracket?.brackets?.[0]?.maintMarginRatio ?? 0);
     const pricePrecision = this.parsePricePrecisionFromFilters(info.filters);
     const lotSizeFilter = info.filters.find((filter): filter is SymbolLotSizeFilter => filter.filterType === "LOT_SIZE");
     const marketLotSizeFilter = info.filters.find(
@@ -409,6 +415,7 @@ class BinanceExchange implements IExchangeInstance {
       minNotionalValue: Number(minNotionalFilter?.notional || 0),
       maxMktOrderQty: Number(marketLotSizeFilter?.maxQty || 0),
       maxLimitOrderQty: Number(lotSizeFilter?.maxQty || 0),
+      maintenanceMarginRate,
     };
   }
 

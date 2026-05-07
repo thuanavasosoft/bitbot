@@ -224,7 +224,7 @@ class TelegramService {
     // Error handling
     this.bot.catch((err, ctx) => {
       console.error('Error in bot:', err);
-      ctx.reply('An error occurred. Please try again later.');
+      ctx.reply('Telegram service: An error occurred. Please try again later.');
     });
   }
 
