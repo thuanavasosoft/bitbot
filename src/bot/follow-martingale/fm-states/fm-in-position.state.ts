@@ -1,6 +1,8 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import type { IWSOrderUpdate, IWSPositionUpdate } from "@/services/exchange-service/exchange-type";
 import type FollowMartingaleBot from "../follow-martingale-bot";
+import TelegramService from "@/services/telegram.service";
+import { AsyncMutex } from "@/utils/async-mutex.util";
 
 class FMInPositionState {
   private tradeListenerRemover?: () => void;
@@ -10,6 +12,7 @@ class FMInPositionState {
   private tpRestLoopAbort = false;
   private liquidationCheckInProgress = false;
   private tpRestCheckInProgress = false;
+  private tpFillMutex = new AsyncMutex();
 
   constructor(private bot: FollowMartingaleBot) { }
 
@@ -125,26 +128,36 @@ class FMInPositionState {
   }
 
   private async finalizeTpFill(executionPrice?: number, fillTimestampRaw?: number, source: "ws" | "rest" = "ws"): Promise<void> {
-    if (!this.bot.currActivePosition || this.bot.isFinalizingPosition) return;
-    this.bot.isClosingPosition = true;
+    await this.tpFillMutex.acquire();
+    try {
+      if (this.bot.isClosingPosition || !this.bot.currActivePosition || this.bot.isFinalizingPosition) return;
 
-    const closedPosition = await this.bot.orderExecutor.fetchClosedPositionSnapshot(this.bot.currActivePosition.id);
-    if (!closedPosition) {
-      throw new Error(`[FM] Could not fetch closed position snapshot for TP fill ${this.bot.currActivePosition.id}`);
+      this.bot.isClosingPosition = true;
+      try {
+        const closedPosition = await this.bot.orderExecutor.fetchClosedPositionSnapshot(this.bot.currActivePosition.id);
+        if (!closedPosition) {
+          throw new Error(`[FM] Could not fetch closed position snapshot for TP fill ${this.bot.currActivePosition.id}`);
+        }
+
+        const tpPrice = this.bot.activeTpPrice;
+        this.bot.queueMsg(
+          `✅ TP limit filled (${source.toUpperCase()})\nTP: ${tpPrice}\nExecution: ${executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice}`
+        );
+
+        this.bot.activeTpClientOrderId = undefined;
+        this.bot.activeTpPrice = undefined;
+        this.bot.activeTpQty = undefined;
+
+        const fillTimestamp = fillTimestampRaw ?? Date.now();
+        const snapshot = this.bot.buildExitSnapshot(closedPosition, "tp_limit", fillTimestamp, fillTimestamp, false);
+        await this.bot.finalizeClosedPosition(snapshot);
+      } catch (error) {
+        this.bot.isClosingPosition = false;
+        throw error;
+      }
+    } finally {
+      this.tpFillMutex.release();
     }
-
-    const tpPrice = this.bot.activeTpPrice;
-    this.bot.queueMsg(
-      `✅ TP limit filled (${source.toUpperCase()})\nTP: ${tpPrice}\nExecution: ${executionPrice ?? closedPosition.closePrice ?? closedPosition.avgPrice}`
-    );
-
-    this.bot.activeTpClientOrderId = undefined;
-    this.bot.activeTpPrice = undefined;
-    this.bot.activeTpQty = undefined;
-
-    const fillTimestamp = fillTimestampRaw ?? Date.now();
-    const snapshot = this.bot.buildExitSnapshot(closedPosition, "tp_limit", fillTimestamp, fillTimestamp, false);
-    await this.bot.finalizeClosedPosition(snapshot);
   }
 
   private async handleTradePrice(price: number, tradeTimeMs: number): Promise<void> {
@@ -200,11 +213,29 @@ class FMInPositionState {
   }
 
   private async addNextLeg(): Promise<void> {
-    if (!this.bot.currActivePosition) return;
+    if (!this.bot.currActivePosition || this.bot.isClosingPosition || this.bot.isFinalizingPosition) return;
     const cycleSide = this.bot.getActiveCycleSide();
     if (!cycleSide) return;
     const rawTrigger = this.bot.getEntryRawTrigger(cycleSide);
     if (rawTrigger === null) return;
+
+    const tpClientOrderId = this.bot.activeTpClientOrderId;
+    if (tpClientOrderId) {
+      try {
+        const tpOrder = await ExchangeService.getOrderDetail(this.bot.symbol, tpClientOrderId);
+        // TP already filled — skip add; close flow runs via handleOrderUpdate / checkTpOrderViaRest.
+        if (tpOrder && tpOrder.clientOrderId === tpClientOrderId && tpOrder.status === "filled") {
+          console.log("TP already filled, skipping add leg");
+          TelegramService.queueMsg("⚠️⚠️⚠️ TP already filled, skipping add leg and will only wait for TP close via TP order listener.");
+          // No need to add more legs if TP is already filled. let the tp order listener do it's job from here.
+          this.tradeListenerRemover?.();
+          this.tradeListenerRemover = undefined;
+          return;
+        }
+      } catch {
+        // Order may be missing from REST; do not add — TP close is finalized elsewhere (WS / REST TP loop).
+      }
+    }
 
     const legIndex = this.bot.legs.length + 1;
     const firstLeg = this.bot.legs[0];
@@ -223,13 +254,15 @@ class FMInPositionState {
         price: addResult.fillUpdate.executionPrice || addResult.position.avgPrice,
         time: new Date(addResult.fillUpdate.updateTime || Date.now()),
       };
+      const addEnteredAtMs = this.bot.lastEntryFillWsPrice.time.getTime();
       this.bot.legs.push({
         index: legIndex,
         baseQty: addResult.baseQty,
         entryPrice: this.bot.lastEntryFillWsPrice.price,
-        enteredAtMs: this.bot.lastEntryFillWsPrice.time.getTime(),
+        enteredAtMs: addEnteredAtMs,
         clientOrderId: addResult.clientOrderId,
       });
+      this.bot.recordLastEntryOrAdd(addEnteredAtMs);
       this.bot.cycleEntryClientOrderIds.push(addResult.clientOrderId);
       this.bot.recordEntrySlippage(
         cycleSide,
