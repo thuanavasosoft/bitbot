@@ -8,6 +8,7 @@ import { ICandleInfo } from "@/services/exchange-service/exchange-type";
 import type CombBotInstance from "./comb-bot-instance";
 import type { JustManuallyClosedBy } from "./comb-types";
 import { calc_UnrealizedPnl } from "@/utils/maths.util";
+import moment from "moment";
 
 /** Delay in ms after the minute mark before running each candle watcher iteration (e.g. 500 => 00:01:00.500). */
 const CANDLE_WATCHER_DELAY_AFTER_MINUTE_MS = 500;
@@ -18,9 +19,22 @@ function justManuallyClosedViaLabel(by: JustManuallyClosedBy): string {
       return "/close_pos";
     case "tp_pb":
       return "TP_PB";
+    case "margin_stop_loss":
+      return "margin stop loss";
     case "minority_prevention":
       return "minority prevention";
   }
+}
+
+function formatCombLiquidationLine(
+  pos: { liquidationPrice?: number } | undefined,
+  pricePrecision: number
+): string {
+  if (!pos) return "";
+  const liq = pos.liquidationPrice;
+  const display =
+    liq != null && Number.isFinite(liq) && liq > 0 ? liq.toLocaleString(undefined, { maximumFractionDigits: pricePrecision }) : "N/A";
+  return `\nLiquidation: ${display.toLocaleString()}`;
 }
 
 /** Telegram suffix line when the instance is in “closed but trailing context preserved” mode. */
@@ -87,6 +101,11 @@ class CombCandleWatcher {
         tpPbLevel = this.bot.tpPbFixedPrice;
       }
 
+      let marginStopLossLevel: number | null = null;
+      if (this.bot.currStopLossPrice != null && this.bot.isMarginStopLossEnabled() && this.bot.currActivePosition) {
+        marginStopLossLevel = this.bot.currStopLossPrice;
+      }
+
       if (rawResistance !== null) {
         const bufferMultiplier = new BigNumber(1).minus(this.bot.triggerBufferPercentage / 100);
         this.bot.longTrigger = new BigNumber(rawResistance)
@@ -121,11 +140,13 @@ class CombCandleWatcher {
             trailingStopRaw ?? undefined,
             trailingStopBuffered ?? undefined,
             tpPbLevel ?? undefined,
+            undefined,
+            marginStopLossLevel ? { price: marginStopLossLevel ?? 0, percent: this.bot.marginStopLossPercent ?? 0 } : null,
           ),
         {
-          label: "[CombCandleWatcher] refreshChart generateImage",
-          retries: 3,
-          minDelayMs: 2000,
+          label: "[CombCandleWatcher] generateImageOfCandlesWithSupportResistance",
+          retries: 5,
+          minDelayMs: 5000,
           isTransientError,
           onRetry: ({ attempt, delayMs, error, label }) =>
             console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error),
@@ -140,23 +161,27 @@ class CombCandleWatcher {
           : "";
       const tpPbMsg =
         tpPbLevel !== null ? `\nTP_PB fixed (${this.bot.tpPbPercent}% of gap): ${tpPbLevel}` : "";
+      const marginSlMsg = this.bot.isMarginStopLossEnabled()
+        ? `\n${this.bot.formatMarginStopLossStatus()}`
+        : "";
       const paramsMsg =
         `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
         `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
       const optimizationAgeMsg = formatCombOptimizationAgeMessage(this.bot, now.getTime());
       const closedIndicator = formatCombJustManuallyClosedIndicator(this.bot.justManuallyClosedBy, this.bot.lastNetPnl);
-
-      const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(4)}%` : "N/A";
+      const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(2)}%` : "N/A";
 
       const currLtpPrice = await ExchangeService.getLTPPrice(this.bot.symbol);
       const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, currLtpPrice) : 0;
       const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
+      const liqMsg = formatCombLiquidationLine(this.bot.currActivePosition, this.bot.pricePrecision);
 
       this.bot.queueMsg(
-        `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
+        `ℹ️ Curr LTP Price: ${currLtpPrice.toLocaleString(undefined, { maximumFractionDigits: this.bot.pricePrecision })} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
+        `Now (UTC): ${moment(now).utc().format("YYYY-MM-DD HH:mm")}\n` +
         `ROC Val: ${rocVal}\n` +
-        `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
-        `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}\n${closedIndicator}`
+        `Resistance: ${rawResistance !== null ? rawResistance.toLocaleString() : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger.toLocaleString() : "N/A"}\n` +
+        `Support: ${rawSupport !== null ? rawSupport.toLocaleString() : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger.toLocaleString() : "N/A"}${liqMsg}${trailingMsg}${tpPbMsg}${marginSlMsg}${paramsMsg}${optimizationAgeMsg}\n${closedIndicator}`
       );
       this.bot.lastSRUpdateTime = Date.now();
     } catch (err) {
@@ -173,121 +198,7 @@ class CombCandleWatcher {
     try {
       while (!this.bot.isStopped) {
         try {
-          const now = new Date();
-          await this.bot.combCandles.ensurePopulated();
-          now.setSeconds(0);
-          now.setMilliseconds(0);
-          let currCandles = await this.bot.combCandles.getCandles(new Date(now.getTime() - (this.bot.nSignal + 1) * 60 * 1000), now);
-          if (currCandles.length <= this.bot.nSignal) {
-            const markPrice = await ExchangeService.getMarkPrice(this.bot.symbol);
-            currCandles.push({
-              timestamp: now.getTime(),
-              openTime: now.getTime(),
-              closeTime: now.getTime(),
-              openPrice: markPrice,
-              highPrice: markPrice,
-              lowPrice: markPrice,
-              closePrice: markPrice,
-              volume: 0,
-            } as ICandleInfo);
-          }
-          const signalParams = { ...COMB_DEFAULT_SIGNAL_PARAMS, N: this.bot.nSignal };
-          const signalResult = calculateBreakoutSignal(currCandles, signalParams);
-          const rawSupport = signalResult.support;
-          const rawResistance = signalResult.resistance;
-          this.bot.currentSupport = rawSupport;
-          this.bot.currentResistance = rawResistance;
-
-          let trailingStopRaw: number | null = null;
-          let trailingStopBuffered: number | null = null;
-          const trailingTargets = this.bot.trailingStopTargets;
-          if (
-            trailingTargets &&
-            this.bot.currActivePosition &&
-            trailingTargets.side === this.bot.currActivePosition.side
-          ) {
-            trailingStopRaw = trailingTargets.rawLevel;
-            trailingStopBuffered = trailingTargets.bufferedLevel;
-          }
-
-          let tpPbLevel: number | null = null;
-          if (this.bot.tpPbPercent > 0 && this.bot.tpPbFixedPrice != null && this.bot.currActivePosition) {
-            tpPbLevel = this.bot.tpPbFixedPrice;
-          }
-
-          if (rawResistance !== null) {
-            const bufferMultiplier = new BigNumber(1).minus(this.bot.triggerBufferPercentage / 100);
-            const longTriggerRaw = new BigNumber(rawResistance).times(bufferMultiplier);
-            this.bot.longTrigger = longTriggerRaw
-              .decimalPlaces(this.bot.pricePrecision, BigNumber.ROUND_DOWN)
-              .toNumber();
-          } else {
-            this.bot.longTrigger = null;
-          }
-          if (rawSupport !== null) {
-            const bufferMultiplier = new BigNumber(1).plus(this.bot.triggerBufferPercentage / 100);
-            const shortTriggerRaw = new BigNumber(rawSupport).times(bufferMultiplier);
-            this.bot.shortTrigger = shortTriggerRaw
-              .decimalPlaces(this.bot.pricePrecision, BigNumber.ROUND_UP)
-              .toNumber();
-          } else {
-            this.bot.shortTrigger = null;
-          }
-
-          const signalImageData = await withRetries(
-            () =>
-              generateImageOfCandlesWithSupportResistance(
-                this.bot.symbol,
-                currCandles,
-                rawSupport,
-                rawResistance,
-                false,
-                now,
-                this.bot.currActivePosition ?? undefined,
-                this.bot.longTrigger ?? undefined,
-                this.bot.shortTrigger ?? undefined,
-                trailingStopRaw ?? undefined,
-                trailingStopBuffered ?? undefined,
-                tpPbLevel ?? undefined,
-              ),
-            {
-              label: "[CombCandleWatcher] generateImageOfCandlesWithSupportResistance",
-              retries: 5,
-              minDelayMs: 5000,
-              isTransientError,
-              onRetry: ({ attempt, delayMs, error, label }) => {
-                console.warn(`${label} retrying (attempt=${attempt}, delayMs=${delayMs}):`, error);
-              },
-            }
-          );
-          this.bot.queueMsg(signalImageData);
-
-          const trailingMsg =
-            trailingStopRaw !== null || trailingStopBuffered !== null
-              ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
-              : "";
-          const tpPbMsg =
-            tpPbLevel !== null ? `\nTP_PB fixed (${this.bot.tpPbPercent}% of gap): ${tpPbLevel}` : "";
-          const optimizationAgeMsg = formatCombOptimizationAgeMessage(this.bot, now.getTime());
-          const effectiveMult = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
-          const paramsMsg =
-            `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
-            `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
-          const closedIndicator = formatCombJustManuallyClosedIndicator(this.bot.justManuallyClosedBy, this.bot.lastNetPnl);
-          const rocVal = signalResult.roc != null ? `${(signalResult.roc * 100).toFixed(2)}%` : "N/A";
-
-          const currLtpPrice = await ExchangeService.getLTPPrice(this.bot.symbol);
-          const currPnl = !!this.bot.currActivePosition ? calc_UnrealizedPnl(this.bot.currActivePosition, currLtpPrice) : 0;
-          const pnlIndicator = currPnl >= 0 ? "🟩" : "🟥";
-
-          this.bot.queueMsg(
-            `ℹ️ Curr LTP Price: ${currLtpPrice.toFixed(this.bot.pricePrecision)} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
-            `ROC Val: ${rocVal}\n` +
-            `Resistance: ${rawResistance !== null ? rawResistance : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger : "N/A"}\n` +
-            `Support: ${rawSupport !== null ? rawSupport : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger : "N/A"}${trailingMsg}${tpPbMsg}${paramsMsg}${optimizationAgeMsg}\n${closedIndicator}`
-          );
-
-          this.bot.lastSRUpdateTime = Date.now();
+          await this.refreshChart();
 
           const nowMs = Date.now();
           const nextMinuteStartMs = (Math.floor(nowMs / 60_000) + 1) * 60_000;

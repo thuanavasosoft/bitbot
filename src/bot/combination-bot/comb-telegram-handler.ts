@@ -53,6 +53,7 @@ Run ID: ${this.bot.runId}
 Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
 Margin: ${this.bot.margin} USDT
+${this.bot.formatMarginStopLossStatus()}
 Buffer: ${this.bot.triggerBufferPercentage}%
 Trail confirm bars: ${this.bot.trailConfirmBars}
 

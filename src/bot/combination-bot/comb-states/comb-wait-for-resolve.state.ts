@@ -5,11 +5,18 @@ import { withRetries, isTransientError } from "../comb-retry";
 import type CombBotInstance from "../comb-bot-instance";
 import { TickRoundMode } from "@/bot/trail-multiplier-optimization-bot/tmob-states/tmob-wait-for-resolve.state";
 import { EEventBusEventType } from "@/utils/event-bus.util";
-import { IClosePositionMsgToCopyTrader } from "../comb-types";
+import { CombClosedExitReason, IClosePositionMsgToCopyTrader, JustManuallyClosedBy } from "../comb-types";
 import { generateRandomString } from "@/utils/strings.util";
+import { AsyncMutex } from "@/utils/async-mutex.util";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
+}
+
+const VIRTUAL_CLOSE_EXIT_REASONS = ["tp_pullback", "margin_stop_loss"] as const satisfies readonly CombClosedExitReason[];
+
+function isVirtualCloseExitReason(reason: string): reason is (typeof VIRTUAL_CLOSE_EXIT_REASONS)[number] {
+  return (VIRTUAL_CLOSE_EXIT_REASONS as readonly string[]).includes(reason);
 }
 
 class CombWaitForResolveState {
@@ -23,10 +30,12 @@ class CombWaitForResolveState {
   private liquidationAlertAlreadySent = false;
   private liquidationCheckIntervalId: ReturnType<typeof setInterval> | null = null;
   private lastPrice = 0;
-  private tpPbCloseInProgress = false;
+  private isExited = false;
+  private exitPriceMutex = new AsyncMutex();
+  private isManuallyClosingBy: JustManuallyClosedBy | undefined;
   private static readonly LIQUIDATION_CHECK_INTERVAL_MS = 5_000;
 
-  constructor(private bot: CombBotInstance) { }
+  constructor(private bot: CombBotInstance) {}
 
   /** Recalculate trailing stop levels (e.g. after temp_tm change). Call before refreshChart to show updated trail stop. */
   async refreshTrailingStopLevels(): Promise<void> {
@@ -34,6 +43,7 @@ class CombWaitForResolveState {
   }
 
   async onEnter() {
+    this.isExited = false;
     if (!this.bot.currActivePosition) {
       const msg = `[COMB] ${this.bot.symbol} currActivePosition is not defined but entering wait for resolve state`;
       console.error(msg);
@@ -86,13 +96,25 @@ class CombWaitForResolveState {
 
   private _watchForPositionExit() {
     this.ltpListenerRemover = ExchangeService.hookTradeListener(this.bot.symbol, (trade) => {
-      void this._handleExitPriceUpdate(trade.price);
+      this.lastPrice = trade.price;
+      void this._runExitPriceUpdateSerialized(trade.price);
     });
   }
 
-  private async _handleExitPriceUpdate(price: number) {
+  private async _runExitPriceUpdateSerialized(price: number) {
+    if (this.isExited) return;
+    await this.exitPriceMutex.acquire();
     try {
-      this.lastPrice = price;
+      await this._handleExitPriceUpdate(price);
+    } finally {
+      this.exitPriceMutex.release();
+    }
+  }
+
+  private async _handleExitPriceUpdate(price: number) {
+    if (this.isExited) return;
+
+    try {
       if (!this.bot.currActivePosition) {
         this._clearPriceListener();
         this._clearLiquidationCheckInterval();
@@ -136,38 +158,61 @@ class CombWaitForResolveState {
       let shouldExit = false;
       let exitReason = "";
 
-      // TP_PB v2: fixed TP from avg–LTP gap at /tp_pb time; no trailing. Runs without SR.
-      if (!shouldExit && this.bot.tpPbPercent > 0 && this.bot.tpPbFixedPrice != null && !this.bot.justManuallyClosedBy) {
-        const tpBn = new BigNumber(this.bot.tpPbFixedPrice);
-        if (position.side === "long") {
-          if (priceBn.lte(tpBn)) {
-            shouldExit = true;
-            exitReason = "tp_pullback";
-            this.bot.justManuallyClosedBy = "tp_pb";
-            console.log(
-              `[COMB] waitForResolve TP_PB triggered (long) symbol=${this.bot.symbol} price=${price} fixedTp=${this.bot.tpPbFixedPrice}`
-            );
-            this.bot.queueMsg(
-              `📉 TP_PB (fixed) triggered (long)\nPrice: ${price}\nFixed TP: ${this.bot.tpPbFixedPrice}`
-            );
-          }
-        } else if (priceBn.gte(tpBn)) {
+      // Margin stop loss: fixed price from entry at open (% of margin via leverage).
+      if (
+        !shouldExit &&
+        this.bot.currStopLossPrice != null &&
+        this.bot.isMarginStopLossEnabled() &&
+        !this.bot.justManuallyClosedBy &&
+        !this.isManuallyClosingBy
+      ) {
+        const slBn = new BigNumber(this.bot.currStopLossPrice);
+        const marginStopLossTriggered =
+          (position.side === "long" && priceBn.lte(slBn)) ||
+          (position.side === "short" && priceBn.gte(slBn));
+        if (marginStopLossTriggered) {
           shouldExit = true;
-          exitReason = "tp_pullback";
-          this.bot.justManuallyClosedBy = "tp_pb";
+          this.isManuallyClosingBy = "margin_stop_loss";
+          exitReason = "margin_stop_loss";
           console.log(
-            `[COMB] waitForResolve TP_PB triggered (short) symbol=${this.bot.symbol} price=${price} fixedTp=${this.bot.tpPbFixedPrice}`
+            `[COMB] waitForResolve marginStopLoss triggered (${position.side}) symbol=${this.bot.symbol} price=${price} stopLoss=${this.bot.currStopLossPrice}`
           );
           this.bot.queueMsg(
-            `📈 TP_PB (fixed) triggered (short)\nPrice: ${price}\nFixed TP: ${this.bot.tpPbFixedPrice}`
+            `🛑 Margin stop loss triggered (${position.side})\nPrice: ${price}\nStop loss: ${this.bot.currStopLossPrice} (${this.bot.marginStopLossPercent}% of margin)`
+          );
+        }
+      }
+
+      // TP_PB v2: fixed TP from avg–LTP gap at /tp_pb time; no trailing. Runs without SR.
+      if (
+        !shouldExit &&
+        this.bot.tpPbPercent > 0 &&
+        this.bot.tpPbFixedPrice != null &&
+        !this.bot.justManuallyClosedBy &&
+        !this.isManuallyClosingBy
+      ) {
+        const tpBn = new BigNumber(this.bot.tpPbFixedPrice);
+        const tpPbTriggered =
+          (position.side === "long" && priceBn.lte(tpBn)) ||
+          (position.side === "short" && priceBn.gte(tpBn));
+        if (tpPbTriggered) {
+          shouldExit = true;
+          this.isManuallyClosingBy = "tp_pb";
+          exitReason = "tp_pullback";
+          const tpPbEmoji = position.side === "long" ? "📉" : "📈";
+          console.log(
+            `[COMB] waitForResolve TP_PB triggered (${position.side}) symbol=${this.bot.symbol} price=${price} fixedTp=${this.bot.tpPbFixedPrice}`
+          );
+          this.bot.queueMsg(
+            `${tpPbEmoji} TP_PB (fixed) triggered (${position.side})\nPrice: ${price}\nFixed TP: ${this.bot.tpPbFixedPrice}`
           );
         }
       }
 
       if (!this.bot.currentSupport || !this.bot.currentResistance) {
         if (shouldExit) {
-          if (exitReason === "tp_pullback") {
-            await this._handleTpPbClose();
+          if (isVirtualCloseExitReason(exitReason)) {
+            await this._handleVirtualClose(exitReason);
           } else {
             this._clearPriceListener();
             await this._closeCurrPosition(exitReason);
@@ -177,8 +222,8 @@ class CombWaitForResolveState {
       }
 
       if (this.bot.lastEntryTime > 0 && this.bot.lastSRUpdateTime <= this.bot.lastEntryTime) {
-        if (shouldExit && exitReason === "tp_pullback") {
-          await this._handleTpPbClose();
+        if (shouldExit && isVirtualCloseExitReason(exitReason)) {
+          await this._handleVirtualClose(exitReason);
         } else if (shouldExit) {
           this._clearPriceListener();
           await this._closeCurrPosition(exitReason);
@@ -228,8 +273,8 @@ class CombWaitForResolveState {
       }
 
       if (shouldExit) {
-        if (exitReason === "tp_pullback") {
-          await this._handleTpPbClose();
+        if (isVirtualCloseExitReason(exitReason)) {
+          await this._handleVirtualClose(exitReason);
           // Do not clear price listener - watchers stay running so trailing stop can trigger and reset state
         } else {
           this._clearPriceListener();
@@ -756,47 +801,34 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
         triggerTimestamp: triggerTs,
         fillTimestamp,
         isLiquidation: reason === "liquidation_exit",
-        exitReason: reason === "atr_trailing" ? "atr_trailing" : "signal_change",
+        exitReason:
+          reason === "atr_trailing"
+            ? "atr_trailing"
+            : "signal_change",
       });
     } finally {
       this.bot.isClosingPosition = false;
     }
   }
 
-  /** Close via TP_PB when fixed TP level is hit — same pattern as /close_pos: record PnL, preserve state, watchers stay running. */
-  private async _handleTpPbClose(): Promise<void> {
-    const activePosition = this.bot.currActivePosition;
-    if (!activePosition) return;
-    if (this.tpPbCloseInProgress) return;
-    if (this.bot.isClosingPosition) {
-      console.log(`[COMB] _handleTpPbClose skipped: lock held for ${this.bot.symbol}`);
-      this.bot.queueMsg(`⚠️ [${this.bot.symbol}] TP_PB close blocked: another close is already in progress — lock is held.`);
-      this.bot.justManuallyClosedBy = undefined;
-      return;
-    }
-    if (!this.bot.justManuallyClosedBy) {
-      this.bot.justManuallyClosedBy = "tp_pb";
-    }
-    this.tpPbCloseInProgress = true;
-    this.bot.isClosingPosition = true;
+  /** Virtual close (TP_PB, margin SL): record PnL, preserve state, watchers stay running. */
+  private async _handleVirtualClose(exitReason: (typeof VIRTUAL_CLOSE_EXIT_REASONS)[number]): Promise<void> {
     try {
-      this.bot.virtualClosePosition("tp_pullback");
+      await this.bot.virtualClosePosition(exitReason);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error("[COMB] TP_PB close failed:", error);
-      this.bot.justManuallyClosedBy = undefined; // Reset so user can retry
-      this.bot.queueMsg(`❌ TP_PB close failed for ${this.bot.symbol}: ${msg}`);
-    } finally {
-      this.tpPbCloseInProgress = false;
-      this.bot.isClosingPosition = false;
+      console.error(`[COMB] Virtual close failed (${exitReason}):`, error);
+      this.bot.justManuallyClosedBy = undefined;
+      this.bot.queueMsg(`❌ Virtual close failed for ${this.bot.symbol} (${exitReason}): ${msg}`);
     }
   }
 
   async onExit() {
     console.log(`[COMB] CombWaitForResolveState onExit symbol=${this.bot.symbol}`);
     this._stopAllWatchers();
-    this.tpPbCloseInProgress = false;
+    this.isManuallyClosingBy = undefined;
     this.bot.isClosingPosition = false;
+    this.isExited = true;
   }
 
   _quantizeToTick(price: number, mode: TickRoundMode, withLogs?: boolean): number {

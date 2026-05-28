@@ -61,6 +61,7 @@ const EXIT_REASON_DISPLAY = new Map<string, string>([
   ["tp_pullback", "TP_PB (state reset)"],
   ["close_command", "close command"],
   ["minority_prevention", "minority prevention"],
+  ["margin_stop_loss", "margin stop loss"],
 ]);
 
 function formatExitReasonDisplay(exitReason: string): string {
@@ -78,6 +79,8 @@ function justManuallyClosedByFromVirtualExitReason(
       return "minority_prevention";
     case "tp_pullback":
       return "tp_pb";
+    case "margin_stop_loss":
+      return "margin_stop_loss";
     case "atr_trailing":
     case "signal_change":
     case "end":
@@ -134,6 +137,12 @@ class CombBotInstance {
   tpPbPercent: number = 0;
   /** Fixed TP price set when /tp_pb runs (does not trail with LTP). */
   tpPbFixedPrice?: number;
+  /**
+   * Max unrealized loss as % of margin (from env or /set_sl). Undefined or 0 = disabled.
+   */
+  marginStopLossPercent?: number;
+  /** Stop-loss trigger price for the current position (from entry avg). Cleared on close. */
+  currStopLossPrice?: number;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -221,6 +230,7 @@ class CombBotInstance {
     this.trailBoundStepSize = config.TRAIL_BOUND_STEP_SIZE;
     this.trailMultiplierBounds = { min: config.TRAIL_MULTIPLIER_BOUNDS_MIN, max: config.TRAIL_MULTIPLIER_BOUNDS_MAX };
     this.telegramChatId = config.TELEGRAM_CHAT_ID;
+    this.marginStopLossPercent = config.MARGIN_STOP_LOSS;
 
     this.orderWatcher = new CombOrderWatcher();
 
@@ -255,6 +265,57 @@ class CombBotInstance {
     this.trailingCloseWindow = [];
     this.trailingStopTargets = undefined;
     this.trailingStopBreachCount = 0;
+  }
+
+  isMarginStopLossEnabled(): boolean {
+    return this.marginStopLossPercent != null && this.marginStopLossPercent > 0;
+  }
+
+  computeStopLossPrice(entryFill: number, side: TPositionSide): number | undefined {
+    if (!this.isMarginStopLossEnabled()) return undefined;
+    const stopLossPctFrac = this.marginStopLossPercent! / 100;
+    const raw =
+      side === "long"
+        ? entryFill * (1 - stopLossPctFrac / this.leverage)
+        : entryFill * (1 + stopLossPctFrac / this.leverage);
+    return quantizePriceByPrecision(
+      raw,
+      this.pricePrecision,
+      side === "long" ? "up" : "down"
+    );
+  }
+
+  /** Recompute currStopLossPrice from the active position entry (e.g. after open or /set_sl). */
+  updateCurrStopLossFromPosition(): void {
+    const pos = this.currActivePosition;
+    if (!pos || !this.isMarginStopLossEnabled()) {
+      this.currStopLossPrice = undefined;
+      return;
+    }
+    this.currStopLossPrice = this.computeStopLossPrice(pos.avgPrice, pos.side);
+  }
+
+  formatMarginStopLossStatus(pricePrecision?: number): string {
+    if (!this.isMarginStopLossEnabled()) return "Margin stop loss: disabled";
+    const fd = pricePrecision ?? this.pricePrecision;
+    const pricePart =
+      this.currStopLossPrice != null
+        ? ` → ${formatEnUsNumber(this.currStopLossPrice, fd)}`
+        : "";
+    return `Margin stop loss: ${formatEnUsNumber(this.marginStopLossPercent!, 4)}% of margin${pricePart}`;
+  }
+
+  /**
+   * Set margin stop-loss percent (0 or invalid disables). Recalculates price when a position is open.
+   */
+  applyMarginStopLossPercent(percent: number): void {
+    if (!Number.isFinite(percent) || percent <= 0) {
+      this.marginStopLossPercent = undefined;
+      this.currStopLossPrice = undefined;
+      return;
+    }
+    this.marginStopLossPercent = percent;
+    this.updateCurrStopLossFromPosition();
   }
 
   /** Refresh trailing stop levels (if in wait-for-resolve) and send the price chart to the instance channel. */
@@ -408,7 +469,7 @@ class CombBotInstance {
       triggerTimestamp?: number;
       fillTimestamp?: number;
       isLiquidation?: boolean;
-      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "tp_pullback" | "close_command" | "minority_prevention";
+      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "tp_pullback" | "close_command" | "minority_prevention" | "margin_stop_loss";
       /** When true, does not emit a state transition event. Caller must handle state transition explicitly. */
       suppressStateChange?: boolean;
     }
@@ -536,6 +597,7 @@ class CombBotInstance {
       this.isPnlRecorded = false;
       this.tpPbPercent = 0;
       this.tpPbFixedPrice = undefined;
+      this.currStopLossPrice = undefined;
 
       if (!_options?.suppressStateChange) {
         this.stateBus.emit(EEventBusEventType.StateChange);
@@ -649,13 +711,23 @@ class CombBotInstance {
   }
 
   async virtualClosePosition(exitReason: CombClosedExitReason): Promise<void> {
-    const activePosition = this.currActivePosition;
     if (this.justManuallyClosedBy) {
       this.queueMsg(`Cannot virtually close position for ${this.symbol}: a position was already closed via ${this.justManuallyClosedBy}. Not doing anything..`);
       return;
     }
 
-    if (activePosition) {
+    if (this.isClosingPosition) {
+      return;
+    }
+
+    const activePosition = this.currActivePosition;
+    if (!activePosition) {
+      this.queueMsgPriority(`No active position for ${this.symbol}. State unchanged.`);
+      return;
+    }
+
+    this.isClosingPosition = true;
+    try {
       this.queueMsgPriority(`Closing active position for ${this.symbol}...`);
       const closedPosition = await this.orderExecutor.triggerCloseSignal(activePosition);
       this.justManuallyClosedBy = justManuallyClosedByFromVirtualExitReason(exitReason);
@@ -684,7 +756,7 @@ class CombBotInstance {
         totalPnL: this.totalActualCalculatedProfit,
         entryTimestamp: entryFill?.time ? entryFill.time.toISOString() : null,
         entryTimestampMs: entryFill?.time ? entryFill.time.getTime() : null,
-        entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition?.avgPrice) ? activePosition!.avgPrice : null),
+        entryFillPrice: entryFill?.price ?? (Number.isFinite(activePosition.avgPrice) ? activePosition.avgPrice : null),
         exitTimestamp: new Date(closedPosition.updateTime).toISOString(),
         exitTimestampMs: closedPosition.updateTime,
         exitFillPrice: typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice,
@@ -693,8 +765,8 @@ class CombBotInstance {
       });
 
       this.queueMsgPriority(`✅ ${exitReason} Close request completed for ${this.symbol}. State unchanged.`);
-    } else {
-      this.queueMsgPriority(`No active position for ${this.symbol}. State unchanged.`);
+    } finally {
+      this.isClosingPosition = false;
     }
   }
 }
