@@ -51,11 +51,11 @@ export type CombPnlHistoryPoint = {
   exitTimestampMs: number;
   exitFillPrice: number;
   tradePnL: number;
-  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention";
+  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss";
 };
 
 /** Indicates position was closed but state should be preserved until trailing stop triggers. */
-export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention";
+export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention" | "margin_stop_loss";
 
 export type CombRunBacktestArgs = {
   symbol: string;
@@ -119,6 +119,8 @@ export interface CombInstanceConfig {
   TRAIL_MULTIPLIER_BOUNDS_MIN: number;
   TRAIL_MULTIPLIER_BOUNDS_MAX: number;
   TELEGRAM_CHAT_ID: string;
+  /** Max loss as % of margin before stop-loss price triggers. Undefined = disabled. */
+  MARGIN_STOP_LOSS?: number;
 }
 
 /** Order fill update shape used by comb-order-executor. */
@@ -127,7 +129,7 @@ export interface IOrderFillUpdate {
   executionPrice: number;
 }
 
-export type CombClosedExitReason = "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention";
+export type CombClosedExitReason = "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss";
 
 /** Event emitted by an instance so the general bot can notify the general channel. */
 export type CombInstanceEvent =

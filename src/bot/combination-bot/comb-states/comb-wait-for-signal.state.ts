@@ -163,6 +163,7 @@ class CombWaitForSignalState {
           this.bot.resetTrailingStopTracking();
           this.bot.tpPbPercent = 0;
           this.bot.tpPbFixedPrice = undefined;
+          this.bot.updateCurrStopLossFromPosition();
           this.bot.lastEntryTime = Date.now();
           this.bot.numberOfTrades++;
 
@@ -205,7 +206,10 @@ Price Diff(pips): ${icon} ${priceDiff}
 `);
           console.log(`[COMB] waitForSignal positionOpened symbol=${this.bot.symbol} positionId=${position.id} side=${position.side} avgPrice=${position.avgPrice} size=${position.size}`);
           this.bot.notifyInstanceEvent({ type: "position_opened", position, symbol: this.bot.symbol });
-          this.bot.queueMsg(`🥳 New position opened\n${getPositionDetailMsg(position)}`);
+          const slLine = this.bot.isMarginStopLossEnabled()
+            ? `\n${this.bot.formatMarginStopLossStatus()}`
+            : "";
+          this.bot.queueMsg(`🥳 New position opened\n${getPositionDetailMsg(position)}${slLine}`);
           await this.bot.combinationBot.handleMinorityPreventionAfterOpen(this.bot);
           this.bot.stateBus.emit(EEventBusEventType.StateChange);
         } finally {

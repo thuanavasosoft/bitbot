@@ -59,6 +59,7 @@ const COMB_EXIT_REASON_LABELS: Partial<Record<CombClosedExitReason, string>> = {
   atr_trailing: "Trailing stop",
   signal_change: "Signal/close",
   minority_prevention: "Minority prevention",
+  margin_stop_loss: "Margin stop loss",
 };
 
 /** Required env keys: COMB_BOT_N_<KEY>. Keys match CombInstanceConfig. */
@@ -105,7 +106,12 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
   }
 
   const telegramChatId = envStrRequired(prefix + "TELEGRAM_CHAT_ID") || undefined;
-  return { ...config, TELEGRAM_CHAT_ID: telegramChatId } as CombInstanceConfig;
+  const marginStopLossRaw = envNumRequired(prefix + "MARGIN_STOP_LOSS");
+  const marginStopLoss =
+    marginStopLossRaw !== undefined && Number.isFinite(marginStopLossRaw) && marginStopLossRaw > 0
+      ? marginStopLossRaw
+      : undefined;
+  return { ...config, TELEGRAM_CHAT_ID: telegramChatId, MARGIN_STOP_LOSS: marginStopLoss } as CombInstanceConfig;
 }
 
 /**
@@ -303,16 +309,6 @@ class CombinationBot {
     activePosition: IPosition,
     counts: CombPositionCounts
   ): Promise<void> {
-    if (inst.isClosingPosition) {
-      const message =
-        `⚠️ Minority prevention could not close ${this.getInstanceLabel(inst)} because another close is already in progress.\n` +
-        `Strategy-active comb positions: ${this.formatActivePositionCounts(counts)}`;
-      inst.queueMsgPriority(message);
-      this.queueGeneralMessage(`[COMB] ${message}`);
-      return;
-    }
-
-    inst.isClosingPosition = true;
     const startMessage =
       `🛡️ Minority prevention closing this ${activePosition.side.toUpperCase()} position immediately.\n` +
       `Position ID: ${activePosition.id}\n` +
@@ -321,14 +317,12 @@ class CombinationBot {
     this.queueGeneralMessage(`[COMB] ${this.getInstanceLabel(inst)} ${startMessage}`);
 
     try {
-      inst.virtualClosePosition("minority_prevention");
+      await inst.virtualClosePosition("minority_prevention");
     } catch (error) {
       const message =
         `❌ Minority prevention failed to close ${this.getInstanceLabel(inst)}: ${error instanceof Error ? error.message : String(error)}`;
       inst.queueMsgPriority(message);
       this.queueGeneralMessage(`[COMB] ${message}`);
-    } finally {
-      inst.isClosingPosition = false;
     }
   }
 
@@ -340,8 +334,11 @@ class CombinationBot {
     const prefix = `[COMB] BOT_${botIndex} (${inst.symbol})`;
     if (event.type === "position_opened") {
       const pos = event.position;
+      const slSuffix = inst.isMarginStopLossEnabled()
+        ? ` | ${inst.formatMarginStopLossStatus()}`
+        : "";
       this.queueGeneralMessage(
-        `${prefix} 📈 Position opened: ${pos.side} @ ${pos.avgPrice} | Size: ${pos.size} | Liq: ${pos.liquidationPrice ?? "N/A"}`
+        `${prefix} 📈 Position opened: ${pos.side} @ ${pos.avgPrice} | Size: ${pos.size} | Liq: ${pos.liquidationPrice ?? "N/A"}${slSuffix}`
       );
       return;
     }
@@ -444,12 +441,14 @@ class CombinationBot {
         lines.push("Position:");
         lines.push(`Side: ${pos.side.toUpperCase()} | Entry: ${pos.avgPrice} | Size: ${pos.size}`);
         lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
+        lines.push(inst.formatMarginStopLossStatus());
         if (inst.justManuallyClosedBy) {
           const lastNetPnl = inst.lastNetPnl;
           lines.push("\n" + formatCombJustManuallyClosedIndicator(inst.justManuallyClosedBy, lastNetPnl));
         }
       } else {
         lines.push("Position: No open position");
+        lines.push(inst.formatMarginStopLossStatus());
       }
       lines.push("");
       lines.push(
@@ -569,6 +568,8 @@ class CombinationBot {
         "/temp_tm all|{SYMBOL} {value} — Set temporary trail multiplier \n(e.g. /temp_tm all 20). Cleared when position closes.",
         para,
         "/tp_pb all|{SYMBOL} {percent} — Fixed TP at % of avg–LTP gap \n(e.g. /tp_pb all 50). 0 = disabled.",
+        para,
+        "/set_sl all|{SYMBOL} {percent} — Margin stop loss as % of margin \n(e.g. /set_sl all 60). 0 = disabled.",
         para,
         "/un_pnl — Show current unrealized PnL for all instances (one symbol per line).",
         para,
@@ -874,6 +875,79 @@ class CombinationBot {
         return;
       }
       await bot.applyTpPbFromTelegram(value);
+    });
+
+    TelegramService.appendTgCmdHandler("set_sl", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /set_sl in the general channel.", String(chatId));
+        return;
+      }
+
+      const target = parts[1];
+      const valueStr = parts[2];
+      if (!target || valueStr === undefined) {
+        TelegramService.queueMsgPriority(
+          "Usage: /set_sl all {percent} or /set_sl {SYMBOL} {percent} (e.g. /set_sl all 60). 0 = disabled.",
+          this.generalChatId
+        );
+        return;
+      }
+      const value = Number(valueStr);
+      if (!Number.isFinite(value) || value < 0) {
+        TelegramService.queueMsgPriority("Percent must be a non-negative number.", this.generalChatId);
+        return;
+      }
+
+      const applyToInstance = async (inst: CombBotInstance): Promise<void> => {
+        inst.applyMarginStopLossPercent(value);
+        const status = inst.formatMarginStopLossStatus();
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(
+            value === 0
+              ? `Margin stop loss disabled for ${inst.symbol}.`
+              : `${status} for ${inst.symbol}.${inst.currActivePosition ? " Recalculated for open position." : ""}`,
+            inst.telegramChatId
+          );
+        }
+        if (inst.currActivePosition) {
+          await inst.refreshChartAndTrailingLevels();
+        }
+      };
+
+      if (target.toLowerCase() === "all") {
+        const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+        TelegramService.queueMsgPriority(
+          value === 0
+            ? `Margin stop loss disabled on all instances (${symbolsStr}).`
+            : `Setting margin stop loss to ${value}% of margin on all instances (${symbolsStr}).`,
+          this.generalChatId
+        );
+        for (const inst of this.instances) {
+          await applyToInstance(inst);
+        }
+        return;
+      }
+
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      await applyToInstance(inst);
+      TelegramService.queueMsgPriority(
+        value === 0
+          ? `Margin stop loss disabled for ${inst.symbol}.`
+          : `${inst.formatMarginStopLossStatus()} for ${inst.symbol}.`,
+        this.generalChatId
+      );
     });
 
     TelegramService.appendTgCmdHandler("close_pos", async (ctx) => {

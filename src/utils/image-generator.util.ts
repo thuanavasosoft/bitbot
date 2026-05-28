@@ -140,6 +140,7 @@ export async function generateImageOfCandlesWithSupportResistance(
   trailingStopBuffered?: number | null,
   tpPbLevel?: number | null,
   takeProfitLevel?: number | null,
+  marginStopLossLevel?: { price: number, percent: number } | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
   const ctx = canvas.getContext('2d');
@@ -298,6 +299,34 @@ export async function generateImageOfCandlesWithSupportResistance(
         content: [`Trail Stop Buf: ${trailingStopBuffered}`],
         position: "end",
         backgroundColor: "#00BFFF",
+        color: "#FFFFFF",
+        xAdjust: 4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
+  // Margin stop loss (purple) when configured and position is open
+  if (marginStopLossLevel !== null && marginStopLossLevel !== undefined) {
+    const slColor = "#E28743"; // Orange
+    annotations.marginStopLoss = {
+      type: 'line' as any,
+      yMin: marginStopLossLevel.price,
+      yMax: marginStopLossLevel.price,
+      borderColor: slColor,
+      borderWidth: 2,
+      borderDash: [8, 4],
+      label: {
+        display: true,
+        content: [`Stop Loss (${marginStopLossLevel.percent.toLocaleString()}% of margin): ${marginStopLossLevel.price.toLocaleString()}`],
+        position: "end",
+        backgroundColor: slColor,
         color: "#FFFFFF",
         xAdjust: 4,
         font: {
