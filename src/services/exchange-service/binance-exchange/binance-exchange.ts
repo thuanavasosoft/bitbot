@@ -44,6 +44,11 @@ import type { IExchangeInstance } from "../exchange-service";
 type TPriceListener = (price: number) => void;
 type TPriceTimestampListener = (price: number, timestamp: number) => void;
 type TTradeListener = (trade: IWSTradeTick) => void;
+type TAggTradeAckWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+};
 
 type TPositionMeta = {
   symbol: string;
@@ -60,6 +65,13 @@ type TPositionMeta = {
 };
 
 class BinanceExchange implements IExchangeInstance {
+  private static readonly AGG_TRADE_WATCHDOG_TIMEOUT_MS = 10_000;
+  private static readonly AGG_TRADE_WATCHDOG_INTERVAL_MS = 1_000;
+  private static readonly AGG_TRADE_SUBSCRIBE_ACK_TIMEOUT_MS = 5_000;
+  private static readonly AGG_TRADE_SUBSCRIBE_MAX_ATTEMPTS = 3;
+  private static readonly AGG_TRADE_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+  private static readonly AGG_TRADE_WS_KEY = "usdmMarket";
+
   private _client: USDMClient;
   private _wsClient: WebsocketClient;
   private _symbols: string[];
@@ -69,6 +81,12 @@ class BinanceExchange implements IExchangeInstance {
   private _ltpPrices: Record<string, number> = {};
   private _subscribedSymbols: Record<string, boolean> = {};
   private _subscribedAggTradeSymbols: Record<string, boolean> = {};
+  private _lastAggTradeAt: Record<string, number> = {};
+  private _aggTradeSubscriptionPromises: Record<string, Promise<void> | undefined> = {};
+  private _aggTradeAckWaiters: Map<string, TAggTradeAckWaiter> = new Map();
+  private _aggTradeWatchdogTimer?: NodeJS.Timeout;
+  private _aggTradeWatchdogRunning = false;
+  private _aggTradeReconnectInProgress = false;
   private _normalizedToOriginalSymbol: Record<string, string> = {};
 
   private _priceListenerCallbacks: Record<string, Record<string, TPriceListener>> = {};
@@ -95,8 +113,9 @@ class BinanceExchange implements IExchangeInstance {
     });
 
     this._wsClient = new WebsocketClient({
-      api_key: apiKey,
-      api_secret: secretKey,
+      api_key: this._isTestnet ? process.env.TESTNET_API_KEY : apiKey,
+      api_secret: this._isTestnet ? process.env.TESTNET_API_SECRET : secretKey,
+      testnet: this._isTestnet,
       beautify: true,
     });
 
@@ -546,7 +565,9 @@ class BinanceExchange implements IExchangeInstance {
     if (!this._tradeListenerCallbacks[symbol]) this._tradeListenerCallbacks[symbol] = {};
     this._tradeListenerCallbacks[symbol][id] = callback;
 
-    void this._subscribeAggTrades(symbol);
+    void this._subscribeAggTrades(symbol).catch((error) => {
+      console.error(`[BinanceExchange] Failed to subscribe aggTrade for ${symbol}:`, error);
+    });
 
     return () => {
       delete this._tradeListenerCallbacks[symbol][id];
@@ -579,11 +600,227 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   private async _subscribeAggTrades(symbol: string): Promise<void> {
-    if (this._subscribedAggTradeSymbols[symbol]) return;
-    this._subscribedAggTradeSymbols[symbol] = true;
-
     const normalizedSymbol = this._normalizeSymbol(symbol);
-    await this._wsClient.subscribeAggregateTrades(normalizedSymbol, "usdm");
+    if (this._subscribedAggTradeSymbols[normalizedSymbol]) return;
+
+    const existingSubscription = this._aggTradeSubscriptionPromises[normalizedSymbol];
+    if (existingSubscription) return existingSubscription;
+
+    const subscription = this._subscribeAggTradesWithRetry(normalizedSymbol).finally(() => {
+      if (this._aggTradeSubscriptionPromises[normalizedSymbol] === subscription) {
+        delete this._aggTradeSubscriptionPromises[normalizedSymbol];
+      }
+    });
+    this._aggTradeSubscriptionPromises[normalizedSymbol] = subscription;
+    return subscription;
+  }
+
+  private async _subscribeAggTradesWithRetry(normalizedSymbol: string): Promise<void> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= BinanceExchange.AGG_TRADE_SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
+      const ack = this._createAggTradeAckWaiter(normalizedSymbol);
+      try {
+        await this._wsClient.subscribeAggregateTrades(normalizedSymbol, "usdm");
+        await ack.promise;
+
+        this._subscribedAggTradeSymbols[normalizedSymbol] = true;
+        this._lastAggTradeAt[normalizedSymbol] = Date.now();
+        this._ensureAggTradeWatchdog();
+        console.info(`[BinanceExchange] aggTrade subscription confirmed for ${normalizedSymbol}.`);
+        return;
+      } catch (error) {
+        ack.cancel();
+        lastError = error;
+        this._subscribedAggTradeSymbols[normalizedSymbol] = false;
+        console.warn(
+          `[BinanceExchange] aggTrade subscription attempt ${attempt}/${BinanceExchange.AGG_TRADE_SUBSCRIBE_MAX_ATTEMPTS} failed for ${normalizedSymbol}:`,
+          error
+        );
+
+        if (attempt < BinanceExchange.AGG_TRADE_SUBSCRIBE_MAX_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, BinanceExchange.AGG_TRADE_SUBSCRIBE_RETRY_DELAY_MS * attempt));
+        }
+      }
+    }
+
+    delete this._lastAggTradeAt[normalizedSymbol];
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Failed to subscribe aggTrade for ${normalizedSymbol}`);
+  }
+
+  private _createAggTradeAckWaiter(normalizedSymbol: string): {
+    promise: Promise<void>;
+    cancel: () => void;
+  } {
+    this._rejectAggTradeAckWaiter(normalizedSymbol, new Error(`Superseded aggTrade subscription for ${normalizedSymbol}`));
+
+    let waiter!: TAggTradeAckWaiter;
+    const promise = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this._aggTradeAckWaiters.get(normalizedSymbol) === waiter) {
+          this._aggTradeAckWaiters.delete(normalizedSymbol);
+        }
+        reject(
+          new Error(
+            `Timed out waiting ${BinanceExchange.AGG_TRADE_SUBSCRIBE_ACK_TIMEOUT_MS}ms for aggTrade ACK (${normalizedSymbol})`
+          )
+        );
+      }, BinanceExchange.AGG_TRADE_SUBSCRIBE_ACK_TIMEOUT_MS);
+      timer.unref?.();
+      waiter = { resolve, reject, timer };
+      this._aggTradeAckWaiters.set(normalizedSymbol, waiter);
+    });
+    // The socket connection itself may still be opening when the ACK timer expires.
+    // Attach a handler immediately to avoid a transient unhandled rejection; callers
+    // still await the original promise and receive the same rejection.
+    void promise.catch(() => undefined);
+
+    return {
+      promise,
+      cancel: () => {
+        const current = this._aggTradeAckWaiters.get(normalizedSymbol);
+        if (current !== waiter) return;
+        clearTimeout(current.timer);
+        this._aggTradeAckWaiters.delete(normalizedSymbol);
+      },
+    };
+  }
+
+  private _resolveAggTradeAckWaiter(normalizedSymbol: string): void {
+    const waiter = this._aggTradeAckWaiters.get(normalizedSymbol);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this._aggTradeAckWaiters.delete(normalizedSymbol);
+    waiter.resolve();
+  }
+
+  private _rejectAggTradeAckWaiter(normalizedSymbol: string, error: Error): void {
+    const waiter = this._aggTradeAckWaiters.get(normalizedSymbol);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this._aggTradeAckWaiters.delete(normalizedSymbol);
+    waiter.reject(error);
+  }
+
+  private _handleWsResponse(response: any): void {
+    if (response?.wsKey !== BinanceExchange.AGG_TRADE_WS_KEY) return;
+    if (response?.request?.method !== "SUBSCRIBE" || !Array.isArray(response.request.params)) return;
+
+    for (const topic of response.request.params) {
+      if (typeof topic !== "string" || !topic.toLowerCase().endsWith("@aggtrade")) continue;
+      const normalizedSymbol = topic.slice(0, -"@aggTrade".length).toUpperCase();
+      this._subscribedAggTradeSymbols[normalizedSymbol] = true;
+      this._lastAggTradeAt[normalizedSymbol] = Date.now();
+      this._resolveAggTradeAckWaiter(normalizedSymbol);
+    }
+  }
+
+  private _rejectPendingAggTradeSubscriptions(error: Error): void {
+    for (const normalizedSymbol of this._aggTradeAckWaiters.keys()) {
+      this._rejectAggTradeAckWaiter(normalizedSymbol, error);
+    }
+  }
+
+  private _ensureAggTradeWatchdog(): void {
+    if (this._aggTradeWatchdogTimer) return;
+
+    this._aggTradeWatchdogTimer = setInterval(() => {
+      void this._runAggTradeWatchdog();
+    }, BinanceExchange.AGG_TRADE_WATCHDOG_INTERVAL_MS);
+    this._aggTradeWatchdogTimer.unref?.();
+  }
+
+  private async _runAggTradeWatchdog(): Promise<void> {
+    if (this._aggTradeWatchdogRunning) return;
+    this._aggTradeWatchdogRunning = true;
+
+    try {
+      const now = Date.now();
+      const staleSymbols = Object.keys(this._subscribedAggTradeSymbols).filter((normalizedSymbol) => {
+        if (!this._subscribedAggTradeSymbols[normalizedSymbol]) return false;
+        const originalSymbol = this._toOriginalSymbol(normalizedSymbol);
+        const hasListeners = Object.keys(this._tradeListenerCallbacks[originalSymbol] ?? {}).length > 0;
+        const lastTickAt = this._lastAggTradeAt[normalizedSymbol] ?? 0;
+        return hasListeners && now - lastTickAt >= BinanceExchange.AGG_TRADE_WATCHDOG_TIMEOUT_MS;
+      });
+
+      if (staleSymbols.length === 0) return;
+
+      // Move the deadline before starting REST calls so a slow request cannot create
+      // overlapping watchdog executions for the same symbol.
+      const staleSince = new Map(staleSymbols.map((symbol) => [symbol, this._lastAggTradeAt[symbol] ?? 0]));
+      staleSymbols.forEach((symbol) => {
+        this._lastAggTradeAt[symbol] = now;
+      });
+
+      await Promise.all(
+        staleSymbols.map(async (normalizedSymbol) => {
+          try {
+            const ticker = await this._client.getSymbolPriceTickerV2({ symbol: normalizedSymbol });
+            const restPrice = Number(ticker.price);
+            if (!Number.isFinite(restPrice) || restPrice <= 0) {
+              throw new Error(`Invalid REST price: ${ticker.price}`);
+            }
+
+            // A real WS tick may have arrived while REST was in flight. In that case
+            // it is newer and the synthetic tick is no longer needed.
+            if ((this._lastAggTradeAt[normalizedSymbol] ?? 0) > now) return;
+
+            const originalSymbol = this._toOriginalSymbol(normalizedSymbol);
+            const timestamp = Number(ticker.time ?? Date.now());
+            const syntheticTrade: IWSTradeTick = {
+              id: `rest-watchdog-${normalizedSymbol}-${timestamp}`,
+              symbol: originalSymbol,
+              price: restPrice,
+              quantity: 0,
+              // REST ticker has no aggressor-side information. Consumers currently
+              // use the tick price; the zero quantity identifies this as synthetic.
+              side: "buy",
+              timestamp,
+            };
+
+            this._ltpPrices[originalSymbol] = restPrice;
+            this._emitTradeToListeners(syntheticTrade);
+            console.warn(
+              `[BinanceExchange] No aggTrade tick for ${normalizedSymbol} in ${BinanceExchange.AGG_TRADE_WATCHDOG_TIMEOUT_MS}ms; emitted REST fallback at ${restPrice}.`
+            );
+          } catch (error) {
+            // Preserve the previous timestamp so the next watchdog pass retries REST.
+            this._lastAggTradeAt[normalizedSymbol] = staleSince.get(normalizedSymbol) ?? 0;
+            console.error(`[BinanceExchange] aggTrade watchdog REST fallback failed for ${normalizedSymbol}:`, error);
+          }
+        })
+      );
+
+      this._reconnectAggTradeStream();
+    } finally {
+      this._aggTradeWatchdogRunning = false;
+    }
+  }
+
+  private _reconnectAggTradeStream(): void {
+    if (this._aggTradeReconnectInProgress) return;
+
+    const ws = this._wsClient.getWsStore().getWs(BinanceExchange.AGG_TRADE_WS_KEY);
+    if (!ws) {
+      console.warn("[BinanceExchange] aggTrade watchdog found no market WebSocket; resubscribing topics.");
+      for (const normalizedSymbol of Object.keys(this._subscribedAggTradeSymbols)) {
+        this._subscribedAggTradeSymbols[normalizedSymbol] = false;
+        void this._subscribeAggTrades(normalizedSymbol).catch((error) => {
+          console.error(`[BinanceExchange] Failed to resubscribe aggTrade for ${normalizedSymbol}:`, error);
+        });
+      }
+      return;
+    }
+
+    this._aggTradeReconnectInProgress = true;
+    console.warn("[BinanceExchange] aggTrade watchdog is reconnecting the market WebSocket.");
+
+    const reconnectableWs = ws as typeof ws & { terminate?: () => void };
+    if (typeof reconnectableWs.terminate === "function") reconnectableWs.terminate();
+    else reconnectableWs.close();
   }
 
   private _normalizeSymbol(symbol: string): string {
@@ -770,6 +1007,48 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   private _mapWsEvents() {
+    this._wsClient.on("open", ({ wsKey }) => {
+      console.info(`[BinanceExchange] WebSocket opened (${wsKey}).`);
+    });
+    this._wsClient.on("reconnecting", ({ wsKey }) => {
+      console.warn(`[BinanceExchange] WebSocket reconnecting (${wsKey}).`);
+      if (wsKey === BinanceExchange.AGG_TRADE_WS_KEY) {
+        Object.keys(this._subscribedAggTradeSymbols).forEach((symbol) => {
+          this._subscribedAggTradeSymbols[symbol] = false;
+        });
+        this._rejectPendingAggTradeSubscriptions(new Error("aggTrade WebSocket disconnected before subscription ACK"));
+      }
+    });
+    this._wsClient.on("reconnected", ({ wsKey }) => {
+      console.info(`[BinanceExchange] WebSocket reconnected (${wsKey}).`);
+      if (wsKey === BinanceExchange.AGG_TRADE_WS_KEY) {
+        this._aggTradeReconnectInProgress = false;
+        Object.keys(this._subscribedAggTradeSymbols).forEach((symbol) => {
+          this._subscribedAggTradeSymbols[symbol] = false;
+          void this._subscribeAggTrades(symbol).catch((error) => {
+            console.error(`[BinanceExchange] Failed to confirm aggTrade after reconnect for ${symbol}:`, error);
+          });
+        });
+      }
+    });
+    this._wsClient.on("close", ({ wsKey }) => {
+      console.warn(`[BinanceExchange] WebSocket closed (${wsKey}).`);
+      if (wsKey === BinanceExchange.AGG_TRADE_WS_KEY) {
+        this._aggTradeReconnectInProgress = false;
+        this._rejectPendingAggTradeSubscriptions(new Error("aggTrade WebSocket closed before subscription ACK"));
+      }
+    });
+    this._wsClient.on("response", (response) => {
+      this._handleWsResponse(response);
+    });
+    this._wsClient.on("exception", (event) => {
+      console.error(`[BinanceExchange] WebSocket exception (${event.wsKey}):`, event);
+      if (event.wsKey === BinanceExchange.AGG_TRADE_WS_KEY) {
+        const message = event?.error?.msg ?? event?.error?.message ?? event?.msg ?? "aggTrade subscription rejected";
+        this._rejectPendingAggTradeSubscriptions(new Error(String(message)));
+      }
+    });
+
     this._wsClient.on("formattedMessage", (event: any) => {
       if (!event?.eventType) return;
 
@@ -841,7 +1120,9 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   private _handleAggTradeEvent(event: any) {
-    const originalSymbol = this._toOriginalSymbol(event.symbol);
+    const normalizedSymbol = this._normalizeSymbol(event.symbol);
+    const originalSymbol = this._toOriginalSymbol(normalizedSymbol);
+    this._lastAggTradeAt[normalizedSymbol] = Date.now();
 
     const trade: IWSTradeTick = {
       id: String(event.tradeId),
@@ -855,8 +1136,19 @@ class BinanceExchange implements IExchangeInstance {
     const ltp = Number(trade.price);
     if (Number.isFinite(ltp)) this._ltpPrices[originalSymbol] = ltp;
 
+    this._emitTradeToListeners(trade);
+  }
+
+  private _emitTradeToListeners(trade: IWSTradeTick): void {
+    const originalSymbol = trade.symbol;
     if (this._tradeListenerCallbacks[originalSymbol]) {
-      Object.values(this._tradeListenerCallbacks[originalSymbol]).forEach((callback) => callback(trade));
+      Object.values(this._tradeListenerCallbacks[originalSymbol]).forEach((callback) => {
+        try {
+          callback(trade);
+        } catch (error) {
+          console.error(`[BinanceExchange] Trade callback failed for ${originalSymbol}:`, error);
+        }
+      });
     }
   }
 
@@ -1100,4 +1392,3 @@ class BinanceExchange implements IExchangeInstance {
 }
 
 export default BinanceExchange;
-
