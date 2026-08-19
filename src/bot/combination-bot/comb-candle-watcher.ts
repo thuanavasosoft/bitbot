@@ -50,8 +50,31 @@ export function formatCombJustManuallyClosedIndicator(
 
 class CombCandleWatcher {
   isCandleWatcherStarted = false;
+  private sleepTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private sleepWake?: () => void;
 
   constructor(private bot: CombBotInstance) { }
+
+  stop(): void {
+    if (this.sleepTimeoutId !== null) {
+      clearTimeout(this.sleepTimeoutId);
+      this.sleepTimeoutId = null;
+    }
+    const wake = this.sleepWake;
+    this.sleepWake = undefined;
+    wake?.();
+  }
+
+  private wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.sleepWake = resolve;
+      this.sleepTimeoutId = setTimeout(() => {
+        this.sleepTimeoutId = null;
+        this.sleepWake = undefined;
+        resolve();
+      }, ms);
+    });
+  }
 
   /** Generate and send the price chart (support/resistance, trail stop, etc.) to the instance channel. */
   async refreshChart(): Promise<void> {
@@ -199,23 +222,29 @@ class CombCandleWatcher {
       while (!this.bot.isStopped) {
         try {
           await this.refreshChart();
+          if (this.bot.isStopped) break;
 
           const nowMs = Date.now();
           const nextMinuteStartMs = (Math.floor(nowMs / 60_000) + 1) * 60_000;
           const targetMs = nextMinuteStartMs + CANDLE_WATCHER_DELAY_AFTER_MINUTE_MS;
           const delayMs = targetMs - nowMs;
-          if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+          if (delayMs > 0) await this.wait(delayMs);
         } catch (error) {
           if (this.bot.isStopped) break;
           console.error("[COMB] Candle watcher iteration error:", error);
           this.bot.queueMsg(
             `⚠️ Comb candle watcher error (will retry next interval): ${error instanceof Error ? error.message : String(error)}`
           );
-          await new Promise((r) => setTimeout(r, 60_000));
+          await this.wait(60_000);
         }
       }
     } finally {
       this.isCandleWatcherStarted = false;
+      // Resume can race with the old paused loop unwinding. If that happened,
+      // start a fresh loop now that the old one has fully released its guard.
+      if (!this.bot.isStopped) {
+        void this.startWatchingCandles();
+      }
     }
   }
 }

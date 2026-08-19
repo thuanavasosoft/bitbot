@@ -182,6 +182,7 @@ class CombinationBot {
 
   private instances: CombBotInstance[] = [];
   private chatIdToInstance: Map<string, CombBotInstance> = new Map();
+  private instanceTransitionMutexes: Map<CombBotInstance, AsyncMutex> = new Map();
   private minorityPreventionEntryMutex = new AsyncMutex();
   generalChatId: string | undefined = envStrRequired("COMB_BOT_GENERAL_CHAT_ID");
   /** Account total USDT balance (free + frozen) when the general bot run started (for wallet delta). */
@@ -201,17 +202,89 @@ class CombinationBot {
     for (let i = 1; i <= count; i++) {
       const config = loadCombConfigForBot(i);
       const instance = new CombBotInstance(config, this);
-      const botIndex = i;
-      instance.onInstanceEvent = (event) => this.handleInstanceEvent(botIndex, instance, event);
-      instance.onGeneralInfoMessage = (msg) =>
-        this.queueGeneralMessage(`[COMB] BOT_${botIndex} (${instance.symbol}) ${msg}`);
-      this.instances.push(instance);
-      if (config.TELEGRAM_CHAT_ID) {
-        this.chatIdToInstance.set(String(config.TELEGRAM_CHAT_ID), instance);
-      }
+      this.registerInstance(instance);
     }
 
     this.registerTelegramHandlers();
+  }
+
+  /** Register all routing and lifecycle hooks shared by env-backed and runtime instances. */
+  private registerInstance(instance: CombBotInstance): void {
+    const botIndex = this.instances.length + 1;
+    this.instances.push(instance);
+    instance.onInstanceEvent = (event) => this.handleInstanceEvent(botIndex, instance, event);
+    instance.onGeneralInfoMessage = (msg) =>
+      this.queueGeneralMessage(`[COMB] BOT_${botIndex} (${instance.symbol}) ${msg}`);
+    if (instance.telegramChatId) {
+      this.chatIdToInstance.set(String(instance.telegramChatId), instance);
+    }
+
+    const mutex = new AsyncMutex();
+    this.instanceTransitionMutexes.set(instance, mutex);
+    instance.stateBus.addListener(EEventBusEventType.StateChange, (nextState: CombState | null) => {
+      void this.transitionInstanceState(instance, nextState).catch(async (error) => {
+        const reason = `state_transition_failed: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(`[COMB] ${reason} symbol=${instance.symbol}`, error);
+        if (!instance.isStopped) instance.stopInstance(reason);
+        await mutex.acquire();
+        try {
+          if (instance.currentState !== instance.stoppedState) {
+            await instance.currentState.onExit().catch(() => undefined);
+            instance.currentState = instance.stoppedState;
+            await instance.stoppedState.onEnter();
+          }
+        } finally {
+          mutex.release();
+        }
+      });
+    });
+  }
+
+  private async transitionInstanceState(instance: CombBotInstance, nextState: CombState | null): Promise<void> {
+    const mutex = this.instanceTransitionMutexes.get(instance);
+    if (!mutex || !this.instances.includes(instance)) return;
+    let shouldFinishRemove = false;
+    await mutex.acquire();
+    try {
+      if (instance.currentState === instance.stoppedState && nextState === instance.stoppedState) {
+        shouldFinishRemove = this.shouldFinishRemove(instance);
+        return;
+      }
+      await instance.currentState.onExit();
+      if (nextState) {
+        instance.currentState = nextState;
+      } else if (instance.completeCommandRemoveIfSafe()) {
+        instance.currentState = instance.stoppedState;
+      } else if (instance.isStopped && instance.isPausedByCommand) {
+        instance.currentState = instance.stoppedState;
+      } else if (instance.completeCommandPauseIfSafe()) {
+        instance.currentState = instance.stoppedState;
+      } else if (instance.currentState === instance.startingState) {
+        instance.currentState = instance.waitForSignalState;
+      } else if (instance.currentState === instance.waitForSignalState) {
+        instance.currentState = instance.waitForResolveState;
+      } else if (instance.currentState === instance.waitForResolveState) {
+        instance.currentState = instance.startingState;
+      } else if (instance.currentState === instance.stoppedState) {
+        instance.currentState = instance.stoppedState;
+      }
+      await instance.currentState.onEnter();
+      shouldFinishRemove = this.shouldFinishRemove(instance);
+    } finally {
+      mutex.release();
+    }
+    if (shouldFinishRemove) this.finishRemoveInstance(instance);
+  }
+
+  private async startInstance(instance: CombBotInstance): Promise<void> {
+    const mutex = this.instanceTransitionMutexes.get(instance);
+    if (!mutex) throw new Error(`Lifecycle mutex is missing for ${instance.symbol}`);
+    await mutex.acquire();
+    try {
+      await instance.currentState.onEnter();
+    } finally {
+      mutex.release();
+    }
   }
 
   /** Send a message to the general combination-bot channel (if COMB_BOT_GENERAL_CHAT_ID is set). Top priority in the queue. */
@@ -363,6 +436,9 @@ class CombinationBot {
   }
 
   private getInstanceStateName(inst: CombBotInstance): string {
+    if (inst.removeRequested) return inst.isStopped ? "removing" : "remove_pending";
+    if (inst.isPausedByCommand) return "paused";
+    if (inst.pauseRequested) return "pause_pending";
     if (inst.currentState === inst.startingState) return "starting";
     if (inst.currentState === inst.waitForSignalState) return "wait_for_signal";
     if (inst.currentState === inst.waitForResolveState) return "wait_for_resolve";
@@ -571,6 +647,14 @@ class CombinationBot {
         para,
         "/set_sl all|{SYMBOL} {percent} — Margin stop loss as % of margin \n(e.g. /set_sl all 60). 0 = disabled.",
         para,
+        "/add_symbol {symbol} {leverage} {margin} {N} {reoptimization_interval} {optimization_window} {minTrailMultiplier} {maxTrailMultiplier} {telegramChatID} [stopLoss] — Add and start a runtime-only symbol.",
+        para,
+        "/pause_symbol {SYMBOL} — Gracefully pause a symbol. An active position remains managed until resolved.",
+        para,
+        "/resume_symbol {SYMBOL} — Resume a symbol paused via /pause_symbol, or cancel a pending pause.",
+        para,
+        "/remove_symbol {SYMBOL} — Gracefully remove a symbol. An active position remains managed until resolved, then the instance is unregistered.",
+        para,
         "/un_pnl — Show current unrealized PnL for all instances (one symbol per line).",
         para,
         "/reopt_ls — List all symbols with time until next reoptimization.",
@@ -600,6 +684,319 @@ class CombinationBot {
       para,
       "• /close_pos closes the position; the instance continues running and waits for the next signal.",
     ].join("\n");
+  }
+
+  private isGeneralChat(chatId: string | number): boolean {
+    return !!this.generalChatId && String(chatId) === String(this.generalChatId);
+  }
+
+  private findInstanceBySymbol(symbol: string): CombBotInstance | undefined {
+    return this.instances.find((instance) => instance.symbol.toUpperCase() === symbol.trim().toUpperCase());
+  }
+
+  private async handleAddSymbolCommand(ctx: { chat?: { id: string | number }; text?: string }): Promise<void> {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    if (!this.isGeneralChat(chatId)) {
+      TelegramService.queueMsgPriority("Use /add_symbol in the general channel.", String(chatId));
+      return;
+    }
+
+    const parts = (ctx.text ?? "").trim().split(/\s+/).filter(Boolean);
+    const usage =
+      "Usage: /add_symbol {symbol} {leverage} {margin} {N} {reoptimization_interval} {optimization_window} " +
+      "{minTrailMultiplier} {maxTrailMultiplier} {telegramChatID} [stopLoss]";
+    if (parts.length < 10 || parts.length > 11) {
+      TelegramService.queueMsgPriority(usage, this.generalChatId);
+      return;
+    }
+
+    const symbol = parts[1].toUpperCase();
+    const leverage = Number(parts[2]);
+    const margin = Number(parts[3]);
+    const nSignal = Number(parts[4]);
+    const updateIntervalMinutes = Number(parts[5]);
+    const optimizationWindowMinutes = Number(parts[6]);
+    const minTrailMultiplier = Number(parts[7]);
+    const maxTrailMultiplier = Number(parts[8]);
+    const telegramChatId = parts[9];
+    const stopLoss = parts[10] === undefined ? undefined : Number(parts[10]);
+
+    const errors: string[] = [];
+    if (!Number.isInteger(leverage) || leverage <= 0) errors.push("leverage must be a positive integer");
+    if (!Number.isFinite(margin) || margin <= 0) errors.push("margin must be a positive number");
+    if (!Number.isInteger(nSignal) || nSignal <= 0) errors.push("N must be a positive integer");
+    if (!Number.isFinite(updateIntervalMinutes) || updateIntervalMinutes <= 0) {
+      errors.push("reoptimization_interval must be a positive number");
+    }
+    if (!Number.isFinite(optimizationWindowMinutes) || optimizationWindowMinutes <= 0) {
+      errors.push("optimization_window must be a positive number");
+    }
+    if (!Number.isFinite(minTrailMultiplier) || minTrailMultiplier <= 0) {
+      errors.push("minTrailMultiplier must be a positive number");
+    }
+    if (!Number.isFinite(maxTrailMultiplier) || maxTrailMultiplier <= 0) {
+      errors.push("maxTrailMultiplier must be a positive number");
+    }
+    if (
+      Number.isFinite(minTrailMultiplier) &&
+      Number.isFinite(maxTrailMultiplier) &&
+      minTrailMultiplier > maxTrailMultiplier
+    ) {
+      errors.push("minTrailMultiplier must be less than or equal to maxTrailMultiplier");
+    }
+    if (!/^-?\d+$/.test(telegramChatId)) errors.push("telegramChatID must be an integer chat ID");
+    if (stopLoss !== undefined && (!Number.isFinite(stopLoss) || stopLoss < 0)) {
+      errors.push("stopLoss must be 0 or a positive number");
+    }
+    if (errors.length > 0) {
+      TelegramService.queueMsgPriority(`Invalid /add_symbol arguments:\n- ${errors.join("\n- ")}\n\n${usage}`, this.generalChatId);
+      return;
+    }
+    if (this.findInstanceBySymbol(symbol)) {
+      TelegramService.queueMsgPriority(`Symbol ${symbol} already exists.`, this.generalChatId);
+      return;
+    }
+    if (String(telegramChatId) === String(this.generalChatId)) {
+      TelegramService.queueMsgPriority("telegramChatID cannot be the general channel chat ID.", this.generalChatId);
+      return;
+    }
+    if (this.chatIdToInstance.has(String(telegramChatId))) {
+      TelegramService.queueMsgPriority("telegramChatID is already assigned to another symbol.", this.generalChatId);
+      return;
+    }
+
+    try {
+      const symbolInfo = await ExchangeService.getSymbolInfo(symbol);
+      if (!symbolInfo) throw new Error("exchange returned no symbol information");
+    } catch (error) {
+      TelegramService.queueMsgPriority(
+        `Cannot add ${symbol}: exchange symbol validation failed: ${error instanceof Error ? error.message : String(error)}`,
+        this.generalChatId
+      );
+      return;
+    }
+
+    // Recheck after the asynchronous exchange lookup so concurrent commands cannot add duplicates.
+    if (this.findInstanceBySymbol(symbol) || this.chatIdToInstance.has(String(telegramChatId))) {
+      TelegramService.queueMsgPriority(`Cannot add ${symbol}: symbol or Telegram chat ID was registered concurrently.`, this.generalChatId);
+      return;
+    }
+
+    TelegramService.queueMsgPriority(`✅ Add and starting new ${symbol}...`, this.generalChatId);
+
+    const defaults = this.instances[0];
+    const config: CombInstanceConfig = {
+      SYMBOL: symbol,
+      LEVERAGE: leverage,
+      MARGIN: margin,
+      TRIGGER_BUFFER_PERCENTAGE: defaults.triggerBufferPercentage,
+      N_SIGNAL_AND_ATR_LENGTH: nSignal,
+      UPDATE_INTERVAL_MINUTES: updateIntervalMinutes,
+      OPTIMIZATION_WINDOW_MINUTES: optimizationWindowMinutes,
+      TRAIL_CONFIRM_BARS: defaults.trailConfirmBars,
+      TRAIL_BOUND_STEP_SIZE: defaults.trailBoundStepSize,
+      TRAIL_MULTIPLIER_BOUNDS_MIN: minTrailMultiplier,
+      TRAIL_MULTIPLIER_BOUNDS_MAX: maxTrailMultiplier,
+      TELEGRAM_CHAT_ID: telegramChatId,
+      MARGIN_STOP_LOSS: stopLoss && stopLoss > 0 ? stopLoss : undefined,
+    };
+    const instance = new CombBotInstance(config, this);
+    this.registerInstance(instance);
+
+    try {
+      await this.startInstance(instance);
+      TelegramService.queueMsgPriority(
+        `✅ Added and started ${symbol} (BOT_${this.instances.length}). Configuration is runtime-only and will be lost on process restart.`,
+        this.generalChatId
+      );
+      instance.queueMsg(`✅ ${symbol} was added at runtime from the general channel.`);
+    } catch (error) {
+      const reason = `runtime_add_initialization_failed: ${error instanceof Error ? error.message : String(error)}`;
+      instance.stopInstance(reason);
+      const mutex = this.instanceTransitionMutexes.get(instance)!;
+      await mutex.acquire();
+      try {
+        await instance.currentState.onExit().catch(() => undefined);
+        instance.currentState = instance.stoppedState;
+        await instance.stoppedState.onEnter();
+      } finally {
+        mutex.release();
+      }
+      TelegramService.queueMsgPriority(
+        `⚠️ ${symbol} was registered but could not start and is now stopped: ${reason}`,
+        this.generalChatId
+      );
+    }
+  }
+
+  private handlePauseSymbolCommand(ctx: { chat?: { id: string | number }; text?: string }): void {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    if (!this.isGeneralChat(chatId)) {
+      TelegramService.queueMsgPriority("Use /pause_symbol in the general channel.", String(chatId));
+      return;
+    }
+    const parts = (ctx.text ?? "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length !== 2) {
+      TelegramService.queueMsgPriority("Usage: /pause_symbol {SYMBOL}", this.generalChatId);
+      return;
+    }
+    const instance = this.findInstanceBySymbol(parts[1]);
+    if (!instance) {
+      TelegramService.queueMsgPriority(`Unknown symbol: ${parts[1]}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`, this.generalChatId);
+      return;
+    }
+    if (instance.removeRequested) {
+      TelegramService.queueMsgPriority(`${instance.symbol} is already waiting to be removed.`, this.generalChatId);
+      return;
+    }
+    if (instance.isPausedByCommand || instance.pauseRequested) {
+      TelegramService.queueMsgPriority(`${instance.symbol} is already ${instance.isPausedByCommand ? "paused" : "waiting to pause"}.`, this.generalChatId);
+      return;
+    }
+    if (instance.isStopped) {
+      TelegramService.queueMsgPriority(`${instance.symbol} is stopped by an internal/fatal condition and cannot be paused.`, this.generalChatId);
+      return;
+    }
+
+    const result = instance.requestCommandPause();
+    if (result === "paused") {
+      instance.stateBus.emit(EEventBusEventType.StateChange, instance.stoppedState);
+      TelegramService.queueMsgPriority(`⏸️ ${instance.symbol} is pausing now.`, this.generalChatId);
+      instance.queueMsg(`⏸️ Pause requested for ${instance.symbol}.`);
+      return;
+    }
+    TelegramService.queueMsgPriority(
+      `⏳ Pause pending for ${instance.symbol}. Its active/in-flight position remains managed; the instance will pause when safe.`,
+      this.generalChatId
+    );
+    instance.queueMsg(`⏳ Pause pending for ${instance.symbol}. No new entries will be started.`);
+  }
+
+  private handleResumeSymbolCommand(ctx: { chat?: { id: string | number }; text?: string }): void {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    if (!this.isGeneralChat(chatId)) {
+      TelegramService.queueMsgPriority("Use /resume_symbol in the general channel.", String(chatId));
+      return;
+    }
+    const parts = (ctx.text ?? "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length !== 2) {
+      TelegramService.queueMsgPriority("Usage: /resume_symbol {SYMBOL}", this.generalChatId);
+      return;
+    }
+    const instance = this.findInstanceBySymbol(parts[1]);
+    if (!instance) {
+      TelegramService.queueMsgPriority(`Unknown symbol: ${parts[1]}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`, this.generalChatId);
+      return;
+    }
+
+    if (instance.removeRequested) {
+      TelegramService.queueMsgPriority(
+        `${instance.symbol} is being removed and cannot be resumed. Wait for removal to finish, then use /add_symbol if needed.`,
+        this.generalChatId
+      );
+      return;
+    }
+
+    const result = instance.resumeCommandPause();
+    if (result === "not_paused") {
+      TelegramService.queueMsgPriority(
+        instance.isStopped
+          ? `${instance.symbol} is stopped by an internal/fatal condition and cannot be resumed with /resume_symbol.`
+          : `${instance.symbol} is already running.`,
+        this.generalChatId
+      );
+      return;
+    }
+    if (result === "cancelled_pending") {
+      TelegramService.queueMsgPriority(`▶️ Pending pause cancelled; ${instance.symbol} remains running.`, this.generalChatId);
+      instance.queueMsg(`▶️ Pending pause cancelled for ${instance.symbol}.`);
+      return;
+    }
+    TelegramService.queueMsgPriority(`▶️ Resuming ${instance.symbol}...`, this.generalChatId);
+    instance.queueMsg(`▶️ Resume requested for ${instance.symbol}.`);
+  }
+
+  private shouldFinishRemove(instance: CombBotInstance): boolean {
+    return (
+      instance.removeRequested &&
+      instance.isStopped &&
+      !instance.currActivePosition &&
+      !instance.isOpeningPosition
+    );
+  }
+
+  private detachInstance(instance: CombBotInstance): void {
+    this.instances = this.instances.filter((item) => item !== instance);
+    if (instance.telegramChatId) {
+      this.chatIdToInstance.delete(String(instance.telegramChatId));
+    }
+    this.instanceTransitionMutexes.delete(instance);
+    instance.disposeRuntimeResources();
+  }
+
+  private finishRemoveInstance(instance: CombBotInstance): void {
+    if (!this.instances.includes(instance)) return;
+    const remaining = this.instances.filter((item) => item !== instance).map((item) => item.symbol);
+    instance.queueMsg(`🗑️ ${instance.symbol} was removed. This channel is no longer linked to a bot instance.`);
+    TelegramService.queueMsgPriority(
+      `🗑️ Removed ${instance.symbol}. Remaining: ${remaining.join(", ") || "(none)"}`,
+      this.generalChatId
+    );
+    this.detachInstance(instance);
+  }
+
+  private handleRemoveSymbolCommand(ctx: { chat?: { id: string | number }; text?: string }): void {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    if (!this.isGeneralChat(chatId)) {
+      TelegramService.queueMsgPriority("Use /remove_symbol in the general channel.", String(chatId));
+      return;
+    }
+    const parts = (ctx.text ?? "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length !== 2) {
+      TelegramService.queueMsgPriority("Usage: /remove_symbol {SYMBOL}", this.generalChatId);
+      return;
+    }
+    const instance = this.findInstanceBySymbol(parts[1]);
+    if (!instance) {
+      TelegramService.queueMsgPriority(`Unknown symbol: ${parts[1]}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`, this.generalChatId);
+      return;
+    }
+    if (instance.removeRequested) {
+      TelegramService.queueMsgPriority(
+        `${instance.symbol} is already ${instance.isStopped ? "being removed" : "waiting to be removed"}.`,
+        this.generalChatId
+      );
+      return;
+    }
+    const remainingKeepers = this.instances.filter((item) => item !== instance && !item.removeRequested);
+    if (remainingKeepers.length === 0) {
+      TelegramService.queueMsgPriority(
+        `Cannot remove ${instance.symbol}: at least one symbol must remain. Add another symbol first, or keep this one.`,
+        this.generalChatId
+      );
+      return;
+    }
+
+    const result = instance.requestCommandRemove();
+    if (result === "pending") {
+      TelegramService.queueMsgPriority(
+        `⏳ Remove pending for ${instance.symbol}. Its active/in-flight position remains managed; the instance will be unregistered when safe.`,
+        this.generalChatId
+      );
+      instance.queueMsg(`⏳ Remove pending for ${instance.symbol}. No new entries will be started.`);
+      return;
+    }
+
+    if (instance.currentState === instance.stoppedState) {
+      this.finishRemoveInstance(instance);
+      return;
+    }
+    instance.stateBus.emit(EEventBusEventType.StateChange, instance.stoppedState);
+    TelegramService.queueMsgPriority(`🗑️ ${instance.symbol} is being removed.`, this.generalChatId);
   }
 
   private registerTelegramHandlers(): void {
@@ -641,6 +1038,22 @@ class CombinationBot {
       } catch (err) {
         TelegramService.queueMsg(`Failed to get update: ${err instanceof Error ? err.message : String(err)}`, String(chatId));
       }
+    });
+
+    TelegramService.appendTgCmdHandler("add_symbol", async (ctx) => {
+      await this.handleAddSymbolCommand(ctx);
+    });
+
+    TelegramService.appendTgCmdHandler("pause_symbol", async (ctx) => {
+      this.handlePauseSymbolCommand(ctx);
+    });
+
+    TelegramService.appendTgCmdHandler("resume_symbol", async (ctx) => {
+      this.handleResumeSymbolCommand(ctx);
+    });
+
+    TelegramService.appendTgCmdHandler("remove_symbol", async (ctx) => {
+      this.handleRemoveSymbolCommand(ctx);
     });
 
     TelegramService.appendTgCmdHandler("broadcast_open_position", async (ctx) => {
@@ -1100,22 +1513,7 @@ class CombinationBot {
     }
 
     for (const instance of this.instances) {
-      instance.stateBus.addListener(EEventBusEventType.StateChange, async (nextState: CombState | null) => {
-        await instance.currentState.onExit();
-        if (nextState) {
-          instance.currentState = nextState;
-        } else if (instance.currentState === instance.startingState) {
-          instance.currentState = instance.waitForSignalState;
-        } else if (instance.currentState === instance.waitForSignalState) {
-          instance.currentState = instance.waitForResolveState;
-        } else if (instance.currentState === instance.waitForResolveState) {
-          instance.currentState = instance.startingState;
-        } else if (instance.currentState === instance.stoppedState) {
-          instance.currentState = instance.stoppedState;
-        }
-        await instance.currentState.onEnter();
-      });
-      await instance.currentState.onEnter();
+      await this.startInstance(instance);
     }
 
     const fullMessage = await this.getGeneralFullUpdateMessage();

@@ -39,6 +39,8 @@ class CombWaitForSignalState {
         (this.bot.longTrigger === null && this.bot.shortTrigger === null) ||
         this.bot.currActivePosition ||
         this.bot.isOpeningPosition ||
+        this.bot.pauseRequested ||
+        this.bot.removeRequested ||
         this.bot.isStopped
       ) return;
       const nowMs = Date.now();
@@ -92,6 +94,10 @@ class CombWaitForSignalState {
             this.bot.stateBus.emit(EEventBusEventType.StateChange);
             return;
           }
+
+          // A pause may arrive while the minority-entry guard is being acquired.
+          // Do not place a new order once the pause has been requested.
+          if (this.bot.pauseRequested || this.bot.removeRequested) return;
 
           const budget = new BigNumber(this.bot.margin).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
           const triggerTs = Date.now();
@@ -215,6 +221,9 @@ Price Diff(pips): ${icon} ${priceDiff}
         } finally {
           entryGuard?.release();
           this.bot.isOpeningPosition = false;
+          if (this.bot.completeCommandRemoveIfSafe() || this.bot.completeCommandPauseIfSafe()) {
+            this.bot.stateBus.emit(EEventBusEventType.StateChange, this.bot.stoppedState);
+          }
         }
       }
     } catch (error) {
