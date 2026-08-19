@@ -193,6 +193,12 @@ class CombBotInstance {
   isStopped: boolean = false;
   stopReason?: string;
   stopAtMs?: number;
+  /** Graceful pause requested from the general Telegram channel. */
+  pauseRequested: boolean = false;
+  /** Distinguishes an operator pause from a fatal/internal stopped state. */
+  isPausedByCommand: boolean = false;
+  /** Graceful remove requested from the general Telegram channel. */
+  removeRequested: boolean = false;
 
   orderWatcher: CombOrderWatcher;
   combCandles: CombCandles;
@@ -202,7 +208,7 @@ class CombBotInstance {
   waitForSignalState: CombWaitForSignalState;
   waitForResolveState: CombWaitForResolveState;
   stoppedState: CombStoppedState;
-  tmobCandleWatcher: CombCandleWatcher;
+  combCandleWatcher: CombCandleWatcher;
   optimizationLoop: CombOptimizationLoop;
   telegramHandler: CombTelegramHandler;
   currentState: CombState;
@@ -241,7 +247,7 @@ class CombBotInstance {
     this.waitForSignalState = new CombWaitForSignalState(this);
     this.waitForResolveState = new CombWaitForResolveState(this);
     this.stoppedState = new CombStoppedState(this);
-    this.tmobCandleWatcher = new CombCandleWatcher(this);
+    this.combCandleWatcher = new CombCandleWatcher(this);
     this.optimizationLoop = new CombOptimizationLoop(this);
     this.telegramHandler = new CombTelegramHandler(this);
     this.currentState = this.startingState;
@@ -323,7 +329,7 @@ class CombBotInstance {
     if (this.currentState === this.waitForResolveState && this.currActivePosition) {
       await this.waitForResolveState.refreshTrailingStopLevels();
     }
-    await this.tmobCandleWatcher.refreshChart();
+    await this.combCandleWatcher.refreshChart();
   }
 
   /**
@@ -454,12 +460,71 @@ class CombBotInstance {
    * Stop only this instance (symbol). This does not exit the overall process.
    * Idempotent: repeated calls do nothing after the first stop.
    */
-  stopInstance(reason: string): void {
+  stopInstance(reason: string, isCommandPause = false): void {
     if (this.isStopped) return;
     this.isStopped = true;
+    this.pauseRequested = isCommandPause;
+    this.isPausedByCommand = isCommandPause;
     this.stopReason = reason;
     this.stopAtMs = Date.now();
     this.optimizationLoop.stop();
+    this.combCandleWatcher.stop();
+  }
+
+  /** Request a graceful pause. Active/opening positions remain managed until safe to stop. */
+  requestCommandPause(): "paused" | "pending" {
+    this.pauseRequested = true;
+    if (this.completeCommandPauseIfSafe()) return "paused";
+    return "pending";
+  }
+
+  /** Complete a requested pause only when there is no live or in-flight entry. */
+  completeCommandPauseIfSafe(): boolean {
+    if (this.removeRequested || this.isStopped || !this.pauseRequested || this.currActivePosition || this.isOpeningPosition) return false;
+    this.stopInstance("Paused via /pause_symbol", true);
+    return this.isPausedByCommand;
+  }
+
+  /** Request a graceful remove. Active/opening positions remain managed until safe to unregister. */
+  requestCommandRemove(): "ready" | "pending" {
+    this.removeRequested = true;
+    if (this.completeCommandRemoveIfSafe()) return "ready";
+    return "pending";
+  }
+
+  /** Complete a requested remove only when there is no live or in-flight entry. */
+  completeCommandRemoveIfSafe(): boolean {
+    if (!this.removeRequested || this.currActivePosition || this.isOpeningPosition) return false;
+    if (!this.isStopped) this.stopInstance("Removed via /remove_symbol");
+    return true;
+  }
+
+  /** Resume a completed pause, or cancel a pause that is still pending. */
+  resumeCommandPause(): "resuming" | "cancelled_pending" | "not_paused" {
+    if (this.removeRequested) return "not_paused";
+    if (this.pauseRequested && !this.isPausedByCommand) {
+      this.pauseRequested = false;
+      return "cancelled_pending";
+    }
+    if (!this.isStopped || !this.isPausedByCommand) return "not_paused";
+
+    this.pauseRequested = false;
+    this.isPausedByCommand = false;
+    this.isStopped = false;
+    this.stopReason = undefined;
+    this.stopAtMs = undefined;
+    this.stateBus.emit(EEventBusEventType.StateChange, this.startingState);
+    return "resuming";
+  }
+
+  /** Drop exchange/runtime listeners after this instance is unregistered. */
+  disposeRuntimeResources(): void {
+    this.optimizationLoop.stop();
+    this.combCandleWatcher.stop();
+    this.orderWatcher.dispose();
+    this.stateBus.removeAllListeners();
+    this.onInstanceEvent = undefined;
+    this.onGeneralInfoMessage = undefined;
   }
 
   async finalizeClosedPosition(

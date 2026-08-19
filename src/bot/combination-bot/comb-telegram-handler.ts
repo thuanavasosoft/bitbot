@@ -31,6 +31,14 @@ class CombTelegramHandler {
   }
 
   async getFullUpdateDetailsMsg(): Promise<string> {
+    if (this.bot.removeRequested) {
+      return this.bot.isStopped
+        ? "Instance is being removed."
+        : "Remove pending; active position remains managed until its strategy state is resolved.";
+    }
+    if (this.bot.isPausedByCommand) return "Instance is paused by command.";
+    if (this.bot.pauseRequested) return "Pause pending; active position remains managed until its strategy state is resolved.";
+    if (this.bot.isStopped) return `Instance stopped: ${this.bot.stopReason ?? "unknown reason"}.`;
     if (this.bot.currentState === this.bot.startingState) return "Bot in starting state.";
     if (this.bot.currentState === this.bot.waitForSignalState) return "Waiting for entry signal.";
     if (this.bot.currentState === this.bot.waitForResolveState) {

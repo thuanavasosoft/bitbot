@@ -58,8 +58,8 @@ class CombStartingState {
       }
     }
     this.bot.startOptimizationLoop();
-    if (!this.bot.tmobCandleWatcher.isCandleWatcherStarted) {
-      void this.bot.tmobCandleWatcher.startWatchingCandles().catch((err) => {
+    if (!this.bot.combCandleWatcher.isCandleWatcherStarted) {
+      void this.bot.combCandleWatcher.startWatchingCandles().catch((err) => {
         console.error("[COMB] Candle watcher crashed:", err);
         this.bot.queueMsg(`⚠️ Candle watcher crashed: ${err instanceof Error ? err.message : String(err)}`);
       });

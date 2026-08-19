@@ -9,6 +9,10 @@ import TrailMultiplierOptimizationBot from '@/bot/trail-multiplier-optimization-
 import CombinationBot from '@/bot/combination-bot/combination-bot';
 import FollowMartingaleBot from '@/bot/follow-martingale/follow-martingale-bot';
 
+const args = process.argv.slice(2);
+console.log("Command line arguments: ", args);
+
+
 async function runProgram() {
   try {
     dotenv.config();
@@ -38,6 +42,17 @@ async function runProgram() {
       process.env.API_SECRET!,
       symbols,
     );
+
+    // let lastTrade: any = null;
+    // setInterval(() => {
+    //   console.log("Last trade: ", lastTrade);
+    // }, 2000);
+
+    // ExchangeService.hookTradeListener(args[0], (trade) => {
+    //   lastTrade = trade;
+    // });
+
+    // await new Promise(resolve => setTimeout(resolve, 1000000000)); // Wait for 1 second
 
     if (botMode === "combo_bot") {
       const bot = new ComboBot();
