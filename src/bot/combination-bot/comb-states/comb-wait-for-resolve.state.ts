@@ -158,7 +158,7 @@ class CombWaitForResolveState {
       let shouldExit = false;
       let exitReason = "";
 
-      // Margin stop loss: fixed price from entry at open (% of margin via leverage).
+      // Margin stop loss: mm + unrealized = -SL% of margin (exchange MM, pricePrecision).
       if (
         !shouldExit &&
         this.bot.currStopLossPrice != null &&

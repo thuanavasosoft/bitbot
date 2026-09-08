@@ -141,7 +141,7 @@ class CombBotInstance {
    * Max unrealized loss as % of margin (from env or /set_sl). Undefined or 0 = disabled.
    */
   marginStopLossPercent?: number;
-  /** Stop-loss trigger price for the current position (from entry avg). Cleared on close. */
+  /** Stop-loss trigger price for the current position. Cleared on close. */
   currStopLossPrice?: number;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
@@ -277,28 +277,45 @@ class CombBotInstance {
     return this.marginStopLossPercent != null && this.marginStopLossPercent > 0;
   }
 
-  computeStopLossPrice(entryFill: number, side: TPositionSide): number | undefined {
+  /**
+   * Stop when maintenanceMargin + unrealizedPnl = -SL% of margin.
+   * `maintenanceMargin` comes from the exchange position; price is quantized to
+   * pricePrecision (long down, short up).
+   */
+  computeStopLossPrice(
+    entryFill: number,
+    side: TPositionSide,
+    size: number,
+    maintenanceMargin: number
+  ): number | undefined {
     if (!this.isMarginStopLossEnabled()) return undefined;
-    const stopLossPctFrac = this.marginStopLossPercent! / 100;
-    const raw =
-      side === "long"
-        ? entryFill * (1 - stopLossPctFrac / this.leverage)
-        : entryFill * (1 + stopLossPctFrac / this.leverage);
+    if (!(size > 0) || !Number.isFinite(entryFill) || !Number.isFinite(maintenanceMargin)) return undefined;
+
+    const desiredLoss = new BigNumber(this.margin).times(this.marginStopLossPercent!).div(100);
+    const targetUnrealized = desiredLoss.negated().minus(maintenanceMargin);
+    const targetUnrealizedPerUnit = targetUnrealized.div(size).toNumber();
+    const slPriceRaw =
+      side === "long" ? entryFill + targetUnrealizedPerUnit : entryFill - targetUnrealizedPerUnit;
     return quantizePriceByPrecision(
-      raw,
+      slPriceRaw,
       this.pricePrecision,
-      side === "long" ? "up" : "down"
+      side === "long" ? "down" : "up"
     );
   }
 
-  /** Recompute currStopLossPrice from the active position entry (e.g. after open or /set_sl). */
+  /** Recompute currStopLossPrice from the active position (e.g. after open or /set_sl). */
   updateCurrStopLossFromPosition(): void {
     const pos = this.currActivePosition;
     if (!pos || !this.isMarginStopLossEnabled()) {
       this.currStopLossPrice = undefined;
       return;
     }
-    this.currStopLossPrice = this.computeStopLossPrice(pos.avgPrice, pos.side);
+    this.currStopLossPrice = this.computeStopLossPrice(
+      pos.avgPrice,
+      pos.side,
+      pos.size,
+      pos.maintenanceMargin
+    );
   }
 
   formatMarginStopLossStatus(pricePrecision?: number): string {
