@@ -208,24 +208,6 @@ class CombWaitForResolveState {
         }
       }
 
-      // Bad-entry + consolidation: live mapping of dashboard virtual `bad_signal` exit.
-      if (
-        !shouldExit &&
-        this.bot.shouldCloseBadEntrySignal() &&
-        !this.bot.justManuallyClosedBy &&
-        !this.isManuallyClosingBy
-      ) {
-        shouldExit = true;
-        this.isManuallyClosingBy = "bad_signal";
-        exitReason = "bad_signal";
-        console.log(
-          `[COMB] waitForResolve badSignal triggered (${position.side}) symbol=${this.bot.symbol} price=${price}`
-        );
-        this.bot.queueMsg(
-          `⚠️ Bad entry consolidation triggered (${position.side})\nPrice: ${price}\n${this.bot.formatBadEntryStatus()}`
-        );
-      }
-
       // TP_PB v2: fixed TP from avg–LTP gap at /tp_pb time; no trailing. Runs without SR.
       if (
         !shouldExit &&

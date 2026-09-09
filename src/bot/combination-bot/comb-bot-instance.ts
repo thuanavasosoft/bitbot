@@ -320,15 +320,39 @@ class CombBotInstance {
   }
 
   /**
-   * Live mapping of dashboard virtual `bad_signal` exit: close after ≥1 minute when
-   * entry ROC was extreme and the move has since consolidated.
+   * Dashboard `_checkStopBadEntrySignal`: previous bar's consolidation flag, and only
+   * after the just-closed 1m candle open is ≥ entry+60s. Do not call from LTP ticks.
    */
-  shouldCloseBadEntrySignal(nowMs: number = Date.now()): boolean {
+  shouldCloseBadEntryOnClosedCandle(
+    consolidationFromPreviousBar: boolean,
+    closedCandleOpenMs: number,
+  ): boolean {
     if (!this.isBadEntryCloseEnabled()) return false;
-    if (!this.isBadEntrySignal || !this.isConsolidationAfterBreakout) return false;
-    if (this.justManuallyClosedBy) return false;
-    if (!(this.lastEntryTime > 0) || nowMs < this.lastEntryTime + 60_000) return false;
+    if (!this.isBadEntrySignal || !consolidationFromPreviousBar) return false;
+    if (this.justManuallyClosedBy || this.isClosingPosition) return false;
+    if (!this.currActivePosition) return false;
+    if (this.currentState !== this.waitForResolveState) return false;
+    if (!(this.lastEntryTime > 0) || closedCandleOpenMs < this.lastEntryTime + 60_000) return false;
     return true;
+  }
+
+  async closeBadEntryIfNeededOnCandleClose(
+    consolidationFromPreviousBar: boolean,
+    closedCandleOpenMs: number,
+  ): Promise<void> {
+    if (!this.shouldCloseBadEntryOnClosedCandle(consolidationFromPreviousBar, closedCandleOpenMs)) {
+      return;
+    }
+    const side = this.currActivePosition?.side ?? "unknown";
+    console.log(
+      `[COMB] badSignal candleClose (${side}) symbol=${this.symbol} closedCandleOpen=${new Date(closedCandleOpenMs).toISOString()}`
+    );
+    this.queueMsg(
+      `ℹ️ℹ️ℹ️ Bad entry consolidation triggered at candle close (${side})\n` +
+      `Closed candle open: ${new Date(closedCandleOpenMs).toISOString()}\n` +
+      `${this.formatBadEntryStatus()}`
+    );
+    await this.virtualClosePosition("bad_signal");
   }
 
   /**

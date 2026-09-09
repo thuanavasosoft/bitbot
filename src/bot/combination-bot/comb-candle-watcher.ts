@@ -273,8 +273,15 @@ class CombCandleWatcher {
     try {
       while (!this.bot.isStopped) {
         try {
+          const minuteStartMs = Math.floor(Date.now() / 60_000) * 60_000;
+          const closedCandleOpenMs = minuteStartMs - 60_000;
+          const consolidationFromPreviousBar = this.bot.isConsolidationAfterBreakout;
           await this.refreshChart();
           if (this.bot.isStopped) break;
+          await this.bot.closeBadEntryIfNeededOnCandleClose(
+            consolidationFromPreviousBar,
+            closedCandleOpenMs,
+          );
 
           const nowMs = Date.now();
           const nextMinuteStartMs = (Math.floor(nowMs / 60_000) + 1) * 60_000;
