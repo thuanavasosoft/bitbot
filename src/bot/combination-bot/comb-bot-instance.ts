@@ -450,7 +450,7 @@ class CombBotInstance {
         : "off";
     const shortPct =
       this.badEntryShortRocLowThreshold != null
-        ? `${(this.badEntryShortRocLowThreshold * 100)}%`
+        ? `-${Math.abs(this.badEntryShortRocLowThreshold * 100)}%`
         : "off";
     const live =
       this.currActivePosition && !this.justManuallyClosedBy

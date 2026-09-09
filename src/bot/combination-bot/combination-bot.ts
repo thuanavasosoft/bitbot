@@ -559,7 +559,7 @@ class CombinationBot {
         `Bad entry long ROC high threshold: ${inst.badEntryLongRocHighThreshold != null ? `${inst.badEntryLongRocHighThreshold * 100}%` : "off"}`
       );
       lines.push(
-        `Bad entry short ROC low threshold: ${inst.badEntryShortRocLowThreshold != null ? `${inst.badEntryShortRocLowThreshold * 100}%` : "off"}`
+        `Bad entry short ROC low threshold: ${inst.badEntryShortRocLowThreshold != null ? `-${Math.abs(inst.badEntryShortRocLowThreshold * 100)}%` : "off"}`
       );
       lines.push("");
       lines.push(
