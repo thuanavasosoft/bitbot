@@ -10,12 +10,7 @@ import type { CombSignalParams } from "./comb-types";
 export const COMB_DEFAULT_SIGNAL_PARAMS: Omit<CombSignalParams, "N"> = {
   atr_len: 14,
   K: 5,
-  eps: 0.0005,
-  m_atr: 0.25,
-  roc_min: 0.0001,
   ema_period: 10,
-  need_two_closes: false,
-  vol_mult: 1.3,
 };
 
 const MS_PER_MINUTE_COMB_OPT = 60_000;
@@ -141,7 +136,12 @@ class CombUtils {
       trailingAtrLength: this.bot.trailingAtrLength,
       highestLookback: this.bot.trailingHighestLookback,
       trailConfirmBars: this.bot.trailConfirmBars,
-      signalParams: { N: this.bot.nSignal, ...COMB_DEFAULT_SIGNAL_PARAMS } as CombSignalParams,
+      signalParams: {
+        N: this.bot.nSignal,
+        atr_len: COMB_DEFAULT_SIGNAL_PARAMS.atr_len,
+        K: COMB_DEFAULT_SIGNAL_PARAMS.K,
+        ema_period: COMB_DEFAULT_SIGNAL_PARAMS.ema_period,
+      },
       tickSize: this.bot.tickSize,
       pricePrecision: this.bot.pricePrecision,
       triggerBufferPercentage: this.bot.triggerBufferPercentage,

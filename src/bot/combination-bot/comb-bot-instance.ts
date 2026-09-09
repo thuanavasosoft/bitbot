@@ -3,7 +3,7 @@ import { EEventBusEventType } from "@/utils/event-bus.util";
 import TelegramService from "@/services/telegram.service";
 import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
-import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason } from "./comb-types";
+import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
 import CombUtils, { getLtpOrMarkPrice, quantizePriceByPrecision } from "./comb-utils";
@@ -62,6 +62,8 @@ const EXIT_REASON_DISPLAY = new Map<string, string>([
   ["close_command", "close command"],
   ["minority_prevention", "minority prevention"],
   ["margin_stop_loss", "margin stop loss"],
+  ["bad_signal", "bad entry (consolidation)"],
+  ["hard_take_profit", "hard take profit"],
 ]);
 
 function formatExitReasonDisplay(exitReason: string): string {
@@ -81,6 +83,10 @@ function justManuallyClosedByFromVirtualExitReason(
       return "tp_pb";
     case "margin_stop_loss":
       return "margin_stop_loss";
+    case "bad_signal":
+      return "bad_signal";
+    case "hard_take_profit":
+      return "hard_take_profit";
     case "atr_trailing":
     case "signal_change":
     case "end":
@@ -103,6 +109,7 @@ class CombBotInstance {
   trailingAtrLength: number;
   trailingHighestLookback: number;
   trailBoundStepSize: number;
+  currCandles: ICandleInfo[] = [];
   trailMultiplierBounds: { min: number; max: number };
   telegramChatId?: string;
   stateBus: EventEmitter;
@@ -141,8 +148,23 @@ class CombBotInstance {
    * Max unrealized loss as % of margin (from env or /set_sl). Undefined or 0 = disabled.
    */
   marginStopLossPercent?: number;
-  /** Stop-loss trigger price for the current position (from entry avg). Cleared on close. */
+  /** Stop-loss trigger price for the current position. Cleared on close. */
   currStopLossPrice?: number;
+  /**
+   * Hard take profit as % of margin / ROM (from env or /set_tp). Undefined or 0 = disabled.
+   * Price move = percent / leverage, matching dashboard `takeProfitPercentage`.
+   */
+  hardTakeProfitPercent?: number;
+  /** Take-profit trigger price for the current position. Cleared on close. */
+  currTakeProfitPrice?: number;
+  /** Latest breakout signal from the candle watcher (S/R, ROC high/low, consolidation). */
+  lastSignalResult: CombSignalResult | null = null;
+  /** Signal snapshot taken at entry; used for bad-entry ROC and consolidation window. */
+  lastEntrySignal: CombSignalResult | null = null;
+  isBadEntrySignal: boolean = false;
+  isConsolidationAfterBreakout: boolean = false;
+  badEntryLongRocHighThreshold?: number;
+  badEntryShortRocLowThreshold?: number;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -237,6 +259,9 @@ class CombBotInstance {
     this.trailMultiplierBounds = { min: config.TRAIL_MULTIPLIER_BOUNDS_MIN, max: config.TRAIL_MULTIPLIER_BOUNDS_MAX };
     this.telegramChatId = config.TELEGRAM_CHAT_ID;
     this.marginStopLossPercent = config.MARGIN_STOP_LOSS;
+    this.hardTakeProfitPercent = config.HARD_TAKE_PROFIT_PCT;
+    this.badEntryLongRocHighThreshold = config.BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT;
+    this.badEntryShortRocLowThreshold = config.BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT;
 
     this.orderWatcher = new CombOrderWatcher();
 
@@ -277,28 +302,124 @@ class CombBotInstance {
     return this.marginStopLossPercent != null && this.marginStopLossPercent > 0;
   }
 
-  computeStopLossPrice(entryFill: number, side: TPositionSide): number | undefined {
-    if (!this.isMarginStopLossEnabled()) return undefined;
-    const stopLossPctFrac = this.marginStopLossPercent! / 100;
-    const raw =
-      side === "long"
-        ? entryFill * (1 - stopLossPctFrac / this.leverage)
-        : entryFill * (1 + stopLossPctFrac / this.leverage);
-    return quantizePriceByPrecision(
-      raw,
-      this.pricePrecision,
-      side === "long" ? "up" : "down"
+  isHardTakeProfitEnabled(): boolean {
+    return this.hardTakeProfitPercent != null && this.hardTakeProfitPercent > 0;
+  }
+
+  isBadEntryCloseEnabled(): boolean {
+    return (
+      (this.badEntryLongRocHighThreshold != null && this.badEntryLongRocHighThreshold > 0) ||
+      (this.badEntryShortRocLowThreshold != null && this.badEntryShortRocLowThreshold > 0)
     );
   }
 
-  /** Recompute currStopLossPrice from the active position entry (e.g. after open or /set_sl). */
+  resetBadEntryTracking(): void {
+    this.lastEntrySignal = null;
+    this.isBadEntrySignal = false;
+    this.isConsolidationAfterBreakout = false;
+  }
+
+  /**
+   * Dashboard `_checkStopBadEntrySignal`: previous bar's consolidation flag, and only
+   * after the just-closed 1m candle open is ≥ entry+60s. Do not call from LTP ticks.
+   */
+  shouldCloseBadEntryOnClosedCandle(
+    consolidationFromPreviousBar: boolean,
+    closedCandleOpenMs: number,
+  ): boolean {
+    if (!this.isBadEntryCloseEnabled()) return false;
+    if (!this.isBadEntrySignal || !consolidationFromPreviousBar) return false;
+    if (this.justManuallyClosedBy || this.isClosingPosition) return false;
+    if (!this.currActivePosition) return false;
+    if (this.currentState !== this.waitForResolveState) return false;
+    if (!(this.lastEntryTime > 0) || closedCandleOpenMs < this.lastEntryTime + 60_000) return false;
+    return true;
+  }
+
+  async closeBadEntryIfNeededOnCandleClose(
+    consolidationFromPreviousBar: boolean,
+    closedCandleOpenMs: number,
+  ): Promise<void> {
+    if (!this.shouldCloseBadEntryOnClosedCandle(consolidationFromPreviousBar, closedCandleOpenMs)) {
+      return;
+    }
+    const side = this.currActivePosition?.side ?? "unknown";
+    console.log(
+      `[COMB] badSignal candleClose (${side}) symbol=${this.symbol} closedCandleOpen=${new Date(closedCandleOpenMs).toISOString()}`
+    );
+    this.queueMsg(
+      `ℹ️ℹ️ℹ️ Bad entry consolidation triggered at candle close (${side})\n` +
+      `Closed candle open: ${new Date(closedCandleOpenMs).toISOString()}\n` +
+      `${this.formatBadEntryStatus()}`
+    );
+    await this.virtualClosePosition("bad_signal");
+  }
+
+  /**
+   * Stop when maintenanceMargin + unrealizedPnl = -SL% of margin.
+   * `maintenanceMargin` comes from the exchange position; price is quantized to
+   * pricePrecision (long down, short up).
+   */
+  computeStopLossPrice(
+    entryFill: number,
+    side: TPositionSide,
+    size: number,
+    maintenanceMargin: number
+  ): number | undefined {
+    if (!this.isMarginStopLossEnabled()) return undefined;
+    if (!(size > 0) || !Number.isFinite(entryFill) || !Number.isFinite(maintenanceMargin)) return undefined;
+
+    const desiredLoss = new BigNumber(this.margin).times(this.marginStopLossPercent!).div(100);
+    const targetUnrealized = desiredLoss.negated().minus(maintenanceMargin);
+    const targetUnrealizedPerUnit = targetUnrealized.div(size).toNumber();
+    const slPriceRaw =
+      side === "long" ? entryFill + targetUnrealizedPerUnit : entryFill - targetUnrealizedPerUnit;
+    return quantizePriceByPrecision(
+      slPriceRaw,
+      this.pricePrecision,
+      side === "long" ? "down" : "up"
+    );
+  }
+
+  /**
+   * Hard TP from entry: price move = (percent / leverage), i.e. percent of margin (ROM).
+   * Quantize long up / short down so the trigger is not easier than the raw level.
+   */
+  computeTakeProfitPrice(entryFill: number, side: TPositionSide): number | undefined {
+    if (!this.isHardTakeProfitEnabled()) return undefined;
+    if (!Number.isFinite(entryFill) || !(this.leverage > 0)) return undefined;
+
+    const takeProfitPctFrac = this.hardTakeProfitPercent! / 100;
+    const raw =
+      side === "long"
+        ? entryFill * (1 + takeProfitPctFrac / this.leverage)
+        : entryFill * (1 - takeProfitPctFrac / this.leverage);
+    return quantizePriceByPrecision(raw, this.pricePrecision, side === "long" ? "up" : "down");
+  }
+
+  /** Recompute currStopLossPrice from the active position (e.g. after open or /set_sl). */
   updateCurrStopLossFromPosition(): void {
     const pos = this.currActivePosition;
     if (!pos || !this.isMarginStopLossEnabled()) {
       this.currStopLossPrice = undefined;
       return;
     }
-    this.currStopLossPrice = this.computeStopLossPrice(pos.avgPrice, pos.side);
+    this.currStopLossPrice = this.computeStopLossPrice(
+      pos.avgPrice,
+      pos.side,
+      pos.size,
+      pos.maintenanceMargin
+    );
+  }
+
+  /** Recompute currTakeProfitPrice from the active position (e.g. after open or /set_tp). */
+  updateCurrTakeProfitFromPosition(): void {
+    const pos = this.currActivePosition;
+    if (!pos || !this.isHardTakeProfitEnabled()) {
+      this.currTakeProfitPrice = undefined;
+      return;
+    }
+    this.currTakeProfitPrice = this.computeTakeProfitPrice(pos.avgPrice, pos.side);
   }
 
   formatMarginStopLossStatus(pricePrecision?: number): string {
@@ -309,6 +430,33 @@ class CombBotInstance {
         ? ` → ${formatEnUsNumber(this.currStopLossPrice, fd)}`
         : "";
     return `Margin stop loss: ${formatEnUsNumber(this.marginStopLossPercent!, 4)}% of margin${pricePart}`;
+  }
+
+  formatHardTakeProfitStatus(pricePrecision?: number): string {
+    if (!this.isHardTakeProfitEnabled()) return "Hard take profit: disabled";
+    const fd = pricePrecision ?? this.pricePrecision;
+    const pricePart =
+      this.currTakeProfitPrice != null
+        ? ` → ${formatEnUsNumber(this.currTakeProfitPrice, fd)}`
+        : "";
+    return `Hard take profit: ${formatEnUsNumber(this.hardTakeProfitPercent!, 4)}% of margin${pricePart}`;
+  }
+
+  formatBadEntryStatus(): string {
+    if (!this.isBadEntryCloseEnabled()) return "Bad-entry close: disabled";
+    const longPct =
+      this.badEntryLongRocHighThreshold != null
+        ? `${(this.badEntryLongRocHighThreshold * 100)}%`
+        : "off";
+    const shortPct =
+      this.badEntryShortRocLowThreshold != null
+        ? `-${Math.abs(this.badEntryShortRocLowThreshold * 100)}%`
+        : "off";
+    const live =
+      this.currActivePosition && !this.justManuallyClosedBy
+        ? ` | is currently flagged=${this.isBadEntrySignal ? "yes" : "no"}`
+        : "";
+    return `Bad-entry close: long ROC high ${longPct} / short ROC low ${shortPct}${live}`;
   }
 
   /**
@@ -322,6 +470,30 @@ class CombBotInstance {
     }
     this.marginStopLossPercent = percent;
     this.updateCurrStopLossFromPosition();
+  }
+
+  /**
+   * Set hard take-profit percent of margin (0 or invalid disables). Recalculates price when a position is open.
+   */
+  applyHardTakeProfitPercent(percent: number): void {
+    if (!Number.isFinite(percent) || percent <= 0) {
+      this.hardTakeProfitPercent = undefined;
+      this.currTakeProfitPrice = undefined;
+      return;
+    }
+    this.hardTakeProfitPercent = percent;
+    this.updateCurrTakeProfitFromPosition();
+  }
+
+  /**
+   * Set bad-entry ROC thresholds. Inputs are percents (e.g. 0.6 = 0.6%), stored as fractions.
+   * 0 or invalid disables that side.
+   */
+  applyBadEntryRocFilter(longPct: number, shortPct: number): void {
+    this.badEntryLongRocHighThreshold =
+      Number.isFinite(longPct) && longPct > 0 ? longPct / 100 : undefined;
+    this.badEntryShortRocLowThreshold =
+      Number.isFinite(shortPct) && shortPct > 0 ? shortPct / 100 : undefined;
   }
 
   /** Refresh trailing stop levels (if in wait-for-resolve) and send the price chart to the instance channel. */
@@ -534,7 +706,7 @@ class CombBotInstance {
       triggerTimestamp?: number;
       fillTimestamp?: number;
       isLiquidation?: boolean;
-      exitReason?: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "tp_pullback" | "close_command" | "minority_prevention" | "margin_stop_loss";
+      exitReason?: CombClosedExitReason;
       /** When true, does not emit a state transition event. Caller must handle state transition explicitly. */
       suppressStateChange?: boolean;
     }
@@ -663,6 +835,8 @@ class CombBotInstance {
       this.tpPbPercent = 0;
       this.tpPbFixedPrice = undefined;
       this.currStopLossPrice = undefined;
+      this.currTakeProfitPrice = undefined;
+      this.resetBadEntryTracking();
 
       if (!_options?.suppressStateChange) {
         this.stateBus.emit(EEventBusEventType.StateChange);
@@ -723,6 +897,7 @@ class CombBotInstance {
     this.isPnlRecorded = false;
     this.nextEntryAllowedAtMs = undefined;
     this.resetTrailingStopTracking();
+    this.resetBadEntryTracking();
     this.tpPbPercent = 0;
     this.tpPbFixedPrice = undefined;
     this.lastEntryTime = Date.now();

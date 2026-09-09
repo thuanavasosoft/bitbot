@@ -74,6 +74,9 @@ Leverage: X${this.bot.leverage}
 Margin size: ${this.bot.margin} USDT
 Trigger buffer percentage: ${this.bot.triggerBufferPercentage}%
 Trail confirm bars: ${this.bot.trailConfirmBars}
+${this.bot.formatMarginStopLossStatus()}
+${this.bot.formatHardTakeProfitStatus()}
+${this.bot.formatBadEntryStatus()}
 
 Optimization window: ${this.bot.optimizationWindowMinutes} minutes
 Update interval: ${this.bot.updateIntervalMinutes} minutes
