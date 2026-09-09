@@ -58,17 +58,21 @@ class CombTelegramHandler {
     return `
 === GENERAL ===
 Run ID: ${this.bot.runId}
+Run start: ${runStart.toISOString()}
 Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
 Margin: ${this.bot.margin} USDT
 ${this.bot.formatMarginStopLossStatus()}
+${this.bot.formatHardTakeProfitStatus()}
+${this.bot.formatBadEntryStatus()}
 Buffer: ${this.bot.triggerBufferPercentage}%
 Trail confirm bars: ${this.bot.trailConfirmBars}
 
 === PARAMS ===
+N Signal: ${this.bot.trailingAtrLength}
 Optimization window: ${this.bot.optimizationWindowMinutes} min
 Update interval: ${this.bot.updateIntervalMinutes} min
-Trail ATR length: ${this.bot.trailingAtrLength}
+Trail multiplier bounds: ${this.bot.trailMultiplierBounds.min} - ${this.bot.trailMultiplierBounds.max} | Step size: ${this.bot.trailBoundStepSize}
 Current trail multiplier: ${this.bot.currTrailMultiplier}
 Last optimized: ${this.bot.lastOptimizationAtMs > 0 ? toIso(this.bot.lastOptimizationAtMs + 1000) : "N/A"}
 Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(this.bot.lastOptimizationAtMs, this.bot.updateIntervalMinutes, nowMs) / 1000))}
@@ -99,6 +103,10 @@ Average slippage: ~${new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩"} ${avgSl
     }
     const history = this.bot.pnlHistory;
     const chartHistory = history.map((e) => ({ timestamp: e.timestampMs, totalPnL: e.totalPnL }));
+    const originTs = this.bot.runStartTs?.getTime() ?? chartHistory[0].timestamp;
+    if (chartHistory[0].totalPnL !== 0 || chartHistory[0].timestamp > originTs) {
+      chartHistory.unshift({ timestamp: Math.min(originTs, chartHistory[0].timestamp), totalPnL: 0 });
+    }
     try {
       const img = await generatePnLProgressionChart(chartHistory);
       this.bot.queueMsgPriority(img);

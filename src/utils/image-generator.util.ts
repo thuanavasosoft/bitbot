@@ -139,7 +139,7 @@ export async function generateImageOfCandlesWithSupportResistance(
   trailingStopRaw?: number | null,
   trailingStopBuffered?: number | null,
   tpPbLevel?: number | null,
-  takeProfitLevel?: number | null,
+  takeProfitLevel?: number | { price: number; percent: number } | null,
   marginStopLossLevel?: { price: number, percent: number } | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
@@ -369,17 +369,23 @@ export async function generateImageOfCandlesWithSupportResistance(
   }
 
   if (takeProfitLevel !== null && takeProfitLevel !== undefined) {
+    const tpPrice = typeof takeProfitLevel === "number" ? takeProfitLevel : takeProfitLevel.price;
+    const tpPercent = typeof takeProfitLevel === "number" ? undefined : takeProfitLevel.percent;
     const tpColor = "#8A2BE2"; // BlueViolet
     annotations.takeProfit = {
       type: 'line' as any,
-      yMin: takeProfitLevel,
-      yMax: takeProfitLevel,
+      yMin: tpPrice,
+      yMax: tpPrice,
       borderColor: tpColor,
       borderWidth: 2,
       borderDash: [6, 3],
       label: {
         display: true,
-        content: [`Take Profit: ${takeProfitLevel}`],
+        content: [
+          tpPercent != null
+            ? `Hard TP (${tpPercent.toLocaleString()}% of margin): ${tpPrice.toLocaleString()}`
+            : `Take Profit: ${tpPrice.toLocaleString()}`,
+        ],
         position: "end",
         backgroundColor: tpColor,
         color: "#FFFFFF",
@@ -527,19 +533,24 @@ export async function generatePnLProgressionChart(
   const greenColor = "#008000";
   const redColor = "#800000";
 
+  const series = [...pnlHistory];
+  if (series.length > 0 && series[0].totalPnL !== 0) {
+    series.unshift({ timestamp: series[0].timestamp, totalPnL: 0 });
+  }
+
   // Format timestamps to ISO format for x-axis labels
-  const labels = pnlHistory.map((entry) => {
+  const labels = series.map((entry) => {
     const date = new Date(entry.timestamp);
     return date.toISOString();
   });
 
   // Determine line color based on latest PnL value
-  const latestPnL = pnlHistory.length > 0 ? pnlHistory[pnlHistory.length - 1].totalPnL : 0;
+  const latestPnL = series.length > 0 ? series[series.length - 1].totalPnL : 0;
   const lineColor = latestPnL >= 0 ? greenColor : redColor;
 
   const datasets = [{
     label: 'Total PnL (USDT)',
-    data: pnlHistory.map((entry) => entry.totalPnL),
+    data: series.map((entry) => entry.totalPnL),
     fill: false,
     borderColor: lineColor,
     backgroundColor: lineColor,
@@ -599,6 +610,7 @@ export async function generatePnLProgressionChart(
             },
           },
           y: {
+            beginAtZero: true,
             title: {
               display: true,
               text: 'Total PnL (USDT)',

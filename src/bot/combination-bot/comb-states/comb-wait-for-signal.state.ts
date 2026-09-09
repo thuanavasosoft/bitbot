@@ -4,6 +4,7 @@ import { getPositionDetailMsg } from "@/utils/strings.util";
 import BigNumber from "bignumber.js";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import type CombBotInstance from "../comb-bot-instance";
+import { isCombBadEntrySignal } from "../comb-backtest";
 
 type EntryGuardResult = {
   allowed: boolean;
@@ -170,7 +171,16 @@ class CombWaitForSignalState {
           this.bot.tpPbPercent = 0;
           this.bot.tpPbFixedPrice = undefined;
           this.bot.updateCurrStopLossFromPosition();
+          this.bot.updateCurrTakeProfitFromPosition();
           this.bot.lastEntryTime = Date.now();
+          this.bot.lastEntrySignal = this.bot.lastSignalResult;
+          this.bot.isBadEntrySignal = isCombBadEntrySignal(
+            this.bot.lastEntrySignal,
+            posDir,
+            this.bot.badEntryLongRocHighThreshold,
+            this.bot.badEntryShortRocLowThreshold,
+          );
+          this.bot.isConsolidationAfterBreakout = false;
           this.bot.numberOfTrades++;
 
           const positionAvgPrice = position.avgPrice;
@@ -215,7 +225,13 @@ Price Diff(pips): ${icon} ${priceDiff}
           const slLine = this.bot.isMarginStopLossEnabled()
             ? `\n${this.bot.formatMarginStopLossStatus()}`
             : "";
-          this.bot.queueMsg(`🥳 New position opened\n${getPositionDetailMsg(position)}${slLine}`);
+          const tpLine = this.bot.isHardTakeProfitEnabled()
+            ? `\n${this.bot.formatHardTakeProfitStatus()}`
+            : "";
+          const badEntryLine = this.bot.isBadEntryCloseEnabled()
+            ? `\n${this.bot.formatBadEntryStatus()}`
+            : "";
+          this.bot.queueMsg(`🥳 New position opened\n${getPositionDetailMsg(position)}${slLine}${tpLine}${badEntryLine}`);
           await this.bot.combinationBot.handleMinorityPreventionAfterOpen(this.bot);
           this.bot.stateBus.emit(EEventBusEventType.StateChange);
         } finally {

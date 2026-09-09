@@ -13,7 +13,7 @@ function toIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-const VIRTUAL_CLOSE_EXIT_REASONS = ["tp_pullback", "margin_stop_loss"] as const satisfies readonly CombClosedExitReason[];
+const VIRTUAL_CLOSE_EXIT_REASONS = ["tp_pullback", "margin_stop_loss", "bad_signal", "hard_take_profit"] as const satisfies readonly CombClosedExitReason[];
 
 function isVirtualCloseExitReason(reason: string): reason is (typeof VIRTUAL_CLOSE_EXIT_REASONS)[number] {
   return (VIRTUAL_CLOSE_EXIT_REASONS as readonly string[]).includes(reason);
@@ -183,6 +183,49 @@ class CombWaitForResolveState {
         }
       }
 
+      // Hard take profit: ROM% from entry fill (dashboard takeProfitPercentage).
+      if (
+        !shouldExit &&
+        this.bot.currTakeProfitPrice != null &&
+        this.bot.isHardTakeProfitEnabled() &&
+        !this.bot.justManuallyClosedBy &&
+        !this.isManuallyClosingBy
+      ) {
+        const tpBn = new BigNumber(this.bot.currTakeProfitPrice);
+        const hardTakeProfitTriggered =
+          (position.side === "long" && priceBn.gte(tpBn)) ||
+          (position.side === "short" && priceBn.lte(tpBn));
+        if (hardTakeProfitTriggered) {
+          shouldExit = true;
+          this.isManuallyClosingBy = "hard_take_profit";
+          exitReason = "hard_take_profit";
+          console.log(
+            `[COMB] waitForResolve hardTakeProfit triggered (${position.side}) symbol=${this.bot.symbol} price=${price} takeProfit=${this.bot.currTakeProfitPrice}`
+          );
+          this.bot.queueMsg(
+            `🎯 Hard take profit triggered (${position.side})\nPrice: ${price}\nTake profit: ${this.bot.currTakeProfitPrice} (${this.bot.hardTakeProfitPercent}% of margin)`
+          );
+        }
+      }
+
+      // Bad-entry + consolidation: live mapping of dashboard virtual `bad_signal` exit.
+      if (
+        !shouldExit &&
+        this.bot.shouldCloseBadEntrySignal() &&
+        !this.bot.justManuallyClosedBy &&
+        !this.isManuallyClosingBy
+      ) {
+        shouldExit = true;
+        this.isManuallyClosingBy = "bad_signal";
+        exitReason = "bad_signal";
+        console.log(
+          `[COMB] waitForResolve badSignal triggered (${position.side}) symbol=${this.bot.symbol} price=${price}`
+        );
+        this.bot.queueMsg(
+          `⚠️ Bad entry consolidation triggered (${position.side})\nPrice: ${price}\n${this.bot.formatBadEntryStatus()}`
+        );
+      }
+
       // TP_PB v2: fixed TP from avg–LTP gap at /tp_pb time; no trailing. Runs without SR.
       if (
         !shouldExit &&
@@ -233,40 +276,27 @@ class CombWaitForResolveState {
 
       if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
         const { bufferedLevel, rawLevel } = this.bot.trailingStopTargets;
-        if (position.side === "long") {
-          if (priceBn.lte(bufferedLevel)) {
-            this.bot.trailingStopBreachCount++;
-          } else {
-            this.bot.trailingStopBreachCount = 0;
-          }
+        const lastCandle = this.bot.currCandles[this.bot.currCandles.length - 1];
+        const candleExtreme = lastCandle
+          ? position.side === "long"
+            ? new BigNumber(lastCandle.lowPrice)
+            : new BigNumber(lastCandle.highPrice)
+          : undefined;
+        const isBreached = position.side === "long" ? 
+          priceBn.lte(bufferedLevel) || (candleExtreme != null && candleExtreme.lte(bufferedLevel)) :
+          priceBn.gte(bufferedLevel) || (candleExtreme != null && candleExtreme.gte(bufferedLevel));
 
-          if (this.bot.trailingStopBreachCount >= this.bot.trailConfirmBars) {
-            shouldExit = true;
-            exitReason = "atr_trailing";
-            console.log(
-              `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=long price=${price} bufferedLevel=${bufferedLevel} rawLevel=${rawLevel}`
-            );
-            this.bot.queueMsg(
-              `🟣 Trailing stop (long) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
-            );
-          }
-        } else {
-          if (priceBn.gte(bufferedLevel)) {
-            this.bot.trailingStopBreachCount++;
-          } else {
-            this.bot.trailingStopBreachCount = 0;
-          }
+        this.bot.trailingStopBreachCount = isBreached ? this.bot.trailingStopBreachCount + 1 : 0;
 
-          if (this.bot.trailingStopBreachCount >= this.bot.trailConfirmBars) {
-            shouldExit = true;
-            exitReason = "atr_trailing";
-            console.log(
-              `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=short price=${price} bufferedLevel=${bufferedLevel} rawLevel=${rawLevel}`
-            );
-            this.bot.queueMsg(
-              `🟣 Trailing stop (short) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
-            );
-          }
+        if (this.bot.trailingStopBreachCount >= this.bot.trailConfirmBars) {
+          shouldExit = true;
+          exitReason = "atr_trailing";
+          console.log(
+            `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=${position.side} price=${price} candleExtreme=${candleExtreme ?? "N/A"} bufferedLevel=${bufferedLevel} rawLevel=${rawLevel}`
+          );
+          this.bot.queueMsg(
+            `🟣 Trailing stop (${position.side}) triggered\nPrice: ${price}\nCandle ${position.side === "long" ? "low" : "high"}: ${candleExtreme ?? "N/A"}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
+          );
         }
       } else if (!shouldExit) {
         this.bot.trailingStopBreachCount = 0;
@@ -811,7 +841,7 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
     }
   }
 
-  /** Virtual close (TP_PB, margin SL): record PnL, preserve state, watchers stay running. */
+  /** Virtual close (TP_PB, margin SL, hard TP, bad-entry consolidation): record PnL, preserve state, watchers stay running. */
   private async _handleVirtualClose(exitReason: (typeof VIRTUAL_CLOSE_EXIT_REASONS)[number]): Promise<void> {
     try {
       await this.bot.virtualClosePosition(exitReason);

@@ -36,6 +36,12 @@ function envBool(key: string, fallback: boolean): boolean {
   return value === "true" || value === "1" || value === "yes";
 }
 
+/** Env percent (e.g. 0.6 = 0.6%) to fraction used by ROC checks. */
+function optionalPercentThresholdToFraction(raw: number | undefined): number | undefined {
+  if (raw === undefined || !Number.isFinite(raw) || raw <= 0) return undefined;
+  return raw / 100;
+}
+
 type ActiveCombPosition = {
   inst: CombBotInstance;
   position: IPosition;
@@ -60,6 +66,8 @@ const COMB_EXIT_REASON_LABELS: Partial<Record<CombClosedExitReason, string>> = {
   signal_change: "Signal/close",
   minority_prevention: "Minority prevention",
   margin_stop_loss: "Margin stop loss",
+  bad_signal: "Bad entry (consolidation)",
+  hard_take_profit: "Hard take profit",
 };
 
 /** Required env keys: COMB_BOT_N_<KEY>. Keys match CombInstanceConfig. */
@@ -111,7 +119,25 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
     marginStopLossRaw !== undefined && Number.isFinite(marginStopLossRaw) && marginStopLossRaw > 0
       ? marginStopLossRaw
       : undefined;
-  return { ...config, TELEGRAM_CHAT_ID: telegramChatId, MARGIN_STOP_LOSS: marginStopLoss } as CombInstanceConfig;
+  const hardTakeProfitRaw = envNumRequired(prefix + "HARD_TAKE_PROFIT_PCT");
+  const hardTakeProfit =
+    hardTakeProfitRaw !== undefined && Number.isFinite(hardTakeProfitRaw) && hardTakeProfitRaw > 0
+      ? hardTakeProfitRaw
+      : undefined;
+  const badEntryLongRocHighThreshold = optionalPercentThresholdToFraction(
+    envNumRequired(prefix + "BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT"),
+  );
+  const badEntryShortRocLowThreshold = optionalPercentThresholdToFraction(
+    envNumRequired(prefix + "BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT"),
+  );
+  return {
+    ...config,
+    TELEGRAM_CHAT_ID: telegramChatId,
+    MARGIN_STOP_LOSS: marginStopLoss,
+    HARD_TAKE_PROFIT_PCT: hardTakeProfit,
+    BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT: badEntryLongRocHighThreshold,
+    BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT: badEntryShortRocLowThreshold,
+  } as CombInstanceConfig;
 }
 
 /**
@@ -410,8 +436,11 @@ class CombinationBot {
       const slSuffix = inst.isMarginStopLossEnabled()
         ? ` | ${inst.formatMarginStopLossStatus()}`
         : "";
+      const tpSuffix = inst.isHardTakeProfitEnabled()
+        ? ` | ${inst.formatHardTakeProfitStatus()}`
+        : "";
       this.queueGeneralMessage(
-        `${prefix} 📈 Position opened: ${pos.side} @ ${pos.avgPrice} | Size: ${pos.size} | Liq: ${pos.liquidationPrice ?? "N/A"}${slSuffix}`
+        `${prefix} 📈 Position opened: ${pos.side} @ ${pos.avgPrice} | Size: ${pos.size} | Liq: ${pos.liquidationPrice ?? "N/A"}${slSuffix}${tpSuffix}`
       );
       return;
     }
@@ -501,10 +530,10 @@ class CombinationBot {
       lines.push(`Symbol: ${inst.symbol} | Leverage: X${inst.leverage} | Margin: ${inst.margin} USDT`);
       lines.push(`Buffer: ${inst.triggerBufferPercentage}% | Trail confirm bars: ${inst.trailConfirmBars}`);
       lines.push(
-        `Optimization: ${inst.optimizationWindowMinutes} min window, ${inst.updateIntervalMinutes} min interval`
+        `N Signal: ${inst.nSignal} | Optimization: ${inst.optimizationWindowMinutes} min window, ${inst.updateIntervalMinutes} min interval`
       );
       lines.push(
-        `Trail ATR: ${inst.trailingAtrLength} | Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
+        `Trail mult bounds: ${inst.trailMultiplierBounds.min} - ${inst.trailMultiplierBounds.max} | Step size: ${inst.trailBoundStepSize} | Current Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
       );
       lines.push(
         `Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(inst.lastOptimizationAtMs, inst.updateIntervalMinutes, nowMs) / 1000))}`
@@ -517,15 +546,21 @@ class CombinationBot {
         lines.push("Position:");
         lines.push(`Side: ${pos.side.toUpperCase()} | Entry: ${pos.avgPrice} | Size: ${pos.size}`);
         lines.push(`Notional: ${pos.notional ?? "N/A"} USDT | Liquidation: ${pos.liquidationPrice ?? "N/A"}`);
-        lines.push(inst.formatMarginStopLossStatus());
         if (inst.justManuallyClosedBy) {
           const lastNetPnl = inst.lastNetPnl;
           lines.push("\n" + formatCombJustManuallyClosedIndicator(inst.justManuallyClosedBy, lastNetPnl));
         }
       } else {
         lines.push("Position: No open position");
-        lines.push(inst.formatMarginStopLossStatus());
       }
+      lines.push(inst.formatMarginStopLossStatus());
+      lines.push(inst.formatHardTakeProfitStatus());
+      lines.push(
+        `Bad entry long ROC high threshold: ${inst.badEntryLongRocHighThreshold != null ? `${inst.badEntryLongRocHighThreshold * 100}%` : "off"}`
+      );
+      lines.push(
+        `Bad entry short ROC low threshold: ${inst.badEntryShortRocLowThreshold != null ? `${inst.badEntryShortRocLowThreshold * 100}%` : "off"}`
+      );
       lines.push("");
       lines.push(
         `Total symbol calculated PnL: ${pnl >= 0 ? "🟩" : "🟥"} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
@@ -613,6 +648,15 @@ class CombinationBot {
       this.queueGeneralMessage("No PnL history yet from any instance.");
       return;
     }
+    const earliestStart = this.instances.reduce<number | undefined>((min, inst) => {
+      const t = inst.runStartTs?.getTime();
+      if (t == null) return min;
+      return min == null ? t : Math.min(min, t);
+    }, undefined);
+    const originTs = earliestStart != null ? Math.min(earliestStart, merged[0].timestamp) : merged[0].timestamp;
+    if (merged[0].totalPnL !== 0 || merged[0].timestamp > originTs) {
+      merged.unshift({ timestamp: originTs, totalPnL: 0 });
+    }
     try {
       const img = await generatePnLProgressionChart(merged);
       if (this.generalChatId) TelegramService.queueMsgPriority(img, this.generalChatId);
@@ -646,6 +690,10 @@ class CombinationBot {
         "/tp_pb all|{SYMBOL} {percent} — Fixed TP at % of avg–LTP gap \n(e.g. /tp_pb all 50). 0 = disabled.",
         para,
         "/set_sl all|{SYMBOL} {percent} — Margin stop loss as % of margin \n(e.g. /set_sl all 60). 0 = disabled.",
+        para,
+        "/set_tp all|{SYMBOL} {percent} — Hard take profit as % of margin \n(e.g. /set_tp all 40). 0 = disabled.",
+        para,
+        "/set_roc_filter all|{SYMBOL} {long_pct} {short_pct} — Bad-entry ROC filter \n(e.g. /set_roc_filter all 0.6 0.6). Both values required. 0 = disabled for that side.",
         para,
         "/add_symbol {symbol} {leverage} {margin} {N} {reoptimization_interval} {optimization_window} {minTrailMultiplier} {maxTrailMultiplier} {telegramChatID} [stopLoss] — Add and start a runtime-only symbol.",
         para,
@@ -721,6 +769,7 @@ class CombinationBot {
     const maxTrailMultiplier = Number(parts[8]);
     const telegramChatId = parts[9];
     const stopLoss = parts[10] === undefined ? undefined : Number(parts[10]);
+    const hardTakeProfit = parts[11] === undefined ? undefined : Number(parts[11]);
 
     const errors: string[] = [];
     if (!Number.isInteger(leverage) || leverage <= 0) errors.push("leverage must be a positive integer");
@@ -748,6 +797,9 @@ class CombinationBot {
     if (!/^-?\d+$/.test(telegramChatId)) errors.push("telegramChatID must be an integer chat ID");
     if (stopLoss !== undefined && (!Number.isFinite(stopLoss) || stopLoss < 0)) {
       errors.push("stopLoss must be 0 or a positive number");
+    }
+    if (hardTakeProfit !== undefined && (!Number.isFinite(hardTakeProfit) || hardTakeProfit < 0)) {
+      errors.push("hardTakeProfit must be 0 or a positive number");
     }
     if (errors.length > 0) {
       TelegramService.queueMsgPriority(`Invalid /add_symbol arguments:\n- ${errors.join("\n- ")}\n\n${usage}`, this.generalChatId);
@@ -800,6 +852,9 @@ class CombinationBot {
       TRAIL_MULTIPLIER_BOUNDS_MAX: maxTrailMultiplier,
       TELEGRAM_CHAT_ID: telegramChatId,
       MARGIN_STOP_LOSS: stopLoss && stopLoss > 0 ? stopLoss : undefined,
+      HARD_TAKE_PROFIT_PCT: hardTakeProfit && hardTakeProfit > 0 ? hardTakeProfit : undefined,
+      BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT: defaults.badEntryLongRocHighThreshold,
+      BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT: defaults.badEntryShortRocLowThreshold,
     };
     const instance = new CombBotInstance(config, this);
     this.registerInstance(instance);
@@ -1361,6 +1416,144 @@ class CombinationBot {
           : `${inst.formatMarginStopLossStatus()} for ${inst.symbol}.`,
         this.generalChatId
       );
+    });
+
+    const handleSetTp = async (ctx: { chat?: { id: string | number }; text?: string }) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+      const cmd = (parts[0] || "/set_tp").replace(/^\//, "").toLowerCase();
+
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority(`Use /${cmd} in the general channel.`, String(chatId));
+        return;
+      }
+
+      const target = parts[1];
+      const valueStr = parts[2];
+      if (!target || valueStr === undefined) {
+        TelegramService.queueMsgPriority(
+          `Usage: /${cmd} all {percent} or /${cmd} {SYMBOL} {percent} (e.g. /set_tp all 40). 0 = disabled.`,
+          this.generalChatId
+        );
+        return;
+      }
+      const value = Number(valueStr);
+      if (!Number.isFinite(value) || value < 0) {
+        TelegramService.queueMsgPriority("Percent must be a non-negative number.", this.generalChatId);
+        return;
+      }
+
+      const applyToInstance = async (inst: CombBotInstance): Promise<void> => {
+        inst.applyHardTakeProfitPercent(value);
+        const status = inst.formatHardTakeProfitStatus();
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(
+            value === 0
+              ? `Hard take profit disabled for ${inst.symbol}.`
+              : `${status} for ${inst.symbol}.${inst.currActivePosition ? " Recalculated for open position." : ""}`,
+            inst.telegramChatId
+          );
+        }
+        if (inst.currActivePosition) {
+          await inst.refreshChartAndTrailingLevels();
+        }
+      };
+
+      if (target.toLowerCase() === "all") {
+        const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+        TelegramService.queueMsgPriority(
+          value === 0
+            ? `Hard take profit disabled on all instances (${symbolsStr}).`
+            : `Setting hard take profit to ${value}% of margin on all instances (${symbolsStr}).`,
+          this.generalChatId
+        );
+        for (const inst of this.instances) {
+          await applyToInstance(inst);
+        }
+        return;
+      }
+
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      await applyToInstance(inst);
+      TelegramService.queueMsgPriority(
+        value === 0
+          ? `Hard take profit disabled for ${inst.symbol}.`
+          : `${inst.formatHardTakeProfitStatus()} for ${inst.symbol}.`,
+        this.generalChatId
+      );
+    };
+    TelegramService.appendTgCmdHandler("set_tp", handleSetTp);
+    TelegramService.appendTgCmdHandler("set_htp", handleSetTp);
+
+    TelegramService.appendTgCmdHandler("set_roc_filter", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /set_roc_filter in the general channel.", String(chatId));
+        return;
+      }
+
+      const target = parts[1];
+      const longStr = parts[2];
+      const shortStr = parts[3];
+      if (!target || longStr === undefined || shortStr === undefined) {
+        TelegramService.queueMsgPriority(
+          "Usage: /set_roc_filter all {long_pct} {short_pct} or /set_roc_filter {SYMBOL} {long_pct} {short_pct} (e.g. /set_roc_filter all 0.6 0.6). Both values required. 0 = disabled for that side.",
+          this.generalChatId
+        );
+        return;
+      }
+      const longPct = Number(longStr);
+      const shortPct = Number(shortStr);
+      if (!Number.isFinite(longPct) || longPct < 0 || !Number.isFinite(shortPct) || shortPct < 0) {
+        TelegramService.queueMsgPriority("Both long_pct and short_pct must be non-negative numbers.", this.generalChatId);
+        return;
+      }
+
+      const applyToInstance = (inst: CombBotInstance): void => {
+        inst.applyBadEntryRocFilter(longPct, shortPct);
+        const status = inst.formatBadEntryStatus();
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(`${status} for ${inst.symbol}.`, inst.telegramChatId);
+        }
+      };
+
+      if (target.toLowerCase() === "all") {
+        const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+        TelegramService.queueMsgPriority(
+          longPct === 0 && shortPct === 0
+            ? `ROC filter disabled on all instances (${symbolsStr}).`
+            : `Setting ROC filter (long ${longPct}%, short ${shortPct}%) on all instances (${symbolsStr}).`,
+          this.generalChatId
+        );
+        for (const inst of this.instances) {
+          applyToInstance(inst);
+        }
+        return;
+      }
+
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      applyToInstance(inst);
+      TelegramService.queueMsgPriority(`${inst.formatBadEntryStatus()} for ${inst.symbol}.`, this.generalChatId);
     });
 
     TelegramService.appendTgCmdHandler("close_pos", async (ctx) => {

@@ -18,6 +18,8 @@ class CombStoppedState {
 
     this.bot.resetTrailingStopTracking();
     this.bot.trailingStopBreachCount = 0;
+    this.bot.resetBadEntryTracking();
+    this.bot.lastSignalResult = null;
 
     this.bot.entryWsPrice = undefined;
     this.bot.resolveWsPrice = undefined;

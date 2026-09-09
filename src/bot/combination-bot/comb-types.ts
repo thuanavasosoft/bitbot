@@ -51,11 +51,11 @@ export type CombPnlHistoryPoint = {
   exitTimestampMs: number;
   exitFillPrice: number;
   tradePnL: number;
-  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss";
+  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit";
 };
 
 /** Indicates position was closed but state should be preserved until trailing stop triggers. */
-export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention" | "margin_stop_loss";
+export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit";
 
 export type CombRunBacktestArgs = {
   symbol: string;
@@ -79,28 +79,33 @@ export interface CombSignalParams {
   N: number;
   atr_len?: number;
   K?: number;
-  eps?: number;
-  m_atr?: number;
-  roc_min?: number;
+  /** Kept for TMOB optimization warmup compatibility. */
   ema_period?: number;
-  need_two_closes?: boolean;
-  vol_mult?: number;
+  /** Min |rocHigh| since entry to count as impulse (long). Default 0.006. */
+  consolidation_impulse_roc_long?: number;
+  /** Min |rocLow| since entry to count as impulse (short). Default 0.006. */
+  consolidation_impulse_roc_short?: number;
+  /** |rocClose| at or below this = momentum flattened. Default 0.001. */
+  consolidation_roc_flat?: number;
+  /** stdDev now must be <= peak × this to count as contracting. Default 0.65. */
+  consolidation_std_contract_ratio?: number;
+  /** ATR now must be <= peak × this to count as contracting. Default 0.70. */
+  consolidation_atr_contract_ratio?: number;
+  /** Min bars between impulse peak and current bar. Default 3. */
+  consolidation_min_bars_after_impulse?: number;
 }
 
 export interface CombSignalResult {
-  signal: "Up" | "Down" | "Kangaroo";
   resistance: number | null;
   support: number | null;
   atr: number | null;
-  roc: number | null;
-  slope: number | null;
-  currentClose?: number;
-  up_lvl?: boolean;
-  up_size?: boolean;
-  up_momo?: boolean;
-  dn_lvl?: boolean;
-  dn_size?: boolean;
-  dn_momo?: boolean;
+  supportCandleTsMs?: number | null;
+  resistanceCandleTsMs?: number | null;
+  roc: { rocHigh: number; rocLow: number } | null;
+  stdDev?: number | null;
+  entryCandle?: ICandleInfo;
+  /** True when impulse ROC since entry peaked, ROC flattened, and vol contracted from peak. */
+  isConsolidationAfterBreakout?: boolean;
 }
 
 /**
@@ -121,6 +126,12 @@ export interface CombInstanceConfig {
   TELEGRAM_CHAT_ID: string;
   /** Max loss as % of margin before stop-loss price triggers. Undefined = disabled. */
   MARGIN_STOP_LOSS?: number;
+  /** Hard take profit as % of margin (ROM), same semantics as dashboard takeProfitPercentage. Undefined = disabled. */
+  HARD_TAKE_PROFIT_PCT?: number;
+  /** Long bad-entry if rocHigh exceeds this fraction (e.g. 0.006 = 0.6%). Undefined = disabled. */
+  BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT?: number;
+  /** Short bad-entry if rocLow is below -abs(this) fraction. Undefined = disabled. */
+  BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT?: number;
 }
 
 /** Order fill update shape used by comb-order-executor. */
@@ -129,7 +140,7 @@ export interface IOrderFillUpdate {
   executionPrice: number;
 }
 
-export type CombClosedExitReason = "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss";
+export type CombClosedExitReason = "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit";
 
 /** Event emitted by an instance so the general bot can notify the general channel. */
 export type CombInstanceEvent =
