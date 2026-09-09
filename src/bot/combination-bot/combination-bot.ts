@@ -689,6 +689,10 @@ class CombinationBot {
         para,
         "/tp_pb all|{SYMBOL} {percent} — Fixed TP at % of avg–LTP gap \n(e.g. /tp_pb all 50). 0 = disabled.",
         para,
+        "/set_margin all|{SYMBOL} {newMargin} — Set allocated margin in USDT \n(e.g. /set_margin all 100 or /set_margin BTCUSDT 150).",
+        para,
+        "/set_leverage all|{SYMBOL} {newLeverage} — Set leverage \n(e.g. /set_leverage all 10 or /set_leverage BTCUSDT 15).",
+        para,
         "/set_sl all|{SYMBOL} {percent} — Margin stop loss as % of margin \n(e.g. /set_sl all 60). 0 = disabled.",
         para,
         "/set_tp all|{SYMBOL} {percent} — Hard take profit as % of margin \n(e.g. /set_tp all 40). 0 = disabled.",
@@ -1343,6 +1347,173 @@ class CombinationBot {
         return;
       }
       await bot.applyTpPbFromTelegram(value);
+    });
+
+    TelegramService.appendTgCmdHandler("set_margin", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /set_margin in the general channel.", String(chatId));
+        return;
+      }
+
+      const target = parts[1];
+      const valueStr = parts[2];
+      if (!target || valueStr === undefined) {
+        TelegramService.queueMsgPriority(
+          "Usage: /set_margin all {newMargin} or /set_margin {SYMBOL} {newMargin} (e.g. /set_margin all 100).",
+          this.generalChatId
+        );
+        return;
+      }
+      const value = Number(valueStr);
+      if (!Number.isFinite(value) || value <= 0) {
+        TelegramService.queueMsgPriority("newMargin must be a positive number.", this.generalChatId);
+        return;
+      }
+
+      const applyToInstance = async (inst: CombBotInstance): Promise<void> => {
+        const previous = inst.margin;
+        inst.applyMargin(value);
+        const slNote =
+          inst.currActivePosition && inst.isMarginStopLossEnabled()
+            ? " Stop-loss price recalculated for the open position."
+            : "";
+        const sizeNote = inst.currActivePosition
+          ? " Open position size is unchanged; new margin applies to the next entry."
+          : "";
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(
+            `Margin updated for ${inst.symbol}: ${previous} → ${inst.margin} USDT.${slNote}${sizeNote}`,
+            inst.telegramChatId
+          );
+        }
+        if (inst.currActivePosition) {
+          await inst.refreshChartAndTrailingLevels();
+        }
+      };
+
+      if (target.toLowerCase() === "all") {
+        const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+        TelegramService.queueMsgPriority(
+          `Setting margin to ${value} USDT on all instances (${symbolsStr}).`,
+          this.generalChatId
+        );
+        for (const inst of this.instances) {
+          await applyToInstance(inst);
+        }
+        return;
+      }
+
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      await applyToInstance(inst);
+      TelegramService.queueMsgPriority(
+        `Margin updated for ${inst.symbol}: ${inst.margin} USDT.`,
+        this.generalChatId
+      );
+    });
+
+    TelegramService.appendTgCmdHandler("set_leverage", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const rawText = ctx.text || "";
+      const parts = rawText.trim().split(/\s+/).filter(Boolean);
+
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /set_leverage in the general channel.", String(chatId));
+        return;
+      }
+
+      const target = parts[1];
+      const valueStr = parts[2];
+      if (!target || valueStr === undefined) {
+        TelegramService.queueMsgPriority(
+          "Usage: /set_leverage all {newLeverage} or /set_leverage {SYMBOL} {newLeverage} (e.g. /set_leverage all 10).",
+          this.generalChatId
+        );
+        return;
+      }
+      const value = Number(valueStr);
+      if (!Number.isInteger(value) || value <= 0) {
+        TelegramService.queueMsgPriority("newLeverage must be a positive integer.", this.generalChatId);
+        return;
+      }
+
+      const applyToInstance = async (inst: CombBotInstance): Promise<boolean> => {
+        const previous = inst.leverage;
+        let appliedOnExchange = false;
+        try {
+          ({ appliedOnExchange } = await inst.applyLeverage(value));
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          TelegramService.queueMsgPriority(
+            `Failed to set leverage for ${inst.symbol} to X${value}: ${errMsg}`,
+            this.generalChatId
+          );
+          if (inst.telegramChatId) {
+            TelegramService.queueMsg(
+              `Failed to set leverage for ${inst.symbol} to X${value}: ${errMsg}`,
+              inst.telegramChatId
+            );
+          }
+          return false;
+        }
+        const tpNote =
+          inst.currActivePosition && inst.isHardTakeProfitEnabled()
+            ? " Hard take-profit price recalculated for the open position."
+            : "";
+        const exchangeNote = appliedOnExchange
+          ? " Applied on the exchange immediately."
+          : " Open position kept at current exchange leverage; new leverage will be applied after close (before the next entry).";
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(
+            `Leverage updated for ${inst.symbol}: X${previous} → X${inst.leverage}.${exchangeNote}${tpNote}`,
+            inst.telegramChatId
+          );
+        }
+        if (inst.currActivePosition) {
+          await inst.refreshChartAndTrailingLevels();
+        }
+        return true;
+      };
+
+      if (target.toLowerCase() === "all") {
+        const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+        TelegramService.queueMsgPriority(
+          `Setting leverage to X${value} on all instances (${symbolsStr}).`,
+          this.generalChatId
+        );
+        for (const inst of this.instances) {
+          await applyToInstance(inst);
+        }
+        return;
+      }
+
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      const ok = await applyToInstance(inst);
+      if (ok) {
+        TelegramService.queueMsgPriority(
+          `Leverage updated for ${inst.symbol}: X${inst.leverage}.`,
+          this.generalChatId
+        );
+      }
     });
 
     TelegramService.appendTgCmdHandler("set_sl", async (ctx) => {

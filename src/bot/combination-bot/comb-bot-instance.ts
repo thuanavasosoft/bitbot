@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import TelegramService from "@/services/telegram.service";
+import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
 import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult } from "./comb-types";
@@ -457,6 +458,34 @@ class CombBotInstance {
         ? ` | is currently flagged=${this.isBadEntrySignal ? "yes" : "no"}`
         : "";
     return `Bad-entry close: long ROC high ${longPct} / short ROC low ${shortPct}${live}`;
+  }
+
+  private hasRealExchangePosition(): boolean {
+    return (
+      !!this.currActivePosition &&
+      this.currActivePosition.marginMode !== "virtual" &&
+      this.justManuallyClosedBy !== "minority_prevention"
+    );
+  }
+
+  applyMargin(newMargin: number): void {
+    this.margin = newMargin;
+    this.updateCurrStopLossFromPosition();
+  }
+
+  /**
+   * Update local leverage. If there is no real open position, apply it on the exchange
+   * immediately (same as starting state) so the next entry is not ruined.
+   * With a live position, starting state applies the new leverage after close.
+   */
+  async applyLeverage(newLeverage: number): Promise<{ appliedOnExchange: boolean }> {
+    const applyOnExchangeNow = !this.hasRealExchangePosition() && !this.isOpeningPosition;
+    if (applyOnExchangeNow) {
+      await ExchangeService.setLeverage(this.symbol, newLeverage);
+    }
+    this.leverage = newLeverage;
+    this.updateCurrTakeProfitFromPosition();
+    return { appliedOnExchange: applyOnExchangeNow };
   }
 
   /**
