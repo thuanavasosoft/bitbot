@@ -50,6 +50,7 @@ Side: ${position.side}
 Leverage: X${position.leverage}
 Size: ${position.size}
 Notional Value: ${position.notional}
+Maintanance Margin: ${position.maintenanceMargin}
 
 Liquidation Price: ${position.liquidationPrice}
 Avg Price: ${position.avgPrice}
