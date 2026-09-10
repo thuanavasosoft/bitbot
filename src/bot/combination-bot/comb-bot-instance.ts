@@ -146,7 +146,8 @@ class CombBotInstance {
   /** Fixed TP price set when /tp_pb runs (does not trail with LTP). */
   tpPbFixedPrice?: number;
   /**
-   * Max unrealized loss as % of margin (from env or /set_sl). Undefined or 0 = disabled.
+   * Max unrealized loss as % of margin / ROM (from env or /set_sl). Undefined or 0 = disabled.
+   * Price move = percent / leverage, matching dashboard `stopLossPercentage`.
    */
   marginStopLossPercent?: number;
   /** Stop-loss trigger price for the current position. Cleared on close. */
@@ -357,29 +358,19 @@ class CombBotInstance {
   }
 
   /**
-   * Stop when maintenanceMargin + unrealizedPnl = -SL% of margin.
-   * `maintenanceMargin` comes from the exchange position; price is quantized to
-   * pricePrecision (long down, short up).
+   * Hard SL from entry: price move = (percent / leverage), i.e. percent of margin (ROM).
+   * Quantize long down / short up so the trigger is not easier than the raw level.
    */
-  computeStopLossPrice(
-    entryFill: number,
-    side: TPositionSide,
-    size: number,
-    maintenanceMargin: number
-  ): number | undefined {
+  computeStopLossPrice(entryFill: number, side: TPositionSide): number | undefined {
     if (!this.isMarginStopLossEnabled()) return undefined;
-    if (!(size > 0) || !Number.isFinite(entryFill) || !Number.isFinite(maintenanceMargin)) return undefined;
+    if (!Number.isFinite(entryFill) || !(this.leverage > 0)) return undefined;
 
-    const desiredLoss = new BigNumber(this.margin).times(this.marginStopLossPercent!).div(100);
-    const targetUnrealized = desiredLoss.negated().minus(maintenanceMargin);
-    const targetUnrealizedPerUnit = targetUnrealized.div(size).toNumber();
-    const slPriceRaw =
-      side === "long" ? entryFill + targetUnrealizedPerUnit : entryFill - targetUnrealizedPerUnit;
-    return quantizePriceByPrecision(
-      slPriceRaw,
-      this.pricePrecision,
-      side === "long" ? "down" : "up"
-    );
+    const stopLossPctFrac = this.marginStopLossPercent! / 100;
+    const raw =
+      side === "long"
+        ? entryFill * (1 - stopLossPctFrac / this.leverage)
+        : entryFill * (1 + stopLossPctFrac / this.leverage);
+    return quantizePriceByPrecision(raw, this.pricePrecision, side === "long" ? "down" : "up");
   }
 
   /**
@@ -405,12 +396,7 @@ class CombBotInstance {
       this.currStopLossPrice = undefined;
       return;
     }
-    this.currStopLossPrice = this.computeStopLossPrice(
-      pos.avgPrice,
-      pos.side,
-      pos.size,
-      pos.maintenanceMargin
-    );
+    this.currStopLossPrice = this.computeStopLossPrice(pos.avgPrice, pos.side);
   }
 
   /** Recompute currTakeProfitPrice from the active position (e.g. after open or /set_tp). */
@@ -484,6 +470,7 @@ class CombBotInstance {
       await ExchangeService.setLeverage(this.symbol, newLeverage);
     }
     this.leverage = newLeverage;
+    this.updateCurrStopLossFromPosition();
     this.updateCurrTakeProfitFromPosition();
     return { appliedOnExchange: applyOnExchangeNow };
   }

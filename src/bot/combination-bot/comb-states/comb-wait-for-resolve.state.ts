@@ -158,7 +158,7 @@ class CombWaitForResolveState {
       let shouldExit = false;
       let exitReason = "";
 
-      // Margin stop loss: mm + unrealized = -SL% of margin (exchange MM, pricePrecision).
+      // Margin stop loss: ROM% from entry fill (dashboard stopLossPercentage).
       if (
         !shouldExit &&
         this.bot.currStopLossPrice != null &&

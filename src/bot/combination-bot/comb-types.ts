@@ -124,7 +124,7 @@ export interface CombInstanceConfig {
   TRAIL_MULTIPLIER_BOUNDS_MIN: number;
   TRAIL_MULTIPLIER_BOUNDS_MAX: number;
   TELEGRAM_CHAT_ID: string;
-  /** Max loss as % of margin before stop-loss price triggers. Undefined = disabled. */
+  /** Max loss as % of margin (ROM), same semantics as dashboard stopLossPercentage. Undefined = disabled. */
   MARGIN_STOP_LOSS?: number;
   /** Hard take profit as % of margin (ROM), same semantics as dashboard takeProfitPercentage. Undefined = disabled. */
   HARD_TAKE_PROFIT_PCT?: number;
