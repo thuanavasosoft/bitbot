@@ -61,7 +61,7 @@ Run ID: ${this.bot.runId}
 Run start: ${runStart.toISOString()}
 Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
-Margin: ${this.bot.margin} USDT
+${this.bot.formatEquityStatus()}
 ${this.bot.formatMarginStopLossStatus()}
 ${this.bot.formatHardTakeProfitStatus()}
 ${this.bot.formatBadEntryStatus()}

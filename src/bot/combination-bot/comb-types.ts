@@ -14,6 +14,9 @@ export interface CombState {
 
 export type CombSide = "long" | "short";
 
+/** How next-entry margin is sized. Distinct from exchange `IPosition.marginMode`. */
+export type CombTradeMarginMode = "percent_balance" | "fixed";
+
 export type CombBacktestRunSummary = {
   symbol: string;
   interval: "1m";
@@ -115,6 +118,18 @@ export interface CombInstanceConfig {
   SYMBOL: string;
   LEVERAGE: number;
   MARGIN: number;
+  /** Next-entry sizing. `percent_balance` requires STARTING_BALANCE. */
+  MARGIN_TRADE_MODE: CombTradeMarginMode;
+  /**
+   * Paper starting equity. Required when MARGIN_TRADE_MODE=percent_balance.
+   * Unused for sizing when mode is fixed.
+   */
+  STARTING_BALANCE?: number;
+  /**
+   * Optional. Trade margin = equity × this / 100. When omitted with STARTING_BALANCE,
+   * percent is derived from initial MARGIN / STARTING_BALANCE.
+   */
+  MARGIN_PERCENT_OF_BALANCE?: number;
   TRIGGER_BUFFER_PERCENTAGE: number;
   N_SIGNAL_AND_ATR_LENGTH: number;
   UPDATE_INTERVAL_MINUTES: number;

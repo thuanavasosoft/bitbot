@@ -17,6 +17,7 @@ type EntryGuardResult = {
 class CombWaitForSignalState {
   private ltpListenerRemover?: () => void;
   private entryCooldownNoticeBoundaryMs?: number;
+  private lastEquityDepletedNoticeAtMs = 0;
 
   constructor(private bot: CombBotInstance) { }
 
@@ -78,6 +79,19 @@ class CombWaitForSignalState {
         posDir = "short";
       }
       if (shouldEnter && posDir) {
+        this.bot.syncTradeMarginFromEquity();
+        if (this.bot.isEquitySizingEnabled() && !(this.bot.margin > 0)) {
+          const now = Date.now();
+          if (now - this.lastEquityDepletedNoticeAtMs > 60_000) {
+            this.lastEquityDepletedNoticeAtMs = now;
+            this.bot.queueMsg(
+              `⛔ Entry skipped: paper equity depleted (MARGIN_TRADE_MODE: percent_balance).\n` +
+              `Paper equity: ${this.bot.equity} USDT → next-entry size ${this.bot.margin} USDT.\n` +
+              `In the general channel use /set_margin ${this.bot.symbol} percent_balance {percent} {equity}, or /set_margin ${this.bot.symbol} fixed {usdt}.`
+            );
+          }
+          return;
+        }
         this.ltpListenerRemover?.();
         this.bot.isOpeningPosition = true;
         const triggerLevel = posDir === "long" ? this.bot.longTrigger : this.bot.shortTrigger;
@@ -163,6 +177,7 @@ class CombWaitForSignalState {
           }
 
           this.bot.currActivePosition = position;
+          this.bot.lockCurrPositionTradeMargin();
           this.bot.isClosingPosition = false;
           this.bot.isFinalizingPosition = false;
           this.bot.isPnlRecorded = false;
@@ -231,7 +246,7 @@ Price Diff(pips): ${icon} ${priceDiff}
           const badEntryLine = this.bot.isBadEntryCloseEnabled()
             ? `\n${this.bot.formatBadEntryStatus()}`
             : "";
-          this.bot.queueMsg(`🥳 New position opened\n${getPositionDetailMsg(position)}${slLine}${tpLine}${badEntryLine}`);
+          this.bot.queueMsg(`🥳 New position opened\n${this.bot.formatEquityStatus()}\n${getPositionDetailMsg(position)}${slLine}${tpLine}${badEntryLine}`);
           await this.bot.combinationBot.handleMinorityPreventionAfterOpen(this.bot);
           this.bot.stateBus.emit(EEventBusEventType.StateChange);
         } finally {

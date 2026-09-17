@@ -9,7 +9,7 @@ import { AsyncMutex } from "@/utils/async-mutex.util";
 import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
 import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
-import type { CombInstanceConfig, CombState, CombInstanceEvent, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader } from "./comb-types";
+import type { CombInstanceConfig, CombState, CombInstanceEvent, CombTradeMarginMode, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader } from "./comb-types";
 import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
 import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
 import { formatCombJustManuallyClosedIndicator } from "./comb-candle-watcher";
@@ -37,6 +37,12 @@ function envBool(key: string, fallback: boolean): boolean {
 }
 
 /** Env percent (e.g. 0.6 = 0.6%) to fraction used by ROC checks. */
+function parseCombTradeMarginMode(raw: string | undefined): CombTradeMarginMode | undefined {
+  const v = raw?.trim().toLowerCase();
+  if (v === "percent_balance" || v === "fixed") return v;
+  return undefined;
+}
+
 function optionalPercentThresholdToFraction(raw: number | undefined): number | undefined {
   if (raw === undefined || !Number.isFinite(raw) || raw <= 0) return undefined;
   return raw / 100;
@@ -75,6 +81,7 @@ const COMB_REQUIRED_KEYS: { env: string; type: "string" | "number" }[] = [
   { env: "SYMBOL", type: "string" },
   { env: "LEVERAGE", type: "number" },
   { env: "MARGIN", type: "number" },
+  { env: "MARGIN_TRADE_MODE", type: "string" },
   { env: "TRIGGER_BUFFER_PERCENTAGE", type: "number" },
   { env: "N_SIGNAL_AND_ATR_LENGTH", type: "number" },
   { env: "UPDATE_INTERVAL_MINUTES", type: "number" },
@@ -130,6 +137,29 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
   const badEntryShortRocLowThreshold = optionalPercentThresholdToFraction(
     envNumRequired(prefix + "BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT"),
   );
+  const marginTradeMode = parseCombTradeMarginMode(String(config.MARGIN_TRADE_MODE ?? ""));
+  if (!marginTradeMode) {
+    const message = `[COMB] Combination-bot stopped: invalid COMB_BOT_${botIndex}_MARGIN_TRADE_MODE. Use fixed or percent_balance.`;
+    console.error(message);
+    TelegramService.queueMsg(message, process.env.TELEGRAM_CHAT_ID);
+    process.exit(1);
+  }
+  const startingBalanceRaw = envNumRequired(prefix + "STARTING_BALANCE");
+  const startingBalance =
+    startingBalanceRaw !== undefined && Number.isFinite(startingBalanceRaw) && startingBalanceRaw > 0
+      ? startingBalanceRaw
+      : undefined;
+  const marginPercentRaw = envNumRequired(prefix + "MARGIN_PERCENT_OF_BALANCE");
+  const marginPercentOfBalance =
+    marginPercentRaw !== undefined && Number.isFinite(marginPercentRaw) && marginPercentRaw > 0
+      ? Math.min(marginPercentRaw, 100)
+      : undefined;
+  if (marginTradeMode === "percent_balance" && startingBalance == null) {
+    const message = `[COMB] Combination-bot stopped: COMB_BOT_${botIndex}_MARGIN_TRADE_MODE=percent_balance requires COMB_BOT_${botIndex}_STARTING_BALANCE > 0.`;
+    console.error(message);
+    TelegramService.queueMsg(message, process.env.TELEGRAM_CHAT_ID);
+    process.exit(1);
+  }
   return {
     ...config,
     TELEGRAM_CHAT_ID: telegramChatId,
@@ -137,6 +167,9 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
     HARD_TAKE_PROFIT_PCT: hardTakeProfit,
     BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT: badEntryLongRocHighThreshold,
     BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT: badEntryShortRocLowThreshold,
+    MARGIN_TRADE_MODE: marginTradeMode,
+    STARTING_BALANCE: startingBalance,
+    MARGIN_PERCENT_OF_BALANCE: marginPercentOfBalance,
   } as CombInstanceConfig;
 }
 
@@ -527,7 +560,8 @@ class CombinationBot {
       lines.push(`Run time: ${runDurationDisplay}`);
       lines.push(`Status: ${stateName}`);
       lines.push("");
-      lines.push(`Symbol: ${inst.symbol} | Leverage: X${inst.leverage} | Margin: ${inst.margin} USDT`);
+      lines.push(`Symbol: ${inst.symbol} | Leverage: X${inst.leverage}`);
+      lines.push(inst.formatEquityStatus());
       lines.push(`Buffer: ${inst.triggerBufferPercentage}% | Trail confirm bars: ${inst.trailConfirmBars}`);
       lines.push(
         `N Signal: ${inst.nSignal} | Optimization: ${inst.optimizationWindowMinutes} min window, ${inst.updateIntervalMinutes} min interval`
@@ -689,7 +723,9 @@ class CombinationBot {
         para,
         "/tp_pb all|{SYMBOL} {percent} — Fixed TP at % of avg–LTP gap \n(e.g. /tp_pb all 50). 0 = disabled.",
         para,
-        "/set_margin all|{SYMBOL} {newMargin} — Set allocated margin in USDT \n(e.g. /set_margin all 100 or /set_margin BTCUSDT 150).",
+        "/set_margin all|{SYMBOL} percent_balance {percent} {equity} — Set MARGIN_TRADE_MODE=percent_balance. Next-entry size = percent% of paper equity \n(e.g. /set_margin all percent_balance 10 1000 → 100 USDT). Paper equity compounds on natural close, not virtual SL/TP.",
+        para,
+        "/set_margin all|{SYMBOL} fixed {usdt} — Set MARGIN_TRADE_MODE=fixed. Next-entry size is that USDT every trade \n(e.g. /set_margin BTCUSDT fixed 150). Paper compounding off.",
         para,
         "/set_leverage all|{SYMBOL} {newLeverage} — Set leverage \n(e.g. /set_leverage all 10 or /set_leverage BTCUSDT 15).",
         para,
@@ -735,6 +771,8 @@ class CombinationBot {
       "• This is an instance channel. Commands act only on this symbol.",
       para,
       "• /close_pos closes the position; the instance continues running and waits for the next signal.",
+      para,
+      "• /set_margin (fixed vs percent_balance) is only available in the general channel.",
     ].join("\n");
   }
 
@@ -846,6 +884,7 @@ class CombinationBot {
       SYMBOL: symbol,
       LEVERAGE: leverage,
       MARGIN: margin,
+      MARGIN_TRADE_MODE: "fixed",
       TRIGGER_BUFFER_PERCENTAGE: defaults.triggerBufferPercentage,
       N_SIGNAL_AND_ATR_LENGTH: nSignal,
       UPDATE_INTERVAL_MINUTES: updateIntervalMinutes,
@@ -1354,40 +1393,95 @@ class CombinationBot {
       if (chatId === undefined) return;
       const rawText = ctx.text || "";
       const parts = rawText.trim().split(/\s+/).filter(Boolean);
+      const setMarginUsage =
+        "Usage (general channel):\n" +
+        "/set_margin all|{SYMBOL} percent_balance {percent} {equity}\n" +
+        "  MARGIN_TRADE_MODE=percent_balance. Next-entry size = percent% of paper equity.\n" +
+        "  Example: /set_margin all percent_balance 10 1000 → 10% of 1000 = 100 USDT per trade.\n" +
+        "/set_margin all|{SYMBOL} fixed {usdt}\n" +
+        "  MARGIN_TRADE_MODE=fixed. Next-entry size = usdt every trade (no compounding).\n" +
+        "  Example: /set_margin BTCUSDT fixed 150.";
 
       if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
-        TelegramService.queueMsgPriority("Use /set_margin in the general channel.", String(chatId));
+        TelegramService.queueMsgPriority(
+          "Use /set_margin in the general channel (not this instance chat).\n" + setMarginUsage,
+          String(chatId)
+        );
         return;
       }
 
       const target = parts[1];
-      const valueStr = parts[2];
-      if (!target || valueStr === undefined) {
+      const modeRaw = parts[2]?.toLowerCase();
+      if (!target || !modeRaw) {
+        TelegramService.queueMsgPriority(setMarginUsage, this.generalChatId);
+        return;
+      }
+      if (modeRaw !== "percent_balance" && modeRaw !== "fixed") {
         TelegramService.queueMsgPriority(
-          "Usage: /set_margin all {newMargin} or /set_margin {SYMBOL} {newMargin} (e.g. /set_margin all 100).",
+          `MARGIN_TRADE_MODE must be percent_balance or fixed.\n${setMarginUsage}`,
           this.generalChatId
         );
         return;
       }
-      const value = Number(valueStr);
-      if (!Number.isFinite(value) || value <= 0) {
-        TelegramService.queueMsgPriority("newMargin must be a positive number.", this.generalChatId);
-        return;
+      const mode = modeRaw as CombTradeMarginMode;
+
+      let config:
+        | { mode: "fixed"; margin: number }
+        | { mode: "percent_balance"; percent: number; equity: number };
+      if (mode === "fixed") {
+        if (parts.length !== 4) {
+          TelegramService.queueMsgPriority(
+            `fixed (MARGIN_TRADE_MODE) takes exactly one USDT amount. Do not pass paper equity.\n${setMarginUsage}`,
+            this.generalChatId
+          );
+          return;
+        }
+        const margin = Number(parts[3]);
+        if (!Number.isFinite(margin) || margin <= 0) {
+          TelegramService.queueMsgPriority("fixed next-entry size must be a positive USDT amount.", this.generalChatId);
+          return;
+        }
+        config = { mode: "fixed", margin };
+      } else {
+        if (parts.length !== 5) {
+          TelegramService.queueMsgPriority(
+            `percent_balance (MARGIN_TRADE_MODE) requires {percent} and {equity} (paper equity).\n${setMarginUsage}`,
+            this.generalChatId
+          );
+          return;
+        }
+        const percent = Number(parts[3]);
+        const equity = Number(parts[4]);
+        if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+          TelegramService.queueMsgPriority(
+            "percent_balance percent must be > 0 and ≤ 100 (share of paper equity used as next-entry size).",
+            this.generalChatId
+          );
+          return;
+        }
+        if (!Number.isFinite(equity) || equity <= 0) {
+          TelegramService.queueMsgPriority(
+            "percent_balance equity must be a positive USDT paper-equity amount.",
+            this.generalChatId
+          );
+          return;
+        }
+        config = { mode: "percent_balance", percent, equity };
       }
 
       const applyToInstance = async (inst: CombBotInstance): Promise<void> => {
-        const previous = inst.margin;
-        inst.applyMargin(value);
+        inst.applyTradeMarginConfig(config);
         const slNote =
           inst.currActivePosition && inst.isMarginStopLossEnabled()
-            ? " Stop-loss price recalculated for the open position."
+            ? "Stop-loss price recalculated for the open position."
             : "";
         const sizeNote = inst.currActivePosition
-          ? " Open position size is unchanged; new margin applies to the next entry."
+          ? "Open position size is unchanged; new next-entry size applies to the next trade only."
           : "";
+        const extra = [slNote, sizeNote].filter(Boolean).join("\n");
         if (inst.telegramChatId) {
           TelegramService.queueMsg(
-            `Margin updated for ${inst.symbol}: ${previous} → ${inst.margin} USDT.${slNote}${sizeNote}`,
+            `📐 Trade margin updated for ${inst.symbol}\n${inst.formatEquityStatus()}${extra ? `\n${extra}` : ""}`,
             inst.telegramChatId
           );
         }
@@ -1396,10 +1490,15 @@ class CombinationBot {
         }
       };
 
+      const describeConfig =
+        config.mode === "fixed"
+          ? `MARGIN_TRADE_MODE=fixed, next-entry size ${config.margin} USDT every trade (compounding OFF)`
+          : `MARGIN_TRADE_MODE=percent_balance, next-entry size ${config.percent}% of paper equity ${config.equity} USDT (compounding ON)`;
+
       if (target.toLowerCase() === "all") {
         const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
         TelegramService.queueMsgPriority(
-          `Setting margin to ${value} USDT on all instances (${symbolsStr}).`,
+          `Updating trade margin on all instances (${symbolsStr}).\n${describeConfig}`,
           this.generalChatId
         );
         for (const inst of this.instances) {
@@ -1418,7 +1517,7 @@ class CombinationBot {
       }
       await applyToInstance(inst);
       TelegramService.queueMsgPriority(
-        `Margin updated for ${inst.symbol}: ${inst.margin} USDT.`,
+        `📐 Trade margin updated for ${inst.symbol}\n${inst.formatEquityStatus()}`,
         this.generalChatId
       );
     });

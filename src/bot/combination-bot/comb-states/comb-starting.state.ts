@@ -11,6 +11,7 @@ class CombStartingState {
   constructor(private bot: CombBotInstance) { }
 
   private async _ensureMarginAvailable() {
+    this.bot.syncTradeMarginFromEquity();
     const bal = await this.bot.combUtils.getExchFreeUsdtBalance();
     if (bal.lt(this.bot.margin)) throw new Error(`Exchange balance ${bal} < margin ${this.bot.margin}`);
   }
@@ -39,7 +40,7 @@ class CombStartingState {
         this.bot.queueMsg(`Updating leverage of ${this.bot.symbol} to X${this.bot.leverage}...`);
         await ExchangeService.setLeverage(this.bot.symbol, this.bot.leverage);
         await ExchangeService.setMarginMode(this.bot.symbol, "isolated");
-        this.bot.queueMsg("Leverage and margin mode updated successfully");
+        this.bot.queueMsg("Leverage and isolated (exchange) margin type updated successfully");
       })(),
       this._loadSymbolInfo(),
     ]);
@@ -71,7 +72,7 @@ class CombStartingState {
 Start time: ${toIso(this.bot.runStartTs.getTime())}
 Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
-Margin size: ${this.bot.margin} USDT
+${this.bot.formatEquityStatus()}
 Trigger buffer percentage: ${this.bot.triggerBufferPercentage}%
 Trail confirm bars: ${this.bot.trailConfirmBars}
 ${this.bot.formatMarginStopLossStatus()}
