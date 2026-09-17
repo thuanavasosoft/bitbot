@@ -158,6 +158,20 @@ export function computeIsConsolidationAfterBreakout(
   return hadImpulse && rocFlattened && volContracting && sequenceValid;
 }
 
+/** Same formula on the series ending at last / last-1 / last-2, in case Binance last klines are stale. */
+function computeIsConsolidationAfterBreakoutAllowingStaleTail(
+  check: CombConsolidationAfterBreakoutCheck,
+  params: CombSignalParams,
+  slicedCandles: ICandleInfo[],
+): boolean {
+  for (let drop = 0; drop <= 2; drop++) {
+    if (slicedCandles.length <= drop) break;
+    const window = drop === 0 ? slicedCandles : slicedCandles.slice(0, -drop);
+    if (computeIsConsolidationAfterBreakout(check, params, window)) return true;
+  }
+  return false;
+}
+
 export function isCombBadEntrySignal(
   signal: CombSignalResult | null | undefined,
   side: "long" | "short",
@@ -267,7 +281,7 @@ export function calculateBreakoutSignal(
     const resolvedEntryIdx = entryIdx >= 0 ? entryIdx : candles.length - 1;
     const warmupStart = Math.max(0, resolvedEntryIdx - atr_len + 1);
     const slicedCandles = candles.slice(warmupStart);
-    isConsolidationAfterBreakout = computeIsConsolidationAfterBreakout(
+    isConsolidationAfterBreakout = computeIsConsolidationAfterBreakoutAllowingStaleTail(
       consolidationCheck,
       params,
       slicedCandles,
