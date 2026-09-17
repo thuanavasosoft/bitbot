@@ -258,12 +258,20 @@ class CombWaitForResolveState {
 
       if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
         const { bufferedLevel, rawLevel } = this.bot.trailingStopTargets;
-        const lastCandle = this.bot.currCandles[this.bot.currCandles.length - 1];
-        const candleExtreme = lastCandle
-          ? position.side === "long"
-            ? new BigNumber(lastCandle.lowPrice)
-            : new BigNumber(lastCandle.highPrice)
-          : undefined;
+        const candles = this.bot.currCandles;
+        const lastCandle = candles[candles.length - 1];
+        const last2Candle = candles[candles.length - 2];
+        const candleExtremes = [lastCandle, last2Candle]
+          .filter((c): c is ICandleInfo => c != null)
+          .map((c) =>
+            position.side === "long" ? new BigNumber(c.lowPrice) : new BigNumber(c.highPrice)
+          );
+        const candleExtreme =
+          candleExtremes.length === 0
+            ? undefined
+            : position.side === "long"
+              ? BigNumber.min(...candleExtremes)
+              : BigNumber.max(...candleExtremes);
         const isBreached = position.side === "long" ? 
           priceBn.lte(bufferedLevel) || (candleExtreme != null && candleExtreme.lte(bufferedLevel)) :
           priceBn.gte(bufferedLevel) || (candleExtreme != null && candleExtreme.gte(bufferedLevel));
