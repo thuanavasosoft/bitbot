@@ -4,7 +4,7 @@ import TelegramService from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
-import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult } from "./comb-types";
+import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult, CombTradeMarginMode } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
 import CombUtils, { getLtpOrMarkPrice, quantizePriceByPrecision } from "./comb-utils";
@@ -102,6 +102,16 @@ class CombBotInstance {
   symbol: string;
   leverage: number;
   margin: number;
+  /** Paper starting equity. Undefined = fixed-margin mode (no equity compounding). */
+  startingBalance?: number;
+  /** Current paper equity. Only set when startingBalance is configured. */
+  equity?: number;
+  /** Trade margin as % of equity (0 exclusive–100]. Derived from MARGIN if env percent omitted. */
+  marginPercentOfBalance?: number;
+  /** Next-entry sizing: % of paper equity vs fixed USDT. */
+  tradeMarginMode: CombTradeMarginMode = "fixed";
+  /** Paper margin locked at the current cycle's entry. Cleared when the strategy cycle is finalized. */
+  currPositionTradeMargin?: number;
   triggerBufferPercentage: number;
   nSignal: number;
   optimizationWindowMinutes: number;
@@ -250,6 +260,21 @@ class CombBotInstance {
     this.symbol = config.SYMBOL;
     this.leverage = config.LEVERAGE;
     this.margin = config.MARGIN;
+    this.tradeMarginMode = config.MARGIN_TRADE_MODE;
+    const startingBalance = config.STARTING_BALANCE;
+    if (startingBalance != null && Number.isFinite(startingBalance) && startingBalance > 0) {
+      this.startingBalance = startingBalance;
+      this.equity = startingBalance;
+    }
+    if (this.tradeMarginMode === "percent_balance") {
+      const explicitPercent = config.MARGIN_PERCENT_OF_BALANCE;
+      if (explicitPercent != null && Number.isFinite(explicitPercent) && explicitPercent > 0) {
+        this.marginPercentOfBalance = Math.min(explicitPercent, 100);
+      } else if (this.equity != null && this.equity > 0 && this.margin > 0) {
+        this.marginPercentOfBalance = Math.min((this.margin / this.equity) * 100, 100);
+      }
+      this.syncTradeMarginFromEquity();
+    }
     this.triggerBufferPercentage = config.TRIGGER_BUFFER_PERCENTAGE;
     this.nSignal = config.N_SIGNAL_AND_ATR_LENGTH;
     this.trailingAtrLength = config.N_SIGNAL_AND_ATR_LENGTH;
@@ -454,9 +479,151 @@ class CombBotInstance {
     );
   }
 
-  applyMargin(newMargin: number): void {
-    this.margin = newMargin;
+  applyTradeMarginConfig(
+    args:
+      | { mode: "fixed"; margin: number }
+      | { mode: "percent_balance"; percent: number; equity: number },
+  ): void {
+    if (args.mode === "fixed") {
+      this.tradeMarginMode = "fixed";
+      this.margin = args.margin;
+      this.marginPercentOfBalance = undefined;
+    } else {
+      this.tradeMarginMode = "percent_balance";
+      this.equity = args.equity;
+      if (this.startingBalance == null || !(this.startingBalance > 0)) {
+        this.startingBalance = args.equity;
+      }
+      this.marginPercentOfBalance = Math.min(args.percent, 100);
+      this.syncTradeMarginFromEquity();
+    }
     this.updateCurrStopLossFromPosition();
+  }
+
+  isEquitySizingEnabled(): boolean {
+    return (
+      this.tradeMarginMode === "percent_balance" &&
+      this.startingBalance != null &&
+      this.startingBalance > 0 &&
+      this.equity != null &&
+      this.marginPercentOfBalance != null &&
+      this.marginPercentOfBalance > 0
+    );
+  }
+
+  syncTradeMarginFromEquity(): void {
+    if (!this.isEquitySizingEnabled()) return;
+    const equity = this.equity!;
+    const percent = this.marginPercentOfBalance!;
+    this.margin = equity > 0 ? new BigNumber(equity).times(percent).div(100).toNumber() : 0;
+  }
+
+  lockCurrPositionTradeMargin(): void {
+    if (!this.isEquitySizingEnabled()) return;
+    this.currPositionTradeMargin = this.margin;
+  }
+
+  formatEquityStatus(): string {
+    const nextEntry = formatEnUsNumber(this.margin, 4);
+    if (this.tradeMarginMode === "fixed" || !this.isEquitySizingEnabled()) {
+      return [
+        "MARGIN_TRADE_MODE: fixed",
+        `Next-entry size: ${nextEntry} USDT (fixed; same amount every trade)`,
+        "Paper compounding: OFF",
+      ].join("\n");
+    }
+    const equity = formatEnUsNumber(this.equity ?? 0, 4);
+    const started = formatEnUsNumber(this.startingBalance!, 2);
+    const percent = formatEnUsNumber(this.marginPercentOfBalance ?? 0, 4);
+    return [
+      "MARGIN_TRADE_MODE: percent_balance",
+      `Paper equity: ${equity} USDT (started at ${started})`,
+      `Next-entry size: ${nextEntry} USDT (${percent}% of paper equity)`,
+      "Paper compounding: ON — equity updates on natural/trailing close, or simulated natural after a virtual close. Virtual SL/TP does not change paper equity.",
+    ].join("\n");
+  }
+
+  /**
+   * Same 0.05% notional fee as dashboard trail-mult backtest (entry + exit).
+   * Used only for simulated natural PnL after a virtual close.
+   */
+  private static readonly DASHBOARD_FEE_RATE = 0.05 / 100;
+
+  private quantizeToTick(price: number, mode: "up" | "down"): number {
+    if (!Number.isFinite(price)) return price;
+    const tickSize = this.tickSize;
+    if (!Number.isFinite(tickSize) || tickSize <= 0) {
+      return quantizePriceByPrecision(price, this.pricePrecision, mode);
+    }
+    const q = new BigNumber(price).div(tickSize);
+    const rounded = mode === "up" ? q.integerValue(BigNumber.ROUND_CEIL) : q.integerValue(BigNumber.ROUND_FLOOR);
+    return rounded.times(tickSize).toNumber();
+  }
+
+  /**
+   * Natural PnL as if the position stayed open until trailing/liquidation.
+   * Timing matches dashboard (equity updates at strategy clear). Exit price is live LTP/mark.
+   */
+  async computeSimulatedNaturalNetPnl(args: { isLiquidation?: boolean }): Promise<number> {
+    const position = this.currActivePosition;
+    const avgPrice = position?.avgPrice;
+    const size = position ? Math.abs(position.size) : undefined;
+    const side = position?.side;
+    const tradeMargin = this.currPositionTradeMargin ?? this.margin;
+
+    if (args.isLiquidation) {
+      return -Math.abs(tradeMargin);
+    }
+
+    if (avgPrice == null || !(avgPrice > 0) || size == null || !(size > 0) || !side) {
+      console.warn(`[COMB] simulated natural PnL skipped: missing currActivePosition for ${this.symbol}`);
+      return 0;
+    }
+
+    let marketExit: number;
+    try {
+      marketExit = await getLtpOrMarkPrice(this.symbol);
+    } catch (error) {
+      console.warn(`[COMB] simulated natural PnL skipped: failed to fetch LTP/mark for ${this.symbol}`, error);
+      return 0;
+    }
+    if (!Number.isFinite(marketExit) || marketExit <= 0) {
+      console.warn(`[COMB] simulated natural PnL skipped: invalid LTP/mark for ${this.symbol}`);
+      return 0;
+    }
+
+    const exitFill = this.quantizeToTick(marketExit, side === "long" ? "down" : "up");
+    const posForPnl = {
+      avgPrice,
+      size,
+      side,
+    } as IPosition;
+    const gross = calc_UnrealizedPnl(posForPnl, exitFill);
+    const entryNotional = new BigNumber(size).times(avgPrice);
+    const exitNotional = new BigNumber(size).times(exitFill);
+    const fees = entryNotional.plus(exitNotional).times(CombBotInstance.DASHBOARD_FEE_RATE);
+    return new BigNumber(gross).minus(fees).toNumber();
+  }
+
+  applyEquityDelta(delta: number, source: "natural_close" | "simulated_natural"): void {
+    if (!this.isEquitySizingEnabled() || this.equity == null) return;
+    const previous = this.equity;
+    this.equity = new BigNumber(this.equity).plus(delta).toNumber();
+    this.syncTradeMarginFromEquity();
+    console.log(
+      `[COMB] equity updated symbol=${this.symbol} source=${source} delta=${delta.toFixed(4)} equity=${previous.toFixed(4)}→${this.equity.toFixed(4)} nextMargin=${this.margin.toFixed(4)}`
+    );
+    const reason =
+      source === "simulated_natural"
+        ? "simulated natural after virtual close (not the exchange virtual-close PnL)"
+        : "natural close";
+    this.queueMsg(
+      `📊 Paper equity updated (MARGIN_TRADE_MODE: percent_balance)\n` +
+      `Reason: ${reason}\n` +
+      `Delta: ${delta >= 0 ? "🟩" : "🟥"} ${delta.toFixed(4)} USDT\n` +
+      `Paper equity: ${previous.toFixed(4)} → ${this.equity.toFixed(4)} USDT\n` +
+      `Next-entry size: ${this.margin.toFixed(4)} USDT (${this.marginPercentOfBalance}% of paper equity)`
+    );
   }
 
   /**
@@ -806,7 +973,9 @@ class CombBotInstance {
         this.numberOfTrades++;
       }
 
-      if (!this.justManuallyClosedBy) {
+      const hadVirtualClose = !!this.justManuallyClosedBy;
+
+      if (!hadVirtualClose) {
         await this.combUtils.handlePnL(
           realizedPnl,
           _options?.isLiquidation ?? false,
@@ -842,6 +1011,18 @@ class CombBotInstance {
         });
       }
 
+      if (this.isEquitySizingEnabled()) {
+        if (hadVirtualClose) {
+          const simulatedNatural = await this.computeSimulatedNaturalNetPnl({
+            isLiquidation: _options?.isLiquidation,
+          });
+          this.applyEquityDelta(simulatedNatural, "simulated_natural");
+        } else {
+          this.applyEquityDelta(this.lastNetPnl ?? 0, "natural_close");
+        }
+      }
+      this.currPositionTradeMargin = undefined;
+
       this.currActivePosition = undefined;
       this.entryWsPrice = undefined;
       this.resolveWsPrice = undefined;
@@ -871,6 +1052,7 @@ class CombBotInstance {
   }): Promise<void> {
     if (this.currActivePosition) return;
 
+    this.syncTradeMarginFromEquity();
     const { requestedSide, price, trigger, activePositionsText, blockedReason } = args;
     const now = new Date();
     const entryAvgPrice = adverseSlippageEntryAvgPrice(requestedSide, price, this.pricePrecision);
@@ -906,6 +1088,7 @@ class CombBotInstance {
     };
 
     this.currActivePosition = virtualPosition;
+    this.lockCurrPositionTradeMargin();
     this.justManuallyClosedBy = "minority_prevention";
 
     this.isClosingPosition = false;
