@@ -71,6 +71,13 @@ function formatExitReasonDisplay(exitReason: string): string {
   return EXIT_REASON_DISPLAY.get(exitReason) ?? exitReason;
 }
 
+/** Long sells vs trigger; short buys vs trigger. Positive = worse fill. */
+function closeSlippagePriceDiff(side: TPositionSide, closedPrice: number, triggerPrice: number): number {
+  return side === "short"
+    ? new BigNumber(closedPrice).minus(triggerPrice).toNumber()
+    : new BigNumber(triggerPrice).minus(closedPrice).toNumber();
+}
+
 /** Maps virtual-close exit reason to `justManuallyClosedBy` when state should stay preserved until trailing/resolve. */
 function justManuallyClosedByFromVirtualExitReason(
   exitReason: CombClosedExitReason
@@ -882,13 +889,50 @@ class CombBotInstance {
     this.onGeneralInfoMessage = undefined;
   }
 
+  /**
+   * Price the close was intended to hit. Trailing uses the buffered trail;
+   * margin SL / hard TP use those trigger prices; other natural closes fall back to LTP.
+   */
+  getCloseSlippageTriggerPrice(exitReason: CombClosedExitReason, fallbackPrice?: number): number | null {
+    if (exitReason === "liquidation_exit") return null;
+    let level: number | undefined;
+    if (exitReason === "atr_trailing") level = this.trailingStopTargets?.bufferedLevel;
+    else if (exitReason === "margin_stop_loss") level = this.currStopLossPrice;
+    else if (exitReason === "hard_take_profit") level = this.currTakeProfitPrice;
+    const candidate = level ?? fallbackPrice;
+    return candidate != null && Number.isFinite(candidate) ? candidate : null;
+  }
+
+  recordCloseSlippage(
+    side: TPositionSide,
+    closedPrice: number,
+    triggerPrice: number | null,
+  ): { icon: string; slippage: number } {
+    if (triggerPrice == null || !Number.isFinite(triggerPrice) || !Number.isFinite(closedPrice)) {
+      this.queueMsg("⚠️ Warning: Cannot calculate slippage - close trigger price not available");
+      return { icon: "🟩", slippage: 0 };
+    }
+    const slippage = closeSlippagePriceDiff(side, closedPrice, triggerPrice);
+    const icon = slippage <= 0 ? "🟩" : "🟥";
+    if (icon === "🟥") {
+      this.slippageAccumulation += Math.abs(slippage);
+    } else {
+      this.slippageAccumulation -= Math.abs(slippage);
+    }
+    return { icon, slippage };
+  }
+
   async finalizeClosedPosition(
     closedPosition: IPosition,
     _options?: {
       activePosition?: IPosition;
       triggerTimestamp?: number;
       fillTimestamp?: number;
+      /** LTP (or other fallback) at close-decision time; level-based exits ignore this. */
+      triggerPrice?: number;
       isLiquidation?: boolean;
+      /** Override; default is track unless liquidation. */
+      shouldTrackSlippage?: boolean;
       exitReason?: CombClosedExitReason;
       /** When true, does not emit a state transition event. Caller must handle state transition explicitly. */
       suppressStateChange?: boolean;
@@ -935,41 +979,19 @@ class CombBotInstance {
       const resolvedAtMs = Math.max(fillTimestamp, Date.now());
       this.nextEntryAllowedAtMs = (Math.floor(resolvedAtMs / 60_000) + 1) * 60_000;
       const triggerTimestamp = _options?.triggerTimestamp ?? fillTimestamp;
-      const shouldTrackSlippage = !_options?.isLiquidation;
+      const shouldTrackSlippage = _options?.shouldTrackSlippage ?? !_options?.isLiquidation;
       const realizedPnl = typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : (closedPosition as any).realizedPnl ?? 0;
 
       const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
-
-      let srLevel: number | null = null;
-      if (positionSide === "long") {
-        srLevel = this.currentSupport;
-      } else if (positionSide === "short") {
-        srLevel = this.currentResistance;
-      }
-
-      let slippage = 0;
       const timeDiffMs = fillTimestamp - triggerTimestamp;
 
+      let slippage = 0;
+      let icon = "🟩";
       if (!this.justManuallyClosedBy && shouldTrackSlippage) {
-        if (srLevel === null) {
-          this.queueMsg(
-            `⚠️ Warning: Cannot calculate slippage - ${positionSide === "long" ? "support" : "resistance"} level not available`
-          );
-        } else {
-          slippage =
-            positionSide === "short"
-              ? new BigNumber(closedPrice).minus(srLevel).toNumber()
-              : new BigNumber(srLevel).minus(closedPrice).toNumber();
-        }
-      }
-
-      const icon = slippage <= 0 ? "🟩" : "🟥";
-      if (!this.justManuallyClosedBy && shouldTrackSlippage) {
-        if (icon === "🟥") {
-          this.slippageAccumulation += Math.abs(slippage);
-        } else {
-          this.slippageAccumulation -= Math.abs(slippage);
-        }
+        const triggerPrice = this.getCloseSlippageTriggerPrice(exitReason, _options?.triggerPrice);
+        const recorded = this.recordCloseSlippage(positionSide, closedPrice, triggerPrice);
+        slippage = recorded.slippage;
+        icon = recorded.icon;
         this.numberOfTrades++;
       }
 
@@ -1149,7 +1171,7 @@ class CombBotInstance {
     this.combinationBot.queueGeneralMessage(`[COMB] ${this.symbol} ${message}`);
   }
 
-  async virtualClosePosition(exitReason: CombClosedExitReason): Promise<void> {
+  async virtualClosePosition(exitReason: CombClosedExitReason, fallbackTriggerPrice?: number): Promise<void> {
     if (this.justManuallyClosedBy) {
       this.queueMsg(`Cannot virtually close position for ${this.symbol}: a position was already closed via ${this.justManuallyClosedBy}. Not doing anything..`);
       return;
@@ -1165,17 +1187,36 @@ class CombBotInstance {
       return;
     }
 
+    const trackSlippage = exitReason === "margin_stop_loss" || exitReason === "hard_take_profit";
+    const triggerTs = Date.now();
+    const triggerPrice = trackSlippage
+      ? this.getCloseSlippageTriggerPrice(exitReason, fallbackTriggerPrice)
+      : null;
+
     this.isClosingPosition = true;
     try {
       this.queueMsgPriority(`Closing active position for ${this.symbol}...`);
       const closedPosition = await this.orderExecutor.triggerCloseSignal(activePosition);
       this.justManuallyClosedBy = justManuallyClosedByFromVirtualExitReason(exitReason);
+
+      let icon: string | undefined;
+      let slippage: number | undefined;
+      let timeDiffMs: number | undefined;
+      if (trackSlippage) {
+        const closedPrice = typeof closedPosition.closePrice === "number" ? closedPosition.closePrice : closedPosition.avgPrice;
+        const fillTimestamp = this.resolveWsPrice?.time?.getTime() ?? closedPosition.updateTime ?? Date.now();
+        const recorded = this.recordCloseSlippage(closedPosition.side, closedPrice, triggerPrice);
+        icon = recorded.icon;
+        slippage = recorded.slippage;
+        timeDiffMs = fillTimestamp - triggerTs;
+      }
+
       const netPnl = await this.combUtils.handlePnL(
         typeof closedPosition.realizedPnl === "number" ? closedPosition.realizedPnl : 0,
         false,
-        undefined,
-        undefined,
-        undefined,
+        icon,
+        slippage,
+        timeDiffMs,
         closedPosition.id,
       );
 

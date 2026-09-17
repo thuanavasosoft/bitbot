@@ -1,4 +1,5 @@
 import type CombBotInstance from "./comb-bot-instance";
+import { getLtpOrMarkPrice } from "./comb-utils";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -76,6 +77,13 @@ class CombOptimizationLoop {
           `⏱️ [${toIso(triggerTs)}] Optimization update due - closing open position before re-optimizing.\n` +
           `Position ID: ${activePosition.id} (${activePosition.side})`
         );
+        let triggerPrice: number | undefined;
+        try {
+          const ltp = await getLtpOrMarkPrice(this.bot.symbol);
+          if (Number.isFinite(ltp) && ltp > 0) triggerPrice = ltp;
+        } catch {
+          triggerPrice = undefined;
+        }
         try {
           const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
           // Guard: another close path may have finalized the position while we were awaiting.
@@ -88,6 +96,8 @@ class CombOptimizationLoop {
               activePosition,
               triggerTimestamp: triggerTs,
               fillTimestamp,
+              triggerPrice,
+              exitReason: "signal_change",
             });
           }
         } catch (closeErr) {

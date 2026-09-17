@@ -761,6 +761,7 @@ class CombWaitForResolveState {
           triggerTimestamp: update.updateTime ?? Date.now(),
           fillTimestamp: update.updateTime ?? Date.now(),
           isLiquidation,
+          shouldTrackSlippage: false,
           exitReason: isLiquidation ? "liquidation_exit" : "signal_change",
           suppressStateChange: isLiquidation ? false : true,
         });
@@ -813,6 +814,13 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
     this.bot.isClosingPosition = true;
     const triggerTs = Date.now();
     const activePosition = this.bot.currActivePosition;
+    const exitReason: CombClosedExitReason =
+      reason === "atr_trailing"
+        ? "atr_trailing"
+        : reason === "liquidation_exit"
+          ? "liquidation_exit"
+          : "signal_change";
+    const triggerPrice = this.lastPrice > 0 ? this.lastPrice : undefined;
     try {
       const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(activePosition);
       const fillTimestamp = this.bot.resolveWsPrice?.time ? this.bot.resolveWsPrice.time.getTime() : Date.now();
@@ -820,11 +828,9 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
         activePosition,
         triggerTimestamp: triggerTs,
         fillTimestamp,
+        triggerPrice,
         isLiquidation: reason === "liquidation_exit",
-        exitReason:
-          reason === "atr_trailing"
-            ? "atr_trailing"
-            : "signal_change",
+        exitReason,
       });
     } finally {
       this.bot.isClosingPosition = false;
@@ -834,7 +840,7 @@ Realized PnL: 🟥🟥🟥 -${(this.bot.margin + (this.bot.lastFeeEstimate || 0)
   /** Virtual close (TP_PB, margin SL, hard TP, bad-entry consolidation): record PnL, preserve state, watchers stay running. */
   private async _handleVirtualClose(exitReason: (typeof VIRTUAL_CLOSE_EXIT_REASONS)[number]): Promise<void> {
     try {
-      await this.bot.virtualClosePosition(exitReason);
+      await this.bot.virtualClosePosition(exitReason, this.lastPrice > 0 ? this.lastPrice : undefined);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       console.error(`[COMB] Virtual close failed (${exitReason}):`, error);

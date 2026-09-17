@@ -155,12 +155,14 @@ class CombWaitForSignalState {
               `Instance was stopped while opening position for ${this.bot.symbol}. Closing the newly opened position...`
             );
             try {
+              const closeTriggerTs = Date.now();
               const closedPosition = await this.bot.orderExecutor.triggerCloseSignal(position);
               const fillTimestamp = this.bot.resolveWsPrice?.time?.getTime() ?? closedPosition.updateTime ?? Date.now();
               await this.bot.finalizeClosedPosition(closedPosition, {
                 activePosition: position,
-                triggerTimestamp: triggerTs,
+                triggerTimestamp: closeTriggerTs,
                 fillTimestamp,
+                triggerPrice: price,
                 isLiquidation: false,
                 exitReason: "end",
                 suppressStateChange: true,
