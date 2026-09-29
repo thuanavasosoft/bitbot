@@ -69,7 +69,7 @@ class TelegramService {
 
   /**
    * Queue a long string as multiple priority messages (each under Telegram's limit).
-   * Chunks are queued at the front in order so the first part is sent first.
+   * Chunks are inserted at the front together so the first part is sent first.
    */
   static queueMsgLongPriority(message: string, chatId?: string, maxLen: number = this.TG_MAX_MESSAGE_LENGTH): void {
     const resolvedChatId = chatId || this.chatId || process.env.TELEGRAM_CHAT_ID!;
@@ -97,9 +97,17 @@ class TelegramService {
       }
     }
     if (chunk) chunks.push(chunk);
-    for (let i = chunks.length - 1; i >= 0; i--) {
-      this.enqueue(resolvedChatId, { message: chunks[i] }, true);
+    if (chunks.length === 0) return;
+
+    let q = this.queuesByChat.get(resolvedChatId);
+    if (!q) {
+      q = [];
+      this.queuesByChat.set(resolvedChatId, q);
     }
+    // One insert, then start the sender once. Per-chunk unshift starts the
+    // sender on the last chunk before the earlier chunks are queued.
+    q.unshift(...chunks.map((part) => ({ message: part })));
+    void this.processChatQueue(resolvedChatId);
   }
 
   private static parse429RetryAfterMs(error: unknown): number | null {
