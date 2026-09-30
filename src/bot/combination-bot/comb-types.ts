@@ -54,11 +54,14 @@ export type CombPnlHistoryPoint = {
   exitTimestampMs: number;
   exitFillPrice: number;
   tradePnL: number;
-  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit";
+  exitReason: "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit" | "trail_cut";
 };
 
 /** Indicates position was closed but state should be preserved until trailing stop triggers. */
-export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit";
+export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit" | "trail_cut";
+
+export type TrailCutMode = "multiplier" | "extreme";
+export type TrailCutCloseMode = "virtual" | "natural";
 
 export type CombRunBacktestArgs = {
   symbol: string;
@@ -147,6 +150,21 @@ export interface CombInstanceConfig {
   BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT?: number;
   /** Short bad-entry if rocLow is below -abs(this) fraction. Undefined = disabled. */
   BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT?: number;
+  /**
+   * Trail cut. Undefined = disabled.
+   * Needs a cut percent in (0, 100) and at least one filter.
+   */
+  TRAIL_CUT_PERCENT?: number;
+  TRAIL_CUT_MODE?: TrailCutMode;
+  TRAIL_CUT_CLOSE_MODE?: TrailCutCloseMode;
+  /** Hours price must stall on the breakout side. Undefined = skip this filter. */
+  TRAIL_CUT_STALL_HOURS?: number;
+  /** Open PnL as % of margin. Undefined = skip this filter. */
+  TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT?: number;
+  /** PnL at the natural trail stop, as % of margin. Undefined = skip this filter. */
+  TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT?: number;
+  /** ROC fraction. Long: high vs close K bars back. Short: low vs that close. Undefined = skip. */
+  TRAIL_CUT_ROC_THRESHOLD?: number;
 }
 
 /** Order fill update shape used by comb-order-executor. */
@@ -155,7 +173,7 @@ export interface IOrderFillUpdate {
   executionPrice: number;
 }
 
-export type CombClosedExitReason = "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit";
+export type CombClosedExitReason = "atr_trailing" | "signal_change" | "end" | "liquidation_exit" | "close_command" | "tp_pullback" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit" | "trail_cut";
 
 /** Event emitted by an instance so the general bot can notify the general channel. */
 export type CombInstanceEvent =

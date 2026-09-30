@@ -27,6 +27,8 @@ function justManuallyClosedViaLabel(by: JustManuallyClosedBy): string {
       return "bad entry (consolidation)";
     case "hard_take_profit":
       return "hard take profit";
+    case "trail_cut":
+      return "trail cut";
   }
 }
 
@@ -144,7 +146,7 @@ class CombCandleWatcher {
         trailingTargets.side === this.bot.currActivePosition.side
       ) {
         trailingStopRaw = trailingTargets.rawLevel;
-        trailingStopBuffered = trailingTargets.bufferedLevel;
+        trailingStopBuffered = Number(trailingTargets.bufferedLevel.toFixed(this.bot.pricePrecision));
       }
 
       let tpPbLevel: number | null = null;
@@ -217,8 +219,11 @@ class CombCandleWatcher {
       const effectiveMult = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
       const trailingMsg =
         trailingStopRaw !== null || trailingStopBuffered !== null
-          ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"}\nTrail Stop (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}`
+          ? `\nTrail Stop (raw): ${trailingStopRaw !== null ? trailingStopRaw : "N/A"} | (buffered): ${trailingStopBuffered !== null ? trailingStopBuffered : "N/A"}${this.bot.formatExpectedPnl(trailingStopBuffered)}`
           : "";
+      const trailCutMsg = this.bot.isTrailCutEnabled()
+        ? `\n${this.bot.formatTrailCutStatus()}`
+        : "";
       const tpPbMsg =
         tpPbLevel !== null ? `\nTP_PB fixed (${this.bot.tpPbPercent}% of gap): ${tpPbLevel}` : "";
       const marginSlMsg = this.bot.isMarginStopLossEnabled()
@@ -228,8 +233,8 @@ class CombCandleWatcher {
         ? `\n${this.bot.formatHardTakeProfitStatus()}`
         : "";
       const paramsMsg =
-        `\nTrailing ATR Length: ${this.bot.trailingAtrLength} (fixed)` +
-        `\nTrailing Multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
+        `\nTrailing ATR Length: ${this.bot.trailingAtrLength}` +
+        `\nCurrent trailing multiplier: ${effectiveMult}${this.bot.temporaryTrailMultiplier != null ? " (temp)" : ""}`;
       const optimizationAgeMsg = formatCombOptimizationAgeMessage(this.bot, now.getTime());
       const closedIndicator = formatCombJustManuallyClosedIndicator(this.bot.justManuallyClosedBy, this.bot.lastNetPnl);
       const rocHighVal =
@@ -239,7 +244,7 @@ class CombCandleWatcher {
       const stdDevVal =
         signalResult.stdDev != null ? signalResult.stdDev.toFixed(4) : "N/A";
       const consolidationMsg = position
-        ? `\nConsolidation after breakout: ${this.bot.isConsolidationAfterBreakout ? "yes" : "no"}`
+        ? `\nIs consolidation after breakout: ${this.bot.isConsolidationAfterBreakout}`
         : "";
       const badEntryMsg = position
         ? `\nBad entry flagged: ${this.bot.isBadEntrySignal ? "yes" : "no"}`
@@ -254,9 +259,9 @@ class CombCandleWatcher {
         `ℹ️ Curr LTP Price: ${currLtpPrice.toLocaleString(undefined, { maximumFractionDigits: this.bot.pricePrecision })} ${!!this.bot.currActivePosition ? `(${pnlIndicator} ${currPnl.toFixed(2)} USDT)` : ""}\n` +
         `Now (UTC): ${moment(now).utc().format("YYYY-MM-DD HH:mm")}\n` +
         `ROC High: ${rocHighVal} | ROC Low: ${rocLowVal}\n` +
-        `StdDev: ${stdDevVal}${consolidationMsg}${badEntryMsg}\n` +
-        `Resistance: ${quantizedResistance !== null ? quantizedResistance.toLocaleString() : "N/A"}\nLong Trigger: ${this.bot.longTrigger !== null ? this.bot.longTrigger.toLocaleString() : "N/A"}\n` +
-        `Support: ${quantizedSupport !== null ? quantizedSupport.toLocaleString() : "N/A"}\nShort Trigger: ${this.bot.shortTrigger !== null ? this.bot.shortTrigger.toLocaleString() : "N/A"}${liqMsg}${trailingMsg}${tpPbMsg}${marginSlMsg}${hardTpMsg}${paramsMsg}${optimizationAgeMsg}\n${closedIndicator}`
+        `StdDev: ${stdDevVal}${consolidationMsg}\n` +
+        `Resistance: ${quantizedResistance !== null ? quantizedResistance.toLocaleString() : "N/A"} (Trigger): ${this.bot.longTrigger !== null ? this.bot.longTrigger.toLocaleString() : "N/A"}\n` +
+        `Support: ${quantizedSupport !== null ? quantizedSupport.toLocaleString() : "N/A"} (Trigger): ${this.bot.shortTrigger !== null ? this.bot.shortTrigger.toLocaleString() : "N/A"}\n\n--Closing Params--${badEntryMsg}${liqMsg}${trailingMsg}${trailCutMsg}${tpPbMsg}${marginSlMsg}${hardTpMsg}\n\n--Trail Settings--${paramsMsg}${optimizationAgeMsg}\n${closedIndicator}`
       );
       this.bot.lastSRUpdateTime = Date.now();
     } catch (err) {

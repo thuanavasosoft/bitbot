@@ -78,6 +78,7 @@ Trail confirm bars: ${this.bot.trailConfirmBars}
 ${this.bot.formatMarginStopLossStatus()}
 ${this.bot.formatHardTakeProfitStatus()}
 ${this.bot.formatBadEntryStatus()}
+${this.bot.formatTrailCutStatus()}
 
 Optimization window: ${this.bot.optimizationWindowMinutes} minutes
 Update interval: ${this.bot.updateIntervalMinutes} minutes

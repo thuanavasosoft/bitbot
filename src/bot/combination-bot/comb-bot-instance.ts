@@ -4,7 +4,7 @@ import TelegramService from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
-import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult, CombTradeMarginMode } from "./comb-types";
+import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult, CombTradeMarginMode, TrailCutCloseMode, TrailCutMode } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
 import CombUtils, { getLtpOrMarkPrice, quantizePriceByPrecision } from "./comb-utils";
@@ -65,6 +65,7 @@ const EXIT_REASON_DISPLAY = new Map<string, string>([
   ["margin_stop_loss", "margin stop loss"],
   ["bad_signal", "bad entry (consolidation)"],
   ["hard_take_profit", "hard take profit"],
+  ["trail_cut", "trail cut"],
 ]);
 
 function formatExitReasonDisplay(exitReason: string): string {
@@ -95,6 +96,8 @@ function justManuallyClosedByFromVirtualExitReason(
       return "bad_signal";
     case "hard_take_profit":
       return "hard_take_profit";
+    case "trail_cut":
+      return "trail_cut";
     case "atr_trailing":
     case "signal_change":
     case "end":
@@ -184,6 +187,26 @@ class CombBotInstance {
   isConsolidationAfterBreakout: boolean = false;
   badEntryLongRocHighThreshold?: number;
   badEntryShortRocLowThreshold?: number;
+  /** Trail cut percent in (0, 100). Undefined = off. */
+  trailCutPercent?: number;
+  trailCutMode: TrailCutMode = "extreme";
+  trailCutCloseMode: TrailCutCloseMode = "natural";
+  trailCutStallHours?: number;
+  trailCutMinUnrealizedPnlPercent?: number;
+  trailCutMinBlueLinePnlPercent?: number;
+  /** ROC as a fraction, same unit as the backtest request. */
+  trailCutRocThreshold?: number;
+  /** Broken support/resistance at entry. Stall only counts while price stays beyond it. */
+  trailCutBreakoutLevel?: number;
+  trailCutTightened = false;
+  trailCutStallLevel?: number;
+  trailCutStallSinceMs?: number;
+  /** Best price since entry. Long: max high. Short: min low. */
+  trailCutBestPrice?: number;
+  trailCutStop?: { side: TPositionSide; rawLevel: number; bufferedLevel: number };
+  trailCutBreachCount = 0;
+  /** Natural close was caused by the cut trail, so slippage uses that level. */
+  trailCutTriggeredExit = false;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -296,6 +319,13 @@ class CombBotInstance {
     this.hardTakeProfitPercent = config.HARD_TAKE_PROFIT_PCT;
     this.badEntryLongRocHighThreshold = config.BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT;
     this.badEntryShortRocLowThreshold = config.BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT;
+    this.trailCutPercent = config.TRAIL_CUT_PERCENT;
+    this.trailCutMode = config.TRAIL_CUT_MODE ?? "extreme";
+    this.trailCutCloseMode = config.TRAIL_CUT_CLOSE_MODE ?? "natural";
+    this.trailCutStallHours = config.TRAIL_CUT_STALL_HOURS;
+    this.trailCutMinUnrealizedPnlPercent = config.TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT;
+    this.trailCutMinBlueLinePnlPercent = config.TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT;
+    this.trailCutRocThreshold = config.TRAIL_CUT_ROC_THRESHOLD;
 
     this.orderWatcher = new CombOrderWatcher();
 
@@ -330,6 +360,33 @@ class CombBotInstance {
     this.trailingCloseWindow = [];
     this.trailingStopTargets = undefined;
     this.trailingStopBreachCount = 0;
+    this.trailCutBreakoutLevel = undefined;
+    this.trailCutTightened = false;
+    this.trailCutStallLevel = undefined;
+    this.trailCutStallSinceMs = undefined;
+    this.trailCutBestPrice = undefined;
+    this.trailCutStop = undefined;
+    this.trailCutBreachCount = 0;
+    this.trailCutTriggeredExit = false;
+  }
+
+  isTrailCutEnabled(): boolean {
+    const cut = this.trailCutPercent;
+    if (cut == null || !(cut > 0) || !(cut < 100)) return false;
+    return (
+      (this.trailCutStallHours != null && this.trailCutStallHours > 0) ||
+      this.trailCutMinUnrealizedPnlPercent != null ||
+      this.trailCutMinBlueLinePnlPercent != null ||
+      this.trailCutRocThreshold != null
+    );
+  }
+
+  /** Call after resetTrailingStopTracking on entry. */
+  beginTrailCut(breakoutLevel: number | null): void {
+    if (!this.isTrailCutEnabled()) return;
+    if (breakoutLevel != null && Number.isFinite(breakoutLevel) && breakoutLevel > 0) {
+      this.trailCutBreakoutLevel = breakoutLevel;
+    }
   }
 
   isMarginStopLossEnabled(): boolean {
@@ -461,6 +518,70 @@ class CombBotInstance {
     return `Hard take profit: ${formatEnUsNumber(this.hardTakeProfitPercent!, 4)}% of margin${pricePart}`;
   }
 
+  formatTrailCutStatus(): string {
+    if (!this.isTrailCutEnabled()) return "Trail cut: off";
+
+    const mode = this.trailCutMode === "extreme" ? "lock" : "cut";
+    const filters: string[] = [];
+    if (this.trailCutStallHours != null && this.trailCutStallHours > 0) filters.push(`stall ${this.trailCutStallHours}h`);
+    if (this.trailCutMinBlueLinePnlPercent != null) filters.push(`blue ≥${this.trailCutMinBlueLinePnlPercent}%`);
+    if (this.trailCutRocThreshold != null) filters.push(`ROC ≥${+(this.trailCutRocThreshold * 100).toFixed(4)}%`);
+
+    const lines = [
+      `Trail ${mode}: ${this.trailCutPercent}% → ${this.trailCutCloseMode} | ${filters.length ? ` | ${filters.join(", ")}` : ""}`,
+    ];
+    const unrealizedLine = this.formatTrailCutUnrealizedLine();
+    if (unrealizedLine) lines.push(unrealizedLine);
+
+    if (this.currActivePosition && this.trailCutTightened) {
+      const stop = this.trailCutStop;
+      const price = stop != null ? formatEnUsNumber(stop.bufferedLevel, this.pricePrecision) : "pending";
+      const expected = this.formatExpectedPnl(stop?.bufferedLevel);
+      lines.push(`✂️ TRAIL CUT ON — stop ${price}${expected}`);
+      return lines.join("\n");
+    }
+
+    if (this.currActivePosition) {
+      const stall = this.formatTrailCutStallProgress();
+      stall && lines.push(`Waiting: ${stall}`);
+    }
+    return lines.join("\n");
+  }
+
+  formatExpectedPnl(price: number | null | undefined): string {
+    const position = this.currActivePosition;
+    if (price == null || !position || !Number.isFinite(price)) return "";
+    const pnl = calc_UnrealizedPnl(position, price);
+    const icon = pnl >= 0 ? "🟩" : "🟥";
+    return ` (expected pnl: ${icon} ${pnl.toFixed(2)} USDT)`;
+  }
+
+  /** Price where open PnL reaches the min unrealized filter. Needs an open position. */
+  private formatTrailCutUnrealizedLine(): string | null {
+    const pct = this.trailCutMinUnrealizedPnlPercent;
+    if (pct == null) return null;
+
+    const margin = this.currPositionTradeMargin ?? this.margin;
+    const usdt = Number.isFinite(margin) ? (margin * pct) / 100 : null;
+    const usdtPart = usdt != null ? ` (+${formatEnUsNumber(usdt, 2)} USDT)` : "";
+    const pos = this.currActivePosition;
+    if (!pos || !(pos.avgPrice > 0) || !(this.leverage > 0)) {
+      return `Min uPnL: ≥${pct}%${usdtPart}`;
+    }
+
+    const move = pct / 100 / this.leverage;
+    const raw = pos.side === "long" ? pos.avgPrice * (1 + move) : pos.avgPrice * (1 - move);
+    const price = quantizePriceByPrecision(raw, this.pricePrecision, pos.side === "long" ? "up" : "down");
+    return `Min uPnL: ≥${pct}%${usdtPart} → ${formatEnUsNumber(price, this.pricePrecision)}`;
+  }
+
+  private formatTrailCutStallProgress(): string | null {
+    const needed = this.trailCutStallHours;
+    if (needed == null || !(needed > 0) || this.trailCutStallSinceMs == null) return null;
+    const elapsed = Math.max(0, (Date.now() - this.trailCutStallSinceMs) / 3_600_000);
+    return `stall ${elapsed.toFixed(1)}/${needed}h`;
+  }
+
   formatBadEntryStatus(): string {
     if (!this.isBadEntryCloseEnabled()) return "Bad-entry close: disabled";
     const longPct =
@@ -534,7 +655,6 @@ class CombBotInstance {
     const nextEntry = formatEnUsNumber(this.margin, 4);
     if (this.tradeMarginMode === "fixed" || !this.isEquitySizingEnabled()) {
       return [
-        "MARGIN_TRADE_MODE: fixed",
         `Next-entry size: ${nextEntry} USDT (fixed; same amount every trade)`,
         "Paper compounding: OFF",
       ].join("\n");
@@ -543,10 +663,8 @@ class CombBotInstance {
     const started = formatEnUsNumber(this.startingBalance!, 2);
     const percent = formatEnUsNumber(this.marginPercentOfBalance ?? 0, 4);
     return [
-      "MARGIN_TRADE_MODE: percent_balance",
       `Paper equity: ${equity} USDT (started at ${started})`,
       `Next-entry size: ${nextEntry} USDT (${percent}% of paper equity)`,
-      "Paper compounding: ON — equity updates on natural/trailing close, or simulated natural after a virtual close. Virtual SL/TP does not change paper equity.",
     ].join("\n");
   }
 
@@ -673,6 +791,52 @@ class CombBotInstance {
     }
     this.hardTakeProfitPercent = percent;
     this.updateCurrTakeProfitFromPosition();
+  }
+
+  /**
+   * Replace trail-cut settings. A missing filter is disabled.
+   * Clears the current cut progress so the new filters start clean. The entry breakout level stays.
+   */
+  applyTrailCutConfig(update: {
+    mode: TrailCutMode;
+    closeMode: TrailCutCloseMode;
+    percent: number;
+    stallHours?: number;
+    minUnrealizedPnlPercent?: number;
+    minBlueLinePnlPercent?: number;
+    /** ROC fraction, same unit as the env config. */
+    rocThreshold?: number;
+  }): void {
+    this.trailCutMode = update.mode;
+    this.trailCutCloseMode = update.closeMode;
+    this.trailCutPercent = update.percent > 0 && update.percent < 100 ? update.percent : undefined;
+    this.trailCutStallHours = update.stallHours;
+    this.trailCutMinUnrealizedPnlPercent = update.minUnrealizedPnlPercent;
+    this.trailCutMinBlueLinePnlPercent = update.minBlueLinePnlPercent;
+    this.trailCutRocThreshold = update.rocThreshold;
+    this.trailCutTightened = false;
+    this.trailCutStallLevel = undefined;
+    this.trailCutStallSinceMs = undefined;
+    this.trailCutBestPrice = undefined;
+    this.trailCutStop = undefined;
+    this.trailCutBreachCount = 0;
+    this.trailCutTriggeredExit = false;
+  }
+
+  /** Turn trail cut off and drop any cut stop already armed. */
+  disableTrailCut(): void {
+    this.trailCutPercent = undefined;
+    this.trailCutStallHours = undefined;
+    this.trailCutMinUnrealizedPnlPercent = undefined;
+    this.trailCutMinBlueLinePnlPercent = undefined;
+    this.trailCutRocThreshold = undefined;
+    this.trailCutTightened = false;
+    this.trailCutStallLevel = undefined;
+    this.trailCutStallSinceMs = undefined;
+    this.trailCutBestPrice = undefined;
+    this.trailCutStop = undefined;
+    this.trailCutBreachCount = 0;
+    this.trailCutTriggeredExit = false;
   }
 
   /**
@@ -896,7 +1060,12 @@ class CombBotInstance {
   getCloseSlippageTriggerPrice(exitReason: CombClosedExitReason, fallbackPrice?: number): number | null {
     if (exitReason === "liquidation_exit") return null;
     let level: number | undefined;
-    if (exitReason === "atr_trailing") level = this.trailingStopTargets?.bufferedLevel;
+    if (exitReason === "atr_trailing") {
+      level = this.trailCutTriggeredExit
+        ? this.trailCutStop?.bufferedLevel
+        : this.trailingStopTargets?.bufferedLevel;
+    }
+    if (exitReason === "trail_cut") level = this.trailCutStop?.bufferedLevel;
     else if (exitReason === "margin_stop_loss") level = this.currStopLossPrice;
     else if (exitReason === "hard_take_profit") level = this.currTakeProfitPrice;
     const candidate = level ?? fallbackPrice;
@@ -1118,6 +1287,7 @@ class CombBotInstance {
     this.isPnlRecorded = false;
     this.nextEntryAllowedAtMs = undefined;
     this.resetTrailingStopTracking();
+    this.beginTrailCut(trigger);
     this.resetBadEntryTracking();
     this.tpPbPercent = 0;
     this.tpPbFixedPrice = undefined;
@@ -1187,7 +1357,7 @@ class CombBotInstance {
       return;
     }
 
-    const trackSlippage = exitReason === "margin_stop_loss" || exitReason === "hard_take_profit";
+    const trackSlippage = exitReason === "margin_stop_loss" || exitReason === "hard_take_profit" || exitReason === "trail_cut";
     const triggerTs = Date.now();
     const triggerPrice = trackSlippage
       ? this.getCloseSlippageTriggerPrice(exitReason, fallbackTriggerPrice)

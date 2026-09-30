@@ -65,6 +65,7 @@ ${this.bot.formatEquityStatus()}
 ${this.bot.formatMarginStopLossStatus()}
 ${this.bot.formatHardTakeProfitStatus()}
 ${this.bot.formatBadEntryStatus()}
+${this.bot.formatTrailCutStatus()}
 Buffer: ${this.bot.triggerBufferPercentage}%
 Trail confirm bars: ${this.bot.trailConfirmBars}
 

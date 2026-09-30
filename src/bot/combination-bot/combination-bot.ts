@@ -9,7 +9,7 @@ import { AsyncMutex } from "@/utils/async-mutex.util";
 import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
 import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
-import type { CombInstanceConfig, CombState, CombInstanceEvent, CombTradeMarginMode, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader } from "./comb-types";
+import type { CombInstanceConfig, CombState, CombInstanceEvent, CombTradeMarginMode, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader, TrailCutCloseMode, TrailCutMode } from "./comb-types";
 import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
 import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
 import { formatCombJustManuallyClosedIndicator } from "./comb-candle-watcher";
@@ -48,6 +48,70 @@ function optionalPercentThresholdToFraction(raw: number | undefined): number | u
   return raw / 100;
 }
 
+function optionalPositiveNumber(raw: number | undefined): number | undefined {
+  if (raw === undefined || !Number.isFinite(raw) || raw <= 0) return undefined;
+  return raw;
+}
+
+/** -1 disables the filter. `null` is disabled, `"invalid"` is rejected. */
+function parseTrailCutTrigger(raw: string, allowZero: boolean): number | null | "invalid" {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return "invalid";
+  if (n === -1) return null;
+  if (allowZero) return n >= 0 ? n : "invalid";
+  return n > 0 ? n : "invalid";
+}
+
+/** Keeps 0. Undefined when the env value is missing or negative. */
+function optionalNonNegativeNumber(raw: number | undefined): number | undefined {
+  if (raw === undefined || !Number.isFinite(raw) || raw < 0) return undefined;
+  return raw;
+}
+
+function parseTrailCutMode(raw: string | undefined): TrailCutMode {
+  return raw?.trim().toLowerCase() === "multiplier" ? "multiplier" : "extreme";
+}
+
+function parseTrailCutCloseMode(raw: string | undefined): TrailCutCloseMode {
+  return raw?.trim().toLowerCase() === "virtual" ? "virtual" : "natural";
+}
+
+/** Trail cut is on only when the cut percent is in (0, 100) and at least one filter is set. */
+function readTrailCutConfig(prefix: string): Pick<
+  CombInstanceConfig,
+  | "TRAIL_CUT_PERCENT"
+  | "TRAIL_CUT_MODE"
+  | "TRAIL_CUT_CLOSE_MODE"
+  | "TRAIL_CUT_STALL_HOURS"
+  | "TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT"
+  | "TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT"
+  | "TRAIL_CUT_ROC_THRESHOLD"
+> {
+  const cutPercent = optionalPositiveNumber(envNumRequired(prefix + "TRAIL_CUT_PERCENT"));
+  const stallHours = optionalPositiveNumber(envNumRequired(prefix + "TRAIL_CUT_STALL_HOURS"));
+  const minUnrealized = optionalNonNegativeNumber(envNumRequired(prefix + "TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT"));
+  const minBlueLine = optionalNonNegativeNumber(envNumRequired(prefix + "TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT"));
+  const rocThreshold = optionalNonNegativeNumber(envNumRequired(prefix + "TRAIL_CUT_ROC_THRESHOLD_PCT"));
+  const rocFraction = rocThreshold == null ? undefined : rocThreshold / 100;
+  const hasFilter = stallHours != null || minUnrealized != null || minBlueLine != null || rocFraction != null;
+  const enabled = cutPercent != null && cutPercent < 100 && hasFilter;
+  if (cutPercent != null && !enabled) {
+    console.warn(
+      `[COMB] ${prefix}TRAIL_CUT_PERCENT is set but trail cut is off. Percent must be between 0 and 100, with at least one filter.`
+    );
+  }
+  if (!enabled) return {};
+  return {
+    TRAIL_CUT_PERCENT: cutPercent,
+    TRAIL_CUT_MODE: parseTrailCutMode(envStrRequired(prefix + "TRAIL_CUT_MODE")),
+    TRAIL_CUT_CLOSE_MODE: parseTrailCutCloseMode(envStrRequired(prefix + "TRAIL_CUT_CLOSE_MODE")),
+    TRAIL_CUT_STALL_HOURS: stallHours,
+    TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT: minUnrealized,
+    TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT: minBlueLine,
+    TRAIL_CUT_ROC_THRESHOLD: rocFraction,
+  };
+}
+
 type ActiveCombPosition = {
   inst: CombBotInstance;
   position: IPosition;
@@ -74,6 +138,7 @@ const COMB_EXIT_REASON_LABELS: Partial<Record<CombClosedExitReason, string>> = {
   margin_stop_loss: "Margin stop loss",
   bad_signal: "Bad entry (consolidation)",
   hard_take_profit: "Hard take profit",
+  trail_cut: "Trail cut",
 };
 
 /** Required env keys: COMB_BOT_N_<KEY>. Keys match CombInstanceConfig. */
@@ -170,6 +235,7 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
     MARGIN_TRADE_MODE: marginTradeMode,
     STARTING_BALANCE: startingBalance,
     MARGIN_PERCENT_OF_BALANCE: marginPercentOfBalance,
+    ...readTrailCutConfig(prefix),
   } as CombInstanceConfig;
 }
 
@@ -555,16 +621,14 @@ class CombinationBot {
       const slippageIcon = new BigNumber(avgSlippage).gt(0) ? "🟥" : "🟩";
 
       lines.push(`--- BOT_${i + 1} (${inst.symbol}) ---`);
-      lines.push(`Run ID: ${inst.runId}`);
-      lines.push(`Run start: ${runStart.toISOString()}`);
-      lines.push(`Run time: ${runDurationDisplay}`);
+      lines.push(`>>> Symbol Details <<<`)
+      lines.push(`Run start: ${runStart.toISOString()} (${runDurationDisplay})`);
       lines.push(`Status: ${stateName}`);
       lines.push("");
       lines.push(`Symbol: ${inst.symbol} | Leverage: X${inst.leverage}`);
       lines.push(inst.formatEquityStatus());
-      lines.push(`Buffer: ${inst.triggerBufferPercentage}% | Trail confirm bars: ${inst.trailConfirmBars}`);
       lines.push(
-        `N Signal: ${inst.nSignal} | Optimization: ${inst.optimizationWindowMinutes} min window, ${inst.updateIntervalMinutes} min interval`
+        `N Signal: ${inst.nSignal} | Opt Window: ${inst.optimizationWindowMinutes} min | Update Interval: ${inst.updateIntervalMinutes} min | Trigger Buffer: ${inst.triggerBufferPercentage}% | Trail confirm bars: ${inst.trailConfirmBars}`
       );
       lines.push(
         `Trail mult bounds: ${inst.trailMultiplierBounds.min} - ${inst.trailMultiplierBounds.max} | Step size: ${inst.trailBoundStepSize} | Current Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
@@ -572,9 +636,8 @@ class CombinationBot {
       lines.push(
         `Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(inst.lastOptimizationAtMs, inst.updateIntervalMinutes, nowMs) / 1000))}`
       );
-      lines.push(
-        `Triggers: Long ${inst.longTrigger != null ? inst.longTrigger : "N/A"} | Short ${inst.shortTrigger != null ? inst.shortTrigger : "N/A"}`
-      );
+      lines.push(``)
+      lines.push(`>>> Runtime Details <<<`)
       if (inst.currActivePosition) {
         const pos = inst.currActivePosition;
         lines.push("Position:");
@@ -589,13 +652,12 @@ class CombinationBot {
       }
       lines.push(inst.formatMarginStopLossStatus());
       lines.push(inst.formatHardTakeProfitStatus());
+      lines.push(inst.formatTrailCutStatus());
       lines.push(
-        `Bad entry long ROC high threshold: ${inst.badEntryLongRocHighThreshold != null ? `${inst.badEntryLongRocHighThreshold * 100}%` : "off"}`
-      );
-      lines.push(
-        `Bad entry short ROC low threshold: ${inst.badEntryShortRocLowThreshold != null ? `-${Math.abs(inst.badEntryShortRocLowThreshold * 100)}%` : "off"}`
+        `Entry Filter Long ROC High: ${inst.badEntryLongRocHighThreshold != null ? `${inst.badEntryLongRocHighThreshold * 100}%` : "off"} | Long ROC Low: ${inst.badEntryShortRocLowThreshold != null ? `-${Math.abs(inst.badEntryShortRocLowThreshold * 100)}%` : "off"}`
       );
       lines.push("");
+      lines.push(">>> Individual Symbol Profit <<<");
       lines.push(
         `Total symbol calculated PnL: ${pnl >= 0 ? "🟩" : "🟥"} ${pnl.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
       );
@@ -617,7 +679,7 @@ class CombinationBot {
       lines.push("");
     }
 
-    lines.push("=== MERGED ===");
+    lines.push("=== MERGED SYMBOLS PROFIT ===");
     if (earliestRunStart) {
       const { runDurationDisplay } = getRunDuration(earliestRunStart);
       lines.push(`Overall run time: ${runDurationDisplay}`);
@@ -735,6 +797,13 @@ class CombinationBot {
         para,
         "/set_roc_filter all|{SYMBOL} {long_pct} {short_pct} — Bad-entry ROC filter \n(e.g. /set_roc_filter all 0.6 0.6). Both values required. 0 = disabled for that side.",
         para,
+        "/update_trail_cut {SYMBOL|ALL} {lock|cut} {percent} {stall_hours} {min_unrealized_pnl_pct} {min_blue_line_pct} {roc_threshold} {natural|virtual}",
+        "lock = lock extreme, cut = shrink the trail multiplier. percent is 0–100.",
+        "stall_hours, min_unrealized_pnl_pct, min_blue_line_pct, roc_threshold: -1 disables that filter.",
+        "Last arg is the close mode: natural or virtual.",
+        "Example: /update_trail_cut all lock 95 2 50 -1 0.5 natural",
+        "/update_trail_cut all off turns trail cut off.",
+        para,
         "/add_symbol {symbol} {leverage} {margin} {N} {reoptimization_interval} {optimization_window} {minTrailMultiplier} {maxTrailMultiplier} {telegramChatID} [stopLoss] — Add and start a runtime-only symbol.",
         para,
         "/pause_symbol {SYMBOL} — Gracefully pause a symbol. An active position remains managed until resolved.",
@@ -773,6 +842,10 @@ class CombinationBot {
       "• /close_pos closes the position; the instance continues running and waits for the next signal.",
       para,
       "• /set_margin (fixed vs percent_balance) is only available in the general channel.",
+      para,
+      "• /update_trail_cut is only available in the general channel.",
+      "  /update_trail_cut {SYMBOL|ALL} {lock|cut} {percent} {stall_hours} {min_unrealized_pnl_pct} {min_blue_line_pct} {roc_threshold} {natural|virtual}",
+      "  -1 disables a filter. /update_trail_cut {SYMBOL|ALL} off turns it off.",
     ].join("\n");
   }
 
@@ -898,6 +971,13 @@ class CombinationBot {
       HARD_TAKE_PROFIT_PCT: hardTakeProfit && hardTakeProfit > 0 ? hardTakeProfit : undefined,
       BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT: defaults.badEntryLongRocHighThreshold,
       BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT: defaults.badEntryShortRocLowThreshold,
+      TRAIL_CUT_PERCENT: defaults.trailCutPercent,
+      TRAIL_CUT_MODE: defaults.trailCutMode,
+      TRAIL_CUT_CLOSE_MODE: defaults.trailCutCloseMode,
+      TRAIL_CUT_STALL_HOURS: defaults.trailCutStallHours,
+      TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT: defaults.trailCutMinUnrealizedPnlPercent,
+      TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT: defaults.trailCutMinBlueLinePnlPercent,
+      TRAIL_CUT_ROC_THRESHOLD: defaults.trailCutRocThreshold,
     };
     const instance = new CombBotInstance(config, this);
     this.registerInstance(instance);
@@ -1824,6 +1904,114 @@ class CombinationBot {
       }
       applyToInstance(inst);
       TelegramService.queueMsgPriority(`${inst.formatBadEntryStatus()} for ${inst.symbol}.`, this.generalChatId);
+    });
+
+    TelegramService.appendTgCmdHandler("update_trail_cut", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const parts = (ctx.text || "").trim().split(/\s+/).filter(Boolean);
+      const usage =
+        "Usage: /update_trail_cut {SYMBOL|ALL} {lock|cut} {percent} {stall_hours} {min_unrealized_pnl_pct} {min_blue_line_pct} {roc_threshold} {natural|virtual}\n" +
+        "lock = lock extreme, cut = cut multiplier. Close mode is natural or virtual.\n" +
+        "-1 disables a filter. /update_trail_cut all off turns trail cut off.\n" +
+        "Example: /update_trail_cut all lock 95 2 50 -1 0.5 natural";
+
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /update_trail_cut in the general channel.", String(chatId));
+        return;
+      }
+
+      const target = parts[1];
+      const modeRaw = parts[2];
+      if (target && modeRaw?.toLowerCase() === "off") {
+        const turnOff = async (inst: CombBotInstance): Promise<void> => {
+          inst.disableTrailCut();
+          if (inst.telegramChatId) {
+            TelegramService.queueMsg(`Trail cut off for ${inst.symbol}.`, inst.telegramChatId);
+          }
+          if (inst.currActivePosition) {
+            await inst.refreshChartAndTrailingLevels();
+          }
+        };
+        if (target.toLowerCase() === "all") {
+          const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+          TelegramService.queueMsgPriority(`Trail cut off on all instances (${symbolsStr}).`, this.generalChatId);
+          for (const inst of this.instances) await turnOff(inst);
+          return;
+        }
+        const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+        if (!inst) {
+          TelegramService.queueMsgPriority(
+            `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+            this.generalChatId
+          );
+          return;
+        }
+        await turnOff(inst);
+        TelegramService.queueMsgPriority(`Trail cut off for ${inst.symbol}.`, this.generalChatId);
+        return;
+      }
+
+      const percentRaw = parts[3];
+      const stallRaw = parts[4];
+      const unrealizedRaw = parts[5];
+      const blueRaw = parts[6];
+      const rocRaw = parts[7];
+      const closeRaw = parts[8];
+      if (!target || !modeRaw || percentRaw === undefined || stallRaw === undefined || unrealizedRaw === undefined || blueRaw === undefined || rocRaw === undefined || !closeRaw) {
+        TelegramService.queueMsgPriority(usage, this.generalChatId);
+        return;
+      }
+
+      const mode = modeRaw.toLowerCase() === "lock" ? "extreme" : modeRaw.toLowerCase() === "cut" ? "multiplier" : undefined;
+      const closeMode = closeRaw.toLowerCase() === "natural" || closeRaw.toLowerCase() === "virtual" ? closeRaw.toLowerCase() as "natural" | "virtual" : undefined;
+      const percent = Number(percentRaw);
+      const stall = parseTrailCutTrigger(stallRaw, false);
+      const unrealized = parseTrailCutTrigger(unrealizedRaw, true);
+      const blue = parseTrailCutTrigger(blueRaw, true);
+      const roc = parseTrailCutTrigger(rocRaw, true);
+      if (!mode || !closeMode || !Number.isFinite(percent) || percent <= 0 || percent >= 100 || stall === "invalid" || unrealized === "invalid" || blue === "invalid" || roc === "invalid") {
+        TelegramService.queueMsgPriority(usage, this.generalChatId);
+        return;
+      }
+
+      const applyToInstance = async (inst: CombBotInstance): Promise<void> => {
+        inst.applyTrailCutConfig({
+          mode,
+          closeMode,
+          percent,
+          stallHours: stall ?? undefined,
+          minUnrealizedPnlPercent: unrealized ?? undefined,
+          minBlueLinePnlPercent: blue ?? undefined,
+          rocThreshold: roc == null ? undefined : roc / 100,
+        });
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(`${inst.formatTrailCutStatus()} for ${inst.symbol}.`, inst.telegramChatId);
+        }
+        if (inst.currActivePosition) {
+          await inst.refreshChartAndTrailingLevels();
+        }
+      };
+
+      if (target.toLowerCase() === "all") {
+        const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+        TelegramService.queueMsgPriority(`Updating trail cut on all instances (${symbolsStr}).`, this.generalChatId);
+        for (const inst of this.instances) {
+          await applyToInstance(inst);
+        }
+        return;
+      }
+
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      await applyToInstance(inst);
+      TelegramService.queueMsgPriority(`${inst.formatTrailCutStatus()} for ${inst.symbol}.`, this.generalChatId);
     });
 
     TelegramService.appendTgCmdHandler("close_pos", async (ctx) => {

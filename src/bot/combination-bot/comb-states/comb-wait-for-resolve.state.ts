@@ -1,11 +1,12 @@
 import ExchangeService from "@/services/exchange-service/exchange-service";
-import { ICandleInfo, IPosition, IWSOrderUpdate } from "@/services/exchange-service/exchange-type";
+import { ICandleInfo, IPosition, IWSOrderUpdate, TPositionSide } from "@/services/exchange-service/exchange-type";
 import BigNumber from "bignumber.js";
 import { withRetries, isTransientError } from "../comb-retry";
 import type CombBotInstance from "../comb-bot-instance";
 import { TickRoundMode } from "@/bot/trail-multiplier-optimization-bot/tmob-states/tmob-wait-for-resolve.state";
 import { EEventBusEventType } from "@/utils/event-bus.util";
 import { CombClosedExitReason, IClosePositionMsgToCopyTrader, JustManuallyClosedBy } from "../comb-types";
+import { COMB_DEFAULT_SIGNAL_PARAMS } from "../comb-utils";
 import { generateRandomString } from "@/utils/strings.util";
 import { AsyncMutex } from "@/utils/async-mutex.util";
 
@@ -13,7 +14,7 @@ function toIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-const VIRTUAL_CLOSE_EXIT_REASONS = ["tp_pullback", "margin_stop_loss", "bad_signal", "hard_take_profit"] as const satisfies readonly CombClosedExitReason[];
+const VIRTUAL_CLOSE_EXIT_REASONS = ["tp_pullback", "margin_stop_loss", "bad_signal", "hard_take_profit", "trail_cut"] as const satisfies readonly CombClosedExitReason[];
 
 function isVirtualCloseExitReason(reason: string): reason is (typeof VIRTUAL_CLOSE_EXIT_REASONS)[number] {
   return (VIRTUAL_CLOSE_EXIT_REASONS as readonly string[]).includes(reason);
@@ -256,6 +257,33 @@ class CombWaitForResolveState {
         return;
       }
 
+      if (
+        !shouldExit &&
+        this.bot.trailCutStop &&
+        this.bot.trailCutStop.side === position.side &&
+        !this.bot.justManuallyClosedBy &&
+        !this.isManuallyClosingBy
+      ) {
+        const { bufferedLevel, rawLevel } = this.bot.trailCutStop;
+        const cutBreached = this._trailLevelBreached(position.side, priceBn, bufferedLevel);
+        this.bot.trailCutBreachCount = cutBreached ? this.bot.trailCutBreachCount + 1 : 0;
+        if (this.bot.trailCutBreachCount >= this.bot.trailConfirmBars) {
+          const closesNaturally = this.bot.trailCutCloseMode === "natural";
+          shouldExit = true;
+          exitReason = closesNaturally ? "atr_trailing" : "trail_cut";
+          if (!closesNaturally) this.isManuallyClosingBy = "trail_cut";
+          this.bot.trailCutTriggeredExit = closesNaturally;
+          console.log(
+            `[COMB] waitForResolve trailCutTriggered symbol=${this.bot.symbol} side=${position.side} close=${this.bot.trailCutCloseMode} price=${price} bufferedLevel=${bufferedLevel} rawLevel=${rawLevel}`
+          );
+          this.bot.queueMsg(
+            `✂️ Trail cut (${position.side}, ${this.bot.trailCutCloseMode}) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
+          );
+        }
+      } else if (!shouldExit) {
+        this.bot.trailCutBreachCount = 0;
+      }
+
       if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
         const { bufferedLevel, rawLevel } = this.bot.trailingStopTargets;
         const candles = this.bot.currCandles;
@@ -272,9 +300,7 @@ class CombWaitForResolveState {
             : position.side === "long"
               ? BigNumber.min(...candleExtremes)
               : BigNumber.max(...candleExtremes);
-        const isBreached = position.side === "long" ? 
-          priceBn.lte(bufferedLevel) || (candleExtreme != null && candleExtreme.lte(bufferedLevel)) :
-          priceBn.gte(bufferedLevel) || (candleExtreme != null && candleExtreme.gte(bufferedLevel));
+        const isBreached = this._trailLevelBreached(position.side, priceBn, bufferedLevel);
 
         this.bot.trailingStopBreachCount = isBreached ? this.bot.trailingStopBreachCount + 1 : 0;
 
@@ -712,6 +738,199 @@ class CombWaitForResolveState {
       bufferedLevel,
       updatedAt: Date.now(),
     };
+    this._applyTrailCut(finishedCandles, position, atrValue, closesWindow);
+  }
+
+  /** Once per position, after the filters pass, keep a tighter stop beside the natural trail. */
+  private _applyTrailCut(
+    finishedCandles: ICandleInfo[],
+    position: IPosition,
+    atrValue: number,
+    closesWindow: number[],
+  ): void {
+    if (!this.bot.isTrailCutEnabled()) return;
+
+    const candle = finishedCandles[finishedCandles.length - 1];
+    if (!candle) return;
+
+    if (this.bot.trailCutMode === "extreme") {
+      this._noteTrailCutBestPrice(finishedCandles, position.side);
+    }
+
+    const justArmed = !this.bot.trailCutTightened && this._trailCutFiltersPass(finishedCandles, candle, position);
+    if (justArmed) this.bot.trailCutTightened = true;
+
+    if (!this.bot.trailCutTightened) {
+      this.bot.trailCutStop = undefined;
+      this.bot.trailCutBreachCount = 0;
+      return;
+    }
+
+    if (this.bot.trailCutMode === "multiplier") {
+      const rawLevel = this._stopForMultiplier(position.side, this._cutMultiplier(), atrValue, closesWindow);
+      this.bot.trailCutStop = rawLevel == null ? undefined : {
+        side: position.side,
+        rawLevel,
+        bufferedLevel: this._bufferTrailLevel(position.side, rawLevel),
+      };
+    } else {
+      const rawLevel = this._extremeLockStop(position);
+      if (rawLevel != null) {
+        const previous = this.bot.trailCutStop?.rawLevel;
+        const nextRaw = previous == null
+          ? rawLevel
+          : position.side === "long" ? Math.max(previous, rawLevel) : Math.min(previous, rawLevel);
+        this.bot.trailCutStop = {
+          side: position.side,
+          rawLevel: nextRaw,
+          bufferedLevel: this._bufferTrailLevel(position.side, nextRaw),
+        };
+      }
+    }
+
+    if (justArmed) {
+      const stop = this.bot.trailCutStop?.bufferedLevel;
+      const stopText = stop != null ? stop : "pending";
+      const kind = this.bot.trailCutMode === "extreme" ? "lock extreme" : "cut multiplier";
+      this.bot.queueMsg(
+        `✂️ TRAIL CUT ON (${position.side})\n` +
+        `${kind} ${this.bot.trailCutPercent}% → ${this.bot.trailCutCloseMode}\n` +
+        `New stop: ${stopText}`
+      );
+    }
+  }
+
+  private _cutMultiplier(): number {
+    const base = this.bot.temporaryTrailMultiplier ?? this.bot.trailingStopMultiplier;
+    return base * (1 - (this.bot.trailCutPercent ?? 0) / 100);
+  }
+
+  private _noteTrailCutBestPrice(candles: ICandleInfo[], side: TPositionSide): void {
+    const entryTs = this.bot.lastEntryTime > 0 ? Math.floor(this.bot.lastEntryTime / 60_000) * 60_000 : 0;
+    for (const candle of candles) {
+      if (entryTs > 0 && candle.timestamp < entryTs) continue;
+      const price = side === "long" ? candle.highPrice : candle.lowPrice;
+      if (!Number.isFinite(price)) continue;
+      const current = this.bot.trailCutBestPrice;
+      this.bot.trailCutBestPrice = current == null
+        ? price
+        : side === "long" ? Math.max(current, price) : Math.min(current, price);
+    }
+  }
+
+  private _trailCutFiltersPass(candles: ICandleInfo[], candle: ICandleInfo, position: IPosition): boolean {
+    const breakout = this.bot.trailCutBreakoutLevel;
+    if (breakout == null) return false;
+
+    const side = position.side;
+    const close = candle.closePrice;
+    const onNewSide = side === "long" ? close > breakout : close < breakout;
+    if (!onNewSide) {
+      this.bot.trailCutStallLevel = undefined;
+      this.bot.trailCutStallSinceMs = undefined;
+      return false;
+    }
+    if (!this._stallHoursOk(candle, side)) return false;
+
+    const unrealized = this._pnlPercentOfMargin(side, position.avgPrice, close);
+    const minUnrealized = this.bot.trailCutMinUnrealizedPnlPercent;
+    if (minUnrealized != null && (unrealized == null || unrealized < minUnrealized)) return false;
+
+    const naturalStop = this.bot.trailingStopTargets?.rawLevel;
+    const blueLine = naturalStop == null ? null : this._pnlPercentOfMargin(side, position.avgPrice, naturalStop);
+    const minBlueLine = this.bot.trailCutMinBlueLinePnlPercent;
+    if (minBlueLine != null && (blueLine == null || blueLine < minBlueLine)) return false;
+
+    return this._rocExceeds(candles, side);
+  }
+
+  /** Sideways clock. A new high (long) or low (short) restarts it. */
+  private _stallHoursOk(candle: ICandleInfo, side: TPositionSide): boolean {
+    const hoursNeeded = this.bot.trailCutStallHours ?? 0;
+    if (!(hoursNeeded > 0)) return true;
+
+    const favorable = side === "long" ? candle.highPrice : candle.lowPrice;
+    const srLevel = side === "long" ? this.bot.currentResistance : this.bot.currentSupport;
+    const around = this.bot.trailCutStallLevel ?? srLevel;
+    if (around == null || !(around > 0) || !Number.isFinite(favorable)) {
+      this.bot.trailCutStallLevel = undefined;
+      this.bot.trailCutStallSinceMs = undefined;
+      return false;
+    }
+
+    const madeNewExtreme = side === "long" ? favorable > around : favorable < around;
+    const nowMs = candle.openTime || candle.timestamp;
+    if (madeNewExtreme) {
+      this.bot.trailCutStallLevel = favorable;
+      this.bot.trailCutStallSinceMs = nowMs;
+    } else if (this.bot.trailCutStallSinceMs == null) {
+      this.bot.trailCutStallLevel = around;
+      this.bot.trailCutStallSinceMs = nowMs;
+    }
+
+    const since = this.bot.trailCutStallSinceMs;
+    if (since == null) return false;
+    return (nowMs - since) / 3_600_000 >= hoursNeeded;
+  }
+
+  private _rocExceeds(candles: ICandleInfo[], side: TPositionSide): boolean {
+    const threshold = this.bot.trailCutRocThreshold;
+    if (threshold == null) return true;
+    const rocBars = COMB_DEFAULT_SIGNAL_PARAMS.K || 5;
+    const start = candles[candles.length - 1 - rocBars];
+    const candle = candles[candles.length - 1];
+    if (!start || !candle || !(start.closePrice > 0)) return false;
+    if (side === "long") return candle.highPrice / start.closePrice - 1 > threshold;
+    return candle.lowPrice / start.closePrice - 1 < -threshold;
+  }
+
+  private _pnlPercentOfMargin(side: TPositionSide, entryPrice: number, markPrice: number): number | null {
+    if (!(entryPrice > 0) || !(this.bot.leverage > 0) || !Number.isFinite(markPrice)) return null;
+    const move = side === "long" ? (markPrice - entryPrice) / entryPrice : (entryPrice - markPrice) / entryPrice;
+    return move * this.bot.leverage * 100;
+  }
+
+  /** Stop that locks trailCutPercent of the profit at the best price. */
+  private _extremeLockStop(position: IPosition): number | null {
+    const best = this.bot.trailCutBestPrice;
+    const entry = position.avgPrice;
+    const percent = this.bot.trailCutPercent ?? 0;
+    if (best == null || !(entry > 0) || !(percent > 0)) return null;
+    const favorable = position.side === "long" ? best - entry : entry - best;
+    if (!(favorable > 0)) return null;
+    const stop = position.side === "long"
+      ? entry + favorable * (percent / 100)
+      : entry - favorable * (percent / 100);
+    if (!(stop > 0) || !Number.isFinite(stop)) return null;
+    return position.side === "long" ? this._quantizeToTick(stop, "up") : this._quantizeToTick(stop, "down");
+  }
+
+  private _stopForMultiplier(side: TPositionSide, multiplier: number, atrValue: number, closesWindow: number[]): number | null {
+    if (!closesWindow.length || !(atrValue > 0) || !(multiplier > 0)) return null;
+    if (side === "long") {
+      const candidate = Math.max(...closesWindow) - atrValue * multiplier;
+      return candidate > 0 ? this._quantizeToTick(candidate, "up") : null;
+    }
+    const candidate = Math.min(...closesWindow) + atrValue * multiplier;
+    return candidate > 0 ? this._quantizeToTick(candidate, "down") : null;
+  }
+
+  private _bufferTrailLevel(side: TPositionSide, rawLevel: number): number {
+    const bufferPct = this.bot.triggerBufferPercentage / 100 || 0;
+    if (!(bufferPct > 0)) return rawLevel;
+    return side === "long" ? rawLevel * (1 + bufferPct) : rawLevel * (1 - bufferPct);
+  }
+
+  private _trailLevelBreached(side: TPositionSide, priceBn: BigNumber, bufferedLevel: number): boolean {
+    const candles = this.bot.currCandles;
+    const recent = [candles[candles.length - 1], candles[candles.length - 2]].filter((c): c is ICandleInfo => c != null);
+    const extremes = recent.map((c) => (side === "long" ? new BigNumber(c.lowPrice) : new BigNumber(c.highPrice)));
+    const candleExtreme = extremes.length === 0
+      ? undefined
+      : side === "long" ? BigNumber.min(...extremes) : BigNumber.max(...extremes);
+    const level = new BigNumber(bufferedLevel);
+    if (side === "long") return priceBn.lte(level) || (candleExtreme != null && candleExtreme.lte(level));
+    return priceBn.gte(level) || (candleExtreme != null && candleExtreme.gte(level));
   }
 
   private async _handleExternalOrderUpdate(update: IWSOrderUpdate) {

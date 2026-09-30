@@ -185,6 +185,8 @@ class CombWaitForSignalState {
           this.bot.isPnlRecorded = false;
           this.bot.nextEntryAllowedAtMs = undefined;
           this.bot.resetTrailingStopTracking();
+          const breakoutLevel = posDir === "long" ? this.bot.currentResistance : this.bot.currentSupport;
+          this.bot.beginTrailCut(breakoutLevel);
           this.bot.tpPbPercent = 0;
           this.bot.tpPbFixedPrice = undefined;
           this.bot.updateCurrStopLossFromPosition();
