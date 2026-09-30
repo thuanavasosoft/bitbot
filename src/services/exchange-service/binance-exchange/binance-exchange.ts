@@ -70,6 +70,10 @@ class BinanceExchange implements IExchangeInstance {
   private static readonly AGG_TRADE_SUBSCRIBE_ACK_TIMEOUT_MS = 5_000;
   private static readonly AGG_TRADE_SUBSCRIBE_MAX_ATTEMPTS = 3;
   private static readonly AGG_TRADE_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+  // markPrice@1s should tick every second on the same usdmMarket socket. If neither
+  // markPrice nor aggTrade arrives for this long, the socket itself is considered dead.
+  private static readonly MARKET_WS_HEALTH_TIMEOUT_MS = 15_000;
+  private static readonly AGG_TRADE_RECONNECT_COOLDOWN_MS = 60_000;
   private static readonly AGG_TRADE_WS_KEY = "usdmMarket";
 
   private _client: USDMClient;
@@ -82,6 +86,8 @@ class BinanceExchange implements IExchangeInstance {
   private _subscribedSymbols: Record<string, boolean> = {};
   private _subscribedAggTradeSymbols: Record<string, boolean> = {};
   private _lastAggTradeAt: Record<string, number> = {};
+  private _lastMarketWsEventAt = 0;
+  private _lastAggTradeReconnectAt = 0;
   private _aggTradeSubscriptionPromises: Record<string, Promise<void> | undefined> = {};
   private _aggTradeAckWaiters: Map<string, TAggTradeAckWaiter> = new Map();
   private _aggTradeWatchdogTimer?: NodeJS.Timeout;
@@ -732,6 +738,10 @@ class BinanceExchange implements IExchangeInstance {
     this._aggTradeWatchdogTimer.unref?.();
   }
 
+  private _touchMarketWsEvent(): void {
+    this._lastMarketWsEventAt = Date.now();
+  }
+
   private async _runAggTradeWatchdog(): Promise<void> {
     if (this._aggTradeWatchdogRunning) return;
     this._aggTradeWatchdogRunning = true;
@@ -746,61 +756,64 @@ class BinanceExchange implements IExchangeInstance {
         return hasListeners && now - lastTickAt >= BinanceExchange.AGG_TRADE_WATCHDOG_TIMEOUT_MS;
       });
 
-      if (staleSymbols.length === 0) return;
+      if (staleSymbols.length > 0) {
+        // Move the deadline before starting REST calls so a slow request cannot create
+        // overlapping watchdog executions for the same symbol.
+        const staleSince = new Map(staleSymbols.map((symbol) => [symbol, this._lastAggTradeAt[symbol] ?? 0]));
+        staleSymbols.forEach((symbol) => {
+          this._lastAggTradeAt[symbol] = now;
+        });
 
-      // Move the deadline before starting REST calls so a slow request cannot create
-      // overlapping watchdog executions for the same symbol.
-      const staleSince = new Map(staleSymbols.map((symbol) => [symbol, this._lastAggTradeAt[symbol] ?? 0]));
-      staleSymbols.forEach((symbol) => {
-        this._lastAggTradeAt[symbol] = now;
-      });
+        await Promise.all(
+          staleSymbols.map(async (normalizedSymbol) => {
+            try {
+              const ticker = await this._client.getSymbolPriceTickerV2({ symbol: normalizedSymbol });
+              const restPrice = Number(ticker.price);
+              if (!Number.isFinite(restPrice) || restPrice <= 0) {
+                throw new Error(`Invalid REST price: ${ticker.price}`);
+              }
 
-      await Promise.all(
-        staleSymbols.map(async (normalizedSymbol) => {
-          try {
-            const ticker = await this._client.getSymbolPriceTickerV2({ symbol: normalizedSymbol });
-            const restPrice = Number(ticker.price);
-            if (!Number.isFinite(restPrice) || restPrice <= 0) {
-              throw new Error(`Invalid REST price: ${ticker.price}`);
+              // A real WS tick may have arrived while REST was in flight. In that case
+              // it is newer and the synthetic tick is no longer needed.
+              if ((this._lastAggTradeAt[normalizedSymbol] ?? 0) > now) return;
+
+              const originalSymbol = this._toOriginalSymbol(normalizedSymbol);
+              const timestamp = Number(ticker.time ?? Date.now());
+              const syntheticTrade: IWSTradeTick = {
+                id: `rest-watchdog-${normalizedSymbol}-${timestamp}`,
+                symbol: originalSymbol,
+                price: restPrice,
+                quantity: 0,
+                // REST ticker has no aggressor-side information. Consumers currently
+                // use the tick price; the zero quantity identifies this as synthetic.
+                side: "buy",
+                timestamp,
+              };
+
+              this._ltpPrices[originalSymbol] = restPrice;
+              this._emitTradeToListeners(syntheticTrade);
+              console.warn(
+                `[BinanceExchange] No aggTrade tick for ${normalizedSymbol} in ${BinanceExchange.AGG_TRADE_WATCHDOG_TIMEOUT_MS}ms; emitted REST fallback at ${restPrice}.`
+              );
+            } catch (error) {
+              // Preserve the previous timestamp so the next watchdog pass retries REST.
+              this._lastAggTradeAt[normalizedSymbol] = staleSince.get(normalizedSymbol) ?? 0;
+              console.error(`[BinanceExchange] aggTrade watchdog REST fallback failed for ${normalizedSymbol}:`, error);
             }
+          })
+        );
+      }
 
-            // A real WS tick may have arrived while REST was in flight. In that case
-            // it is newer and the synthetic tick is no longer needed.
-            if ((this._lastAggTradeAt[normalizedSymbol] ?? 0) > now) return;
-
-            const originalSymbol = this._toOriginalSymbol(normalizedSymbol);
-            const timestamp = Number(ticker.time ?? Date.now());
-            const syntheticTrade: IWSTradeTick = {
-              id: `rest-watchdog-${normalizedSymbol}-${timestamp}`,
-              symbol: originalSymbol,
-              price: restPrice,
-              quantity: 0,
-              // REST ticker has no aggressor-side information. Consumers currently
-              // use the tick price; the zero quantity identifies this as synthetic.
-              side: "buy",
-              timestamp,
-            };
-
-            this._ltpPrices[originalSymbol] = restPrice;
-            this._emitTradeToListeners(syntheticTrade);
-            console.warn(
-              `[BinanceExchange] No aggTrade tick for ${normalizedSymbol} in ${BinanceExchange.AGG_TRADE_WATCHDOG_TIMEOUT_MS}ms; emitted REST fallback at ${restPrice}.`
-            );
-          } catch (error) {
-            // Preserve the previous timestamp so the next watchdog pass retries REST.
-            this._lastAggTradeAt[normalizedSymbol] = staleSince.get(normalizedSymbol) ?? 0;
-            console.error(`[BinanceExchange] aggTrade watchdog REST fallback failed for ${normalizedSymbol}:`, error);
-          }
-        })
-      );
-
-      this._reconnectAggTradeStream();
+      // Never tear down usdmMarket just because one symbol is quiet. aggTrade only
+      // fires when trades happen; markPrice@1s on the same socket is the health signal.
+      // Reconnecting on per-symbol silence causes a reconnect death spiral.
+      this._maybeReconnectDeadMarketWs(now);
     } finally {
       this._aggTradeWatchdogRunning = false;
     }
   }
 
-  private _reconnectAggTradeStream(): void {
+  private _maybeReconnectDeadMarketWs(now: number): void {
     if (this._aggTradeReconnectInProgress) return;
 
     const ws = this._wsClient.getWsStore().getWs(BinanceExchange.AGG_TRADE_WS_KEY);
@@ -815,8 +828,21 @@ class BinanceExchange implements IExchangeInstance {
       return;
     }
 
+    // No market events yet (still connecting) — give the socket time to start ticking.
+    if (this._lastMarketWsEventAt <= 0) return;
+
+    const marketSilenceMs = now - this._lastMarketWsEventAt;
+    if (marketSilenceMs < BinanceExchange.MARKET_WS_HEALTH_TIMEOUT_MS) return;
+
+    if (now - this._lastAggTradeReconnectAt < BinanceExchange.AGG_TRADE_RECONNECT_COOLDOWN_MS) {
+      return;
+    }
+
     this._aggTradeReconnectInProgress = true;
-    console.warn("[BinanceExchange] aggTrade watchdog is reconnecting the market WebSocket.");
+    this._lastAggTradeReconnectAt = now;
+    console.warn(
+      `[BinanceExchange] Market WebSocket silent for ${marketSilenceMs}ms; reconnecting usdmMarket.`
+    );
 
     const reconnectableWs = ws as typeof ws & { terminate?: () => void };
     if (typeof reconnectableWs.terminate === "function") reconnectableWs.terminate();
@@ -1009,6 +1035,9 @@ class BinanceExchange implements IExchangeInstance {
   private _mapWsEvents() {
     this._wsClient.on("open", ({ wsKey }) => {
       console.info(`[BinanceExchange] WebSocket opened (${wsKey}).`);
+      if (wsKey === BinanceExchange.AGG_TRADE_WS_KEY) {
+        this._touchMarketWsEvent();
+      }
     });
     this._wsClient.on("reconnecting", ({ wsKey }) => {
       console.warn(`[BinanceExchange] WebSocket reconnecting (${wsKey}).`);
@@ -1023,6 +1052,7 @@ class BinanceExchange implements IExchangeInstance {
       console.info(`[BinanceExchange] WebSocket reconnected (${wsKey}).`);
       if (wsKey === BinanceExchange.AGG_TRADE_WS_KEY) {
         this._aggTradeReconnectInProgress = false;
+        this._touchMarketWsEvent();
         Object.keys(this._subscribedAggTradeSymbols).forEach((symbol) => {
           this._subscribedAggTradeSymbols[symbol] = false;
           void this._subscribeAggTrades(symbol).catch((error) => {
@@ -1104,6 +1134,7 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   private _handleMarkPriceEvent(event: any) {
+    this._touchMarketWsEvent();
     const originalSymbol = this._toOriginalSymbol(event.symbol);
     const markPrice = Number(event.markPrice);
     this._prices[originalSymbol] = markPrice;
@@ -1120,6 +1151,7 @@ class BinanceExchange implements IExchangeInstance {
   }
 
   private _handleAggTradeEvent(event: any) {
+    this._touchMarketWsEvent();
     const normalizedSymbol = this._normalizeSymbol(event.symbol);
     const originalSymbol = this._toOriginalSymbol(normalizedSymbol);
     this._lastAggTradeAt[normalizedSymbol] = Date.now();
