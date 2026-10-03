@@ -17,6 +17,9 @@ export type CombSide = "long" | "short";
 /** How next-entry margin is sized. Distinct from exchange `IPosition.marginMode`. */
 export type CombTradeMarginMode = "percent_balance" | "fixed";
 
+/** Which PnL updates paper equity when MARGIN_TRADE_MODE=percent_balance. */
+export type CombMarginPercentBasis = "natural" | "virtual_independent";
+
 export type CombBacktestRunSummary = {
   symbol: string;
   interval: "1m";
@@ -133,6 +136,13 @@ export interface CombInstanceConfig {
    * percent is derived from initial MARGIN / STARTING_BALANCE.
    */
   MARGIN_PERCENT_OF_BALANCE?: number;
+  /**
+   * Paper-equity compounding source when MARGIN_TRADE_MODE=percent_balance.
+   * `natural`: virtual SL/TP does not move equity; the later natural close does.
+   * `virtual_independent`: equity uses the virtual close PnL.
+   * Default: natural.
+   */
+  MARGIN_PERCENT_BASIS?: CombMarginPercentBasis;
   TRIGGER_BUFFER_PERCENTAGE: number;
   N_SIGNAL_AND_ATR_LENGTH: number;
   UPDATE_INTERVAL_MINUTES: number;

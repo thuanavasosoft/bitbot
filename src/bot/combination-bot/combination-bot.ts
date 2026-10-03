@@ -9,7 +9,7 @@ import { AsyncMutex } from "@/utils/async-mutex.util";
 import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
 import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
-import type { CombInstanceConfig, CombState, CombInstanceEvent, CombTradeMarginMode, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader, TrailCutCloseMode, TrailCutMode } from "./comb-types";
+import type { CombInstanceConfig, CombState, CombInstanceEvent, CombMarginPercentBasis, CombTradeMarginMode, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader, TrailCutCloseMode, TrailCutMode } from "./comb-types";
 import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
 import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
 import { formatCombJustManuallyClosedIndicator } from "./comb-candle-watcher";
@@ -70,6 +70,14 @@ function optionalNonNegativeNumber(raw: number | undefined): number | undefined 
 
 function parseTrailCutMode(raw: string | undefined): TrailCutMode {
   return raw?.trim().toLowerCase() === "multiplier" ? "multiplier" : "extreme";
+}
+
+function parseMarginPercentBasis(raw: string | undefined): CombMarginPercentBasis | "invalid" | undefined {
+  if (raw == null || raw.trim() === "") return undefined;
+  const value = raw.trim().toLowerCase();
+  if (value === "natural") return "natural";
+  if (value === "virtual_independent") return "virtual_independent";
+  return "invalid";
 }
 
 function parseTrailCutCloseMode(raw: string | undefined): TrailCutCloseMode {
@@ -219,6 +227,14 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
     marginPercentRaw !== undefined && Number.isFinite(marginPercentRaw) && marginPercentRaw > 0
       ? Math.min(marginPercentRaw, 100)
       : undefined;
+  const marginPercentBasisRaw = parseMarginPercentBasis(envStrRequired(prefix + "MARGIN_PERCENT_BASIS"));
+  if (marginPercentBasisRaw === "invalid") {
+    const message = `[COMB] Combination-bot stopped: invalid COMB_BOT_${botIndex}_MARGIN_PERCENT_BASIS. Use natural or virtual_independent.`;
+    console.error(message);
+    TelegramService.queueMsg(message, process.env.TELEGRAM_CHAT_ID);
+    process.exit(1);
+  }
+  const marginPercentBasis: CombMarginPercentBasis = marginPercentBasisRaw ?? "natural";
   if (marginTradeMode === "percent_balance" && startingBalance == null) {
     const message = `[COMB] Combination-bot stopped: COMB_BOT_${botIndex}_MARGIN_TRADE_MODE=percent_balance requires COMB_BOT_${botIndex}_STARTING_BALANCE > 0.`;
     console.error(message);
@@ -235,6 +251,7 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
     MARGIN_TRADE_MODE: marginTradeMode,
     STARTING_BALANCE: startingBalance,
     MARGIN_PERCENT_OF_BALANCE: marginPercentOfBalance,
+    MARGIN_PERCENT_BASIS: marginPercentBasis,
     ...readTrailCutConfig(prefix),
   } as CombInstanceConfig;
 }

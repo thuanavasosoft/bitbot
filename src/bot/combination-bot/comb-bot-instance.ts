@@ -118,6 +118,10 @@ class CombBotInstance {
   equity?: number;
   /** Trade margin as % of equity (0 exclusive–100]. Derived from MARGIN if env percent omitted. */
   marginPercentOfBalance?: number;
+  /** `virtual_independent`: paper equity compounds on the virtual close PnL. */
+  marginPercentBasis: "natural" | "virtual_independent" = "natural";
+  /** Net PnL booked by the virtual close. Used for paper equity when basis is virtual_independent. */
+  virtualCloseNetPnl?: number;
   /** Next-entry sizing: % of paper equity vs fixed USDT. */
   tradeMarginMode: CombTradeMarginMode = "fixed";
   /** Paper margin locked at the current cycle's entry. Cleared when the strategy cycle is finalized. */
@@ -305,6 +309,7 @@ class CombBotInstance {
       }
       this.syncTradeMarginFromEquity();
     }
+    this.marginPercentBasis = config.MARGIN_PERCENT_BASIS ?? "natural";
     this.triggerBufferPercentage = config.TRIGGER_BUFFER_PERCENTAGE;
     this.nSignal = config.N_SIGNAL_AND_ATR_LENGTH;
     this.trailingAtrLength = config.N_SIGNAL_AND_ATR_LENGTH;
@@ -662,8 +667,12 @@ class CombBotInstance {
     const equity = formatEnUsNumber(this.equity ?? 0, 4);
     const started = formatEnUsNumber(this.startingBalance!, 2);
     const percent = formatEnUsNumber(this.marginPercentOfBalance ?? 0, 4);
+    const basis =
+      this.marginPercentBasis === "virtual_independent"
+        ? "virtual independent (virtual close PnL)"
+        : "natural only";
     return [
-      `Paper equity: ${equity} USDT (started at ${started})`,
+      `Paper equity: ${equity} USDT (started at ${started}) (basis: ${basis})`,
       `Next-entry size: ${nextEntry} USDT (${percent}% of paper equity)`,
     ].join("\n");
   }
@@ -730,7 +739,7 @@ class CombBotInstance {
     return new BigNumber(gross).minus(fees).toNumber();
   }
 
-  applyEquityDelta(delta: number, source: "natural_close" | "simulated_natural"): void {
+  applyEquityDelta(delta: number, source: "natural_close" | "simulated_natural" | "virtual_close"): void {
     if (!this.isEquitySizingEnabled() || this.equity == null) return;
     const previous = this.equity;
     this.equity = new BigNumber(this.equity).plus(delta).toNumber();
@@ -739,9 +748,11 @@ class CombBotInstance {
       `[COMB] equity updated symbol=${this.symbol} source=${source} delta=${delta.toFixed(4)} equity=${previous.toFixed(4)}→${this.equity.toFixed(4)} nextMargin=${this.margin.toFixed(4)}`
     );
     const reason =
-      source === "simulated_natural"
-        ? "simulated natural after virtual close (not the exchange virtual-close PnL)"
-        : "natural close";
+      source === "virtual_close"
+        ? "virtual close (MARGIN_PERCENT_BASIS=virtual_independent)"
+        : source === "simulated_natural"
+          ? "simulated natural after virtual close (not the exchange virtual-close PnL)"
+          : "natural close";
     this.queueMsg(
       `📊 Paper equity updated (MARGIN_TRADE_MODE: percent_balance)\n` +
       `Reason: ${reason}\n` +
@@ -1203,7 +1214,9 @@ class CombBotInstance {
       }
 
       if (this.isEquitySizingEnabled()) {
-        if (hadVirtualClose) {
+        if (this.marginPercentBasis === "virtual_independent" && hadVirtualClose && this.virtualCloseNetPnl != null) {
+          this.applyEquityDelta(this.virtualCloseNetPnl, "virtual_close");
+        } else if (hadVirtualClose) {
           const simulatedNatural = await this.computeSimulatedNaturalNetPnl({
             isLiquidation: _options?.isLiquidation,
           });
@@ -1218,6 +1231,7 @@ class CombBotInstance {
       this.entryWsPrice = undefined;
       this.resolveWsPrice = undefined;
       this.justManuallyClosedBy = undefined;
+      this.virtualCloseNetPnl = undefined;
       this.temporaryTrailMultiplier = undefined;
       this.isPnlRecorded = false;
       this.tpPbPercent = 0;
@@ -1389,6 +1403,7 @@ class CombBotInstance {
         timeDiffMs,
         closedPosition.id,
       );
+      this.virtualCloseNetPnl = netPnl;
 
       this.notifyInstanceEvent({
         type: "position_closed",
