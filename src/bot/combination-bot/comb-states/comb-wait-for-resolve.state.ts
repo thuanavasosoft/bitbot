@@ -677,12 +677,11 @@ class CombWaitForResolveState {
 
     this.bot.trailingAtrWindow = finishedCandles.slice(-atrWindowSize);
 
-    const entryTime = this.bot.lastEntryTime || 0;
-    // Align entry time to the 1-minute candle boundary so the first finished candle after entry
-    // is eligible, avoiding a common ~2-minute delay when entry occurs mid-minute.
-    const alignedEntryTime = entryTime === 0 ? 0 : Math.floor(entryTime / 60_000) * 60_000;
+    // Same candle the backtest pushes on entry: the 1m bar that was open when price crossed.
+    // Flooring lastEntryTime is not enough — that clock is set after the order and can be the next minute.
+    const entryCandleOpenMs = this.bot.getTrailEntryCandleOpenMs();
     const closesSinceEntry = finishedCandles
-      .filter((c) => alignedEntryTime === 0 || c.timestamp >= alignedEntryTime)
+      .filter((c) => entryCandleOpenMs === 0 || c.timestamp >= entryCandleOpenMs)
       .map((c) => c.closePrice);
 
     if (!closesSinceEntry.length) {
@@ -806,7 +805,7 @@ class CombWaitForResolveState {
   }
 
   private _noteTrailCutBestPrice(candles: ICandleInfo[], side: TPositionSide): void {
-    const entryTs = this.bot.lastEntryTime > 0 ? Math.floor(this.bot.lastEntryTime / 60_000) * 60_000 : 0;
+    const entryTs = this.bot.getTrailEntryCandleOpenMs();
     for (const candle of candles) {
       if (entryTs > 0 && candle.timestamp < entryTs) continue;
       const price = side === "long" ? candle.highPrice : candle.lowPrice;

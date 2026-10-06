@@ -94,6 +94,8 @@ class CombWaitForSignalState {
         }
         this.ltpListenerRemover?.();
         this.bot.isOpeningPosition = true;
+        const triggerTs = Date.now();
+        const entryCandleOpenMs = Math.floor(triggerTs / 60_000) * 60_000;
         const triggerLevel = posDir === "long" ? this.bot.longTrigger : this.bot.shortTrigger;
         let entryGuard: EntryGuardResult | undefined;
         try {
@@ -103,6 +105,7 @@ class CombWaitForSignalState {
               requestedSide: posDir,
               price,
               trigger: triggerLevel,
+              triggerTs,
               activePositionsText: entryGuard.blockedActivePositionsText,
               blockedReason: entryGuard.blockedReason,
             });
@@ -115,7 +118,6 @@ class CombWaitForSignalState {
           if (this.bot.pauseRequested || this.bot.removeRequested) return;
 
           const budget = new BigNumber(this.bot.margin).times(this.bot.leverage).toFixed(2, BigNumber.ROUND_DOWN);
-          const triggerTs = Date.now();
           console.log(`[COMB] waitForSignal entryTrigger symbol=${this.bot.symbol} side=${posDir} price=${price} trigger=${triggerLevel}`);
           this.bot.queueMsg(
             posDir === "long"
@@ -191,7 +193,8 @@ class CombWaitForSignalState {
           this.bot.tpPbFixedPrice = undefined;
           this.bot.updateCurrStopLossFromPosition();
           this.bot.updateCurrTakeProfitFromPosition();
-          this.bot.lastEntryTime = Date.now();
+          this.bot.entryCandleOpenMs = entryCandleOpenMs;
+          this.bot.lastEntryTime = triggerTs;
           this.bot.lastEntrySignal = this.bot.lastSignalResult;
           this.bot.isBadEntrySignal = isCombBadEntrySignal(
             this.bot.lastEntrySignal,

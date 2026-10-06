@@ -151,6 +151,13 @@ class CombBotInstance {
   nextEntryAllowedAtMs?: number;
   lastSRUpdateTime: number = 0;
   lastEntryTime: number = 0;
+  /**
+   * Open time of the 1m candle whose high/low triggered entry.
+   * The backtest pushes that candle's close into the trailing window.
+   * Do not derive this from `lastEntryTime` after the order round-trip: that clock
+   * often falls in the next minute and drops the breakout close.
+   */
+  entryCandleOpenMs: number = 0;
   currActivePosition?: IPosition;
   entryWsPrice?: { price: number; time: Date };
   resolveWsPrice?: { price: number; time: Date };
@@ -358,6 +365,13 @@ class CombBotInstance {
   /** Notify the general bot of an instance event (position opened/closed, liquidated). No-op if onInstanceEvent not set. */
   notifyInstanceEvent(event: CombInstanceEvent): void {
     this.onInstanceEvent?.(event);
+  }
+
+  /** 1m open of the entry trigger candle. Falls back to flooring `lastEntryTime` for older positions. */
+  getTrailEntryCandleOpenMs(): number {
+    if (this.entryCandleOpenMs > 0) return this.entryCandleOpenMs;
+    if (this.lastEntryTime > 0) return Math.floor(this.lastEntryTime / 60_000) * 60_000;
+    return 0;
   }
 
   resetTrailingStopTracking(): void {
@@ -1228,6 +1242,7 @@ class CombBotInstance {
       this.currPositionTradeMargin = undefined;
 
       this.currActivePosition = undefined;
+      this.entryCandleOpenMs = 0;
       this.entryWsPrice = undefined;
       this.resolveWsPrice = undefined;
       this.justManuallyClosedBy = undefined;
@@ -1252,14 +1267,18 @@ class CombBotInstance {
     requestedSide: TPositionSide;
     price: number;
     trigger: number | null;
+    /** Wall-clock ms when price crossed the trigger, before the entry guard await. */
+    triggerTs?: number;
     activePositionsText?: string;
     blockedReason?: string;
   }): Promise<void> {
     if (this.currActivePosition) return;
 
     this.syncTradeMarginFromEquity();
-    const { requestedSide, price, trigger, activePositionsText, blockedReason } = args;
+    const { requestedSide, price, trigger, triggerTs, activePositionsText, blockedReason } = args;
     const now = new Date();
+    const entryMs = triggerTs ?? now.getTime();
+    this.entryCandleOpenMs = Math.floor(entryMs / 60_000) * 60_000;
     const entryAvgPrice = adverseSlippageEntryAvgPrice(requestedSide, price, this.pricePrecision);
     const simulatedNotional = new BigNumber(this.margin).times(this.leverage);
     const simulatedSize =
@@ -1305,7 +1324,7 @@ class CombBotInstance {
     this.resetBadEntryTracking();
     this.tpPbPercent = 0;
     this.tpPbFixedPrice = undefined;
-    this.lastEntryTime = Date.now();
+    this.lastEntryTime = entryMs;
     this.numberOfTrades++;
 
     this.lastCloseClientOrderId = undefined;
