@@ -162,6 +162,7 @@ class CombBotInstance {
   entryWsPrice?: { price: number; time: Date };
   resolveWsPrice?: { price: number; time: Date };
   trailingStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number; updatedAt: number };
+  trailExtremeValidAfterOpenMs?: number;
   trailingAtrWindow: ICandleInfo[] = [];
   trailingCloseWindow: number[] = [];
   trailingStopBreachCount: number = 0;
@@ -378,6 +379,7 @@ class CombBotInstance {
     this.trailingAtrWindow = [];
     this.trailingCloseWindow = [];
     this.trailingStopTargets = undefined;
+    this.trailExtremeValidAfterOpenMs = undefined;
     this.trailingStopBreachCount = 0;
     this.trailCutBreakoutLevel = undefined;
     this.trailCutTightened = false;

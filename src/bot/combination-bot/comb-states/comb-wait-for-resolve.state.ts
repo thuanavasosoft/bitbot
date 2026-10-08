@@ -286,20 +286,7 @@ class CombWaitForResolveState {
 
       if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
         const { bufferedLevel, rawLevel } = this.bot.trailingStopTargets;
-        const candles = this.bot.currCandles;
-        const lastCandle = candles[candles.length - 1];
-        const last2Candle = candles[candles.length - 2];
-        const candleExtremes = [lastCandle, last2Candle]
-          .filter((c): c is ICandleInfo => c != null)
-          .map((c) =>
-            position.side === "long" ? new BigNumber(c.lowPrice) : new BigNumber(c.highPrice)
-          );
-        const candleExtreme =
-          candleExtremes.length === 0
-            ? undefined
-            : position.side === "long"
-              ? BigNumber.min(...candleExtremes)
-              : BigNumber.max(...candleExtremes);
+        const candleExtreme = this._candleExtremeForActiveTrail(position.side);
         const isBreached = this._trailLevelBreached(position.side, priceBn, bufferedLevel);
 
         this.bot.trailingStopBreachCount = isBreached ? this.bot.trailingStopBreachCount + 1 : 0;
@@ -687,6 +674,7 @@ class CombWaitForResolveState {
     if (!closesSinceEntry.length) {
       this.bot.trailingCloseWindow = [];
       this.bot.trailingStopTargets = undefined;
+      this.bot.trailExtremeValidAfterOpenMs = undefined;
       return;
     }
 
@@ -695,12 +683,14 @@ class CombWaitForResolveState {
     const atrValue = this._calculateAtrValue(this.bot.trailingAtrWindow, this.bot.trailingAtrLength);
     if (atrValue === null || !Number.isFinite(atrValue) || atrValue <= 0) {
       this.bot.trailingStopTargets = undefined;
+      this.bot.trailExtremeValidAfterOpenMs = undefined;
       return;
     }
 
     const closesWindow = this.bot.trailingCloseWindow;
     if (!closesWindow.length) {
       this.bot.trailingStopTargets = undefined;
+      this.bot.trailExtremeValidAfterOpenMs = undefined;
       return;
     }
 
@@ -722,6 +712,7 @@ class CombWaitForResolveState {
 
     if (rawLevel === null || !Number.isFinite(rawLevel) || rawLevel <= 0) {
       this.bot.trailingStopTargets = undefined;
+      this.bot.trailExtremeValidAfterOpenMs = undefined;
       return;
     }
 
@@ -737,6 +728,9 @@ class CombWaitForResolveState {
       bufferedLevel,
       updatedAt: Date.now(),
     };
+    // Wicks of candles already included in this stop must not be tested against it.
+    const lastFolded = finishedCandles[finishedCandles.length - 1];
+    this.bot.trailExtremeValidAfterOpenMs = lastFolded?.openTime ?? cutoffTs;
     this._applyTrailCut(finishedCandles, position, atrValue, closesWindow);
   }
 
@@ -920,13 +914,22 @@ class CombWaitForResolveState {
     return side === "long" ? rawLevel * (1 + bufferPct) : rawLevel * (1 - bufferPct);
   }
 
+  /**
+   * Extreme of candles that opened after the active stop was computed.
+   * A finished candle's wick is only valid against the stop that was already
+   * active while it formed, which is the previous update's level.
+   */
+  private _candleExtremeForActiveTrail(side: TPositionSide): BigNumber | undefined {
+    const validAfterOpenMs = this.bot.trailExtremeValidAfterOpenMs;
+    if (validAfterOpenMs == null) return undefined;
+    const forming = this.bot.currCandles.filter((c) => c.openTime > validAfterOpenMs).slice(-2);
+    if (!forming.length) return undefined;
+    const extremes = forming.map((c) => new BigNumber(side === "long" ? c.lowPrice : c.highPrice));
+    return side === "long" ? BigNumber.min(...extremes) : BigNumber.max(...extremes);
+  }
+
   private _trailLevelBreached(side: TPositionSide, priceBn: BigNumber, bufferedLevel: number): boolean {
-    const candles = this.bot.currCandles;
-    const recent = [candles[candles.length - 1], candles[candles.length - 2]].filter((c): c is ICandleInfo => c != null);
-    const extremes = recent.map((c) => (side === "long" ? new BigNumber(c.lowPrice) : new BigNumber(c.highPrice)));
-    const candleExtreme = extremes.length === 0
-      ? undefined
-      : side === "long" ? BigNumber.min(...extremes) : BigNumber.max(...extremes);
+    const candleExtreme = this._candleExtremeForActiveTrail(side);
     const level = new BigNumber(bufferedLevel);
     if (side === "long") return priceBn.lte(level) || (candleExtreme != null && candleExtreme.lte(level));
     return priceBn.gte(level) || (candleExtreme != null && candleExtreme.gte(level));
