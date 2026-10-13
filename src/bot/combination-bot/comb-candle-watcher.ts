@@ -164,6 +164,24 @@ class CombCandleWatcher {
         hardTakeProfitLevel = this.bot.currTakeProfitPrice;
       }
 
+      let trailCutMinProfit: { price: number; percent: number } | null = null;
+      const minUnrealizedPct = this.bot.trailCutMinMfePercent;
+      const openPos = this.bot.currActivePosition;
+      if (
+        minUnrealizedPct != null &&
+        this.bot.isTrailCutEnabled() &&
+        openPos &&
+        openPos.avgPrice > 0 &&
+        this.bot.leverage > 0
+      ) {
+        const move = minUnrealizedPct / 100 / this.bot.leverage;
+        const raw = openPos.side === "long" ? openPos.avgPrice * (1 + move) : openPos.avgPrice * (1 - move);
+        const price = new BigNumber(raw)
+          .decimalPlaces(this.bot.pricePrecision, openPos.side === "long" ? BigNumber.ROUND_UP : BigNumber.ROUND_DOWN)
+          .toNumber();
+        if (price > 0) trailCutMinProfit = { price, percent: minUnrealizedPct };
+      }
+
       const quantizedResistance = this.bot.currentResistance;
       const quantizedSupport = this.bot.currentSupport;
       if (quantizedResistance !== null) {
@@ -204,6 +222,7 @@ class CombCandleWatcher {
               ? { price: hardTakeProfitLevel, percent: this.bot.hardTakeProfitPercent ?? 0 }
               : undefined,
             marginStopLossLevel ? { price: marginStopLossLevel ?? 0, percent: this.bot.marginStopLossPercent ?? 0 } : null,
+            trailCutMinProfit,
           ),
         {
           label: "[CombCandleWatcher] generateImageOfCandlesWithSupportResistance",

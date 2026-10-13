@@ -141,6 +141,7 @@ export async function generateImageOfCandlesWithSupportResistance(
   tpPbLevel?: number | null,
   takeProfitLevel?: number | { price: number; percent: number } | null,
   marginStopLossLevel?: { price: number, percent: number } | null,
+  trailCutMinProfit?: { price: number; percent: number } | null,
 ): Promise<Buffer> {
   const canvas = createCanvas(1000, 1000);
   const ctx = canvas.getContext('2d');
@@ -368,6 +369,33 @@ export async function generateImageOfCandlesWithSupportResistance(
     };
   }
 
+  if (trailCutMinProfit != null && Number.isFinite(trailCutMinProfit.price) && trailCutMinProfit.price > 0) {
+    const cutColor = "#B8860B";
+    annotations.trailCutMinProfit = {
+      type: 'line' as any,
+      yMin: trailCutMinProfit.price,
+      yMax: trailCutMinProfit.price,
+      borderColor: cutColor,
+      borderWidth: 2,
+      borderDash: [2, 4],
+      label: {
+        display: true,
+        content: [`Trail cut min uPnL (≥${trailCutMinProfit.percent}%): ${trailCutMinProfit.price.toLocaleString()}`],
+        position: "end",
+        backgroundColor: cutColor,
+        color: "#FFFFFF",
+        xAdjust: 4,
+        font: {
+          size: 11,
+          weight: "bold",
+        },
+        padding: 4,
+        borderRadius: 4,
+        textAlign: "left",
+      },
+    };
+  }
+
   if (takeProfitLevel !== null && takeProfitLevel !== undefined) {
     const tpPrice = typeof takeProfitLevel === "number" ? takeProfitLevel : takeProfitLevel.price;
     const tpPercent = typeof takeProfitLevel === "number" ? undefined : takeProfitLevel.percent;
@@ -496,6 +524,22 @@ export async function generateImageOfCandlesWithSupportResistance(
     }
   ];
 
+  const candleLow = Math.min(...lowSeries);
+  const candleHigh = Math.max(...highSeries);
+  let yScale: { min: number; max: number } | undefined;
+  if (
+    trailCutMinProfit != null &&
+    Number.isFinite(trailCutMinProfit.price) &&
+    (trailCutMinProfit.price < candleLow || trailCutMinProfit.price > candleHigh)
+  ) {
+    const price = trailCutMinProfit.price;
+    const yPad = Math.max(candleHigh - candleLow, Math.abs(price - candleHigh), Math.abs(price - candleLow)) * 0.04;
+    yScale = {
+      min: Math.min(candleLow, price) - yPad,
+      max: Math.max(candleHigh, price) + yPad,
+    };
+  }
+
   const chart = new Chart(
     ctx,
     {
@@ -509,7 +553,8 @@ export async function generateImageOfCandlesWithSupportResistance(
           annotation: {
             annotations
           }
-        }
+        },
+        scales: yScale ? { y: yScale } : undefined,
       },
     },
   );

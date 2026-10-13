@@ -64,7 +64,6 @@ export type CombPnlHistoryPoint = {
 export type JustManuallyClosedBy = "close_pos" | "tp_pb" | "minority_prevention" | "margin_stop_loss" | "bad_signal" | "hard_take_profit" | "trail_cut";
 
 export type TrailCutMode = "multiplier" | "extreme";
-export type TrailCutCloseMode = "virtual" | "natural";
 
 export type CombRunBacktestArgs = {
   symbol: string;
@@ -166,15 +165,15 @@ export interface CombInstanceConfig {
    */
   TRAIL_CUT_PERCENT?: number;
   TRAIL_CUT_MODE?: TrailCutMode;
-  TRAIL_CUT_CLOSE_MODE?: TrailCutCloseMode;
-  /** Hours price must stall on the breakout side. Undefined = skip this filter. */
-  TRAIL_CUT_STALL_HOURS?: number;
-  /** Open PnL as % of margin. Undefined = skip this filter. */
-  TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT?: number;
-  /** PnL at the natural trail stop, as % of margin. Undefined = skip this filter. */
-  TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT?: number;
-  /** ROC fraction. Long: high vs close K bars back. Short: low vs that close. Undefined = skip. */
-  TRAIL_CUT_ROC_THRESHOLD?: number;
+  /** Minutes since the last favorable extreme. Undefined = skip this filter. */
+  TRAIL_CUT_STALL_MINUTES?: number;
+  /** Best open profit since entry, as % of margin. Undefined = skip this filter. */
+  TRAIL_CUT_MIN_MFE_PERCENT?: number;
+  /**
+   * Directional close ROC must be at or below this fraction.
+   * Long uses close ROC. Short uses the negated close ROC. Undefined = skip.
+   */
+  TRAIL_CUT_MAX_ROC_CLOSE?: number;
 }
 
 /** Order fill update shape used by comb-order-executor. */

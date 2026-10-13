@@ -4,7 +4,7 @@ import TelegramService from "@/services/telegram.service";
 import ExchangeService from "@/services/exchange-service/exchange-service";
 import BigNumber from "bignumber.js";
 import { randomUUID } from "crypto";
-import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult, CombTradeMarginMode, TrailCutCloseMode, TrailCutMode } from "./comb-types";
+import type { CombState, CombInstanceConfig, CombPnlHistoryPoint, CombInstanceEvent, JustManuallyClosedBy, CombClosedExitReason, CombSignalResult, CombTradeMarginMode, TrailCutMode } from "./comb-types";
 import CombOrderWatcher from "./comb-order-watcher";
 import CombCandles from "./comb-candles";
 import CombUtils, { getLtpOrMarkPrice, quantizePriceByPrecision } from "./comb-utils";
@@ -202,23 +202,20 @@ class CombBotInstance {
   /** Trail cut percent in (0, 100). Undefined = off. */
   trailCutPercent?: number;
   trailCutMode: TrailCutMode = "extreme";
-  trailCutCloseMode: TrailCutCloseMode = "natural";
-  trailCutStallHours?: number;
-  trailCutMinUnrealizedPnlPercent?: number;
-  trailCutMinBlueLinePnlPercent?: number;
-  /** ROC as a fraction, same unit as the backtest request. */
-  trailCutRocThreshold?: number;
-  /** Broken support/resistance at entry. Stall only counts while price stays beyond it. */
+  /** Minutes without a new favorable extreme. Undefined = skip. */
+  trailCutStallMinutes?: number;
+  /** Best open profit since entry, as % of margin. Undefined = skip. */
+  trailCutMinMfePercent?: number;
+  /** Directional close ROC cap, as a fraction. Undefined = skip. */
+  trailCutMaxRocClose?: number;
+  /** Broken support/resistance at entry. Close must be beyond it before the cut can arm. */
   trailCutBreakoutLevel?: number;
   trailCutTightened = false;
-  trailCutStallLevel?: number;
   trailCutStallSinceMs?: number;
   /** Best price since entry. Long: max high. Short: min low. */
   trailCutBestPrice?: number;
   trailCutStop?: { side: TPositionSide; rawLevel: number; bufferedLevel: number };
   trailCutBreachCount = 0;
-  /** Natural close was caused by the cut trail, so slippage uses that level. */
-  trailCutTriggeredExit = false;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -334,11 +331,9 @@ class CombBotInstance {
     this.badEntryShortRocLowThreshold = config.BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT;
     this.trailCutPercent = config.TRAIL_CUT_PERCENT;
     this.trailCutMode = config.TRAIL_CUT_MODE ?? "extreme";
-    this.trailCutCloseMode = config.TRAIL_CUT_CLOSE_MODE ?? "natural";
-    this.trailCutStallHours = config.TRAIL_CUT_STALL_HOURS;
-    this.trailCutMinUnrealizedPnlPercent = config.TRAIL_CUT_MIN_UNREALIZED_PNL_PERCENT;
-    this.trailCutMinBlueLinePnlPercent = config.TRAIL_CUT_MIN_BLUE_LINE_PNL_PERCENT;
-    this.trailCutRocThreshold = config.TRAIL_CUT_ROC_THRESHOLD;
+    this.trailCutStallMinutes = config.TRAIL_CUT_STALL_MINUTES;
+    this.trailCutMinMfePercent = config.TRAIL_CUT_MIN_MFE_PERCENT;
+    this.trailCutMaxRocClose = config.TRAIL_CUT_MAX_ROC_CLOSE;
 
     this.orderWatcher = new CombOrderWatcher();
 
@@ -383,22 +378,19 @@ class CombBotInstance {
     this.trailingStopBreachCount = 0;
     this.trailCutBreakoutLevel = undefined;
     this.trailCutTightened = false;
-    this.trailCutStallLevel = undefined;
     this.trailCutStallSinceMs = undefined;
     this.trailCutBestPrice = undefined;
     this.trailCutStop = undefined;
     this.trailCutBreachCount = 0;
-    this.trailCutTriggeredExit = false;
   }
 
   isTrailCutEnabled(): boolean {
     const cut = this.trailCutPercent;
     if (cut == null || !(cut > 0) || !(cut < 100)) return false;
     return (
-      (this.trailCutStallHours != null && this.trailCutStallHours > 0) ||
-      this.trailCutMinUnrealizedPnlPercent != null ||
-      this.trailCutMinBlueLinePnlPercent != null ||
-      this.trailCutRocThreshold != null
+      (this.trailCutStallMinutes != null && this.trailCutStallMinutes > 0) ||
+      this.trailCutMinMfePercent != null ||
+      this.trailCutMaxRocClose != null
     );
   }
 
@@ -544,15 +536,13 @@ class CombBotInstance {
 
     const mode = this.trailCutMode === "extreme" ? "lock" : "cut";
     const filters: string[] = [];
-    if (this.trailCutStallHours != null && this.trailCutStallHours > 0) filters.push(`stall ${this.trailCutStallHours}h`);
-    if (this.trailCutMinBlueLinePnlPercent != null) filters.push(`blue ≥${this.trailCutMinBlueLinePnlPercent}%`);
-    if (this.trailCutRocThreshold != null) filters.push(`ROC ≥${+(this.trailCutRocThreshold * 100).toFixed(4)}%`);
+    if (this.trailCutStallMinutes != null && this.trailCutStallMinutes > 0) filters.push(`stall ${this.trailCutStallMinutes}m`);
+    if (this.trailCutMinMfePercent != null) filters.push(`MFE ≥${this.trailCutMinMfePercent}%`);
+    if (this.trailCutMaxRocClose != null) filters.push(`ROC close ≤${+(this.trailCutMaxRocClose * 100).toFixed(4)}%`);
 
     const lines = [
-      `Trail ${mode}: ${this.trailCutPercent}% → ${this.trailCutCloseMode} | ${filters.length ? ` | ${filters.join(", ")}` : ""}`,
+      `Trail ${mode}: ${this.trailCutPercent}%${filters.length ? ` | ${filters.join(", ")}` : ""}`,
     ];
-    const unrealizedLine = this.formatTrailCutUnrealizedLine();
-    if (unrealizedLine) lines.push(unrealizedLine);
 
     if (this.currActivePosition && this.trailCutTightened) {
       const stop = this.trailCutStop;
@@ -569,38 +559,27 @@ class CombBotInstance {
     return lines.join("\n");
   }
 
+  /** Taker fee on entry notional plus exit notional (0.05% each side). */
+  private estimateRoundTripFees(avgPrice: number, exitPrice: number, size: number): BigNumber {
+    const qty = new BigNumber(size).abs();
+    return qty.times(avgPrice).plus(qty.times(exitPrice)).times(CombBotInstance.DASHBOARD_FEE_RATE);
+  }
+
   formatExpectedPnl(price: number | null | undefined): string {
     const position = this.currActivePosition;
     if (price == null || !position || !Number.isFinite(price)) return "";
-    const pnl = calc_UnrealizedPnl(position, price);
+    const gross = calc_UnrealizedPnl(position, price);
+    const fees = this.estimateRoundTripFees(position.avgPrice, price, position.size);
+    const pnl = new BigNumber(gross).minus(fees).toNumber();
     const icon = pnl >= 0 ? "🟩" : "🟥";
     return ` (expected pnl: ${icon} ${pnl.toFixed(2)} USDT)`;
   }
 
-  /** Price where open PnL reaches the min unrealized filter. Needs an open position. */
-  private formatTrailCutUnrealizedLine(): string | null {
-    const pct = this.trailCutMinUnrealizedPnlPercent;
-    if (pct == null) return null;
-
-    const margin = this.currPositionTradeMargin ?? this.margin;
-    const usdt = Number.isFinite(margin) ? (margin * pct) / 100 : null;
-    const usdtPart = usdt != null ? ` (+${formatEnUsNumber(usdt, 2)} USDT)` : "";
-    const pos = this.currActivePosition;
-    if (!pos || !(pos.avgPrice > 0) || !(this.leverage > 0)) {
-      return `Min uPnL: ≥${pct}%${usdtPart}`;
-    }
-
-    const move = pct / 100 / this.leverage;
-    const raw = pos.side === "long" ? pos.avgPrice * (1 + move) : pos.avgPrice * (1 - move);
-    const price = quantizePriceByPrecision(raw, this.pricePrecision, pos.side === "long" ? "up" : "down");
-    return `Min uPnL: ≥${pct}%${usdtPart} → ${formatEnUsNumber(price, this.pricePrecision)}`;
-  }
-
   private formatTrailCutStallProgress(): string | null {
-    const needed = this.trailCutStallHours;
+    const needed = this.trailCutStallMinutes;
     if (needed == null || !(needed > 0) || this.trailCutStallSinceMs == null) return null;
-    const elapsed = Math.max(0, (Date.now() - this.trailCutStallSinceMs) / 3_600_000);
-    return `stall ${elapsed.toFixed(1)}/${needed}h`;
+    const elapsedMin = Math.max(0, (Date.now() - this.trailCutStallSinceMs) / 60_000);
+    return `stall ${elapsedMin.toFixed(0)}/${needed}m`;
   }
 
   formatBadEntryStatus(): string {
@@ -749,9 +728,7 @@ class CombBotInstance {
       side,
     } as IPosition;
     const gross = calc_UnrealizedPnl(posForPnl, exitFill);
-    const entryNotional = new BigNumber(size).times(avgPrice);
-    const exitNotional = new BigNumber(size).times(exitFill);
-    const fees = entryNotional.plus(exitNotional).times(CombBotInstance.DASHBOARD_FEE_RATE);
+    const fees = this.estimateRoundTripFees(avgPrice, exitFill, size);
     return new BigNumber(gross).minus(fees).toNumber();
   }
 
@@ -826,44 +803,35 @@ class CombBotInstance {
    */
   applyTrailCutConfig(update: {
     mode: TrailCutMode;
-    closeMode: TrailCutCloseMode;
     percent: number;
-    stallHours?: number;
-    minUnrealizedPnlPercent?: number;
-    minBlueLinePnlPercent?: number;
-    /** ROC fraction, same unit as the env config. */
-    rocThreshold?: number;
+    stallMinutes?: number;
+    minMfePercent?: number;
+    /** Directional close ROC cap, as a fraction. */
+    maxRocClose?: number;
   }): void {
     this.trailCutMode = update.mode;
-    this.trailCutCloseMode = update.closeMode;
     this.trailCutPercent = update.percent > 0 && update.percent < 100 ? update.percent : undefined;
-    this.trailCutStallHours = update.stallHours;
-    this.trailCutMinUnrealizedPnlPercent = update.minUnrealizedPnlPercent;
-    this.trailCutMinBlueLinePnlPercent = update.minBlueLinePnlPercent;
-    this.trailCutRocThreshold = update.rocThreshold;
+    this.trailCutStallMinutes = update.stallMinutes;
+    this.trailCutMinMfePercent = update.minMfePercent;
+    this.trailCutMaxRocClose = update.maxRocClose;
     this.trailCutTightened = false;
-    this.trailCutStallLevel = undefined;
     this.trailCutStallSinceMs = undefined;
     this.trailCutBestPrice = undefined;
     this.trailCutStop = undefined;
     this.trailCutBreachCount = 0;
-    this.trailCutTriggeredExit = false;
   }
 
   /** Turn trail cut off and drop any cut stop already armed. */
   disableTrailCut(): void {
     this.trailCutPercent = undefined;
-    this.trailCutStallHours = undefined;
-    this.trailCutMinUnrealizedPnlPercent = undefined;
-    this.trailCutMinBlueLinePnlPercent = undefined;
-    this.trailCutRocThreshold = undefined;
+    this.trailCutStallMinutes = undefined;
+    this.trailCutMinMfePercent = undefined;
+    this.trailCutMaxRocClose = undefined;
     this.trailCutTightened = false;
-    this.trailCutStallLevel = undefined;
     this.trailCutStallSinceMs = undefined;
     this.trailCutBestPrice = undefined;
     this.trailCutStop = undefined;
     this.trailCutBreachCount = 0;
-    this.trailCutTriggeredExit = false;
   }
 
   /**
@@ -1088,9 +1056,7 @@ class CombBotInstance {
     if (exitReason === "liquidation_exit") return null;
     let level: number | undefined;
     if (exitReason === "atr_trailing") {
-      level = this.trailCutTriggeredExit
-        ? this.trailCutStop?.bufferedLevel
-        : this.trailingStopTargets?.bufferedLevel;
+      level = this.trailingStopTargets?.bufferedLevel;
     }
     if (exitReason === "trail_cut") level = this.trailCutStop?.bufferedLevel;
     else if (exitReason === "margin_stop_loss") level = this.currStopLossPrice;
