@@ -265,7 +265,7 @@ class CombWaitForResolveState {
         !this.isManuallyClosingBy
       ) {
         const { bufferedLevel, rawLevel } = this.bot.trailCutStop;
-        const cutBreached = this._trailLevelBreached(position.side, priceBn, bufferedLevel);
+        const cutBreached = this._trailCutStopReached(priceBn, bufferedLevel);
         this.bot.trailCutBreachCount = cutBreached ? this.bot.trailCutBreachCount + 1 : 0;
         if (this.bot.trailCutBreachCount >= this.bot.trailConfirmBars) {
           shouldExit = true;
@@ -904,6 +904,27 @@ class CombWaitForResolveState {
     if (!forming.length) return undefined;
     const extremes = forming.map((c) => new BigNumber(side === "long" ? c.lowPrice : c.highPrice));
     return side === "long" ? BigNumber.min(...extremes) : BigNumber.max(...extremes);
+  }
+
+  /**
+   * The lock is a resting price. It is reached only when the market trades that
+   * level. A price sitting well above a short stop has not reached it.
+   */
+  private _trailCutStopReached(priceBn: BigNumber, bufferedLevel: number): boolean {
+    const level = new BigNumber(bufferedLevel);
+    if (!level.gt(0)) return false;
+    const bufferPct = this.bot.triggerBufferPercentage / 100 || 0;
+    const tolerance = level.times(bufferPct > 0 ? bufferPct : 0);
+    if (priceBn.minus(level).abs().lte(tolerance)) return true;
+
+    const validAfterOpenMs = this.bot.trailExtremeValidAfterOpenMs;
+    if (validAfterOpenMs == null) return false;
+    const forming = this.bot.currCandles.filter((c) => c.openTime > validAfterOpenMs).slice(-2);
+    return forming.some((c) => {
+      const low = new BigNumber(c.lowPrice);
+      const high = new BigNumber(c.highPrice);
+      return low.lte(level) && high.gte(level);
+    });
   }
 
   private _trailLevelBreached(side: TPositionSide, priceBn: BigNumber, bufferedLevel: number): boolean {
