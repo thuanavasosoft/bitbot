@@ -17,7 +17,6 @@ export type TailMultRunBacktestArgs = {
   trailingAtrLength: number;
   highestLookback: number;
   trailMultiplier: number;
-  trailConfirmBars: number;
   signalParams: SignalParams;
   tickSize?: number;
   pricePrecision?: number;
@@ -84,7 +83,6 @@ type RefStrategyConfig = {
   trailingAtrLength: number;
   highestLookback: number;
   trailMultiplier: number;
-  trailConfirmBars: number;
   signalParams: SignalParams;
   tradeStartMs: number;
   withLogs: boolean;
@@ -106,7 +104,6 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     totalFeesPaid: number;
     perBarReturns: number[];
     trailingStop: number | null;
-    trailingStopBreachCount: number;
     lastEntryTsMs: number | null;
     lastEntryFillPrice: number | null;
     lastExitTsMs: number | null;
@@ -129,14 +126,11 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     trailingAtrLength,
     highestLookback,
     trailMultiplier,
-    trailConfirmBars,
     signalParams,
     tradeStartMs,
     triggerBufferPercentage,
     pricePrecision,
   } = cfg;
-
-  const minTrailConfirmBars = Math.max(1, trailConfirmBars);
 
   // Minimum candles needed for signal calculation (reference semantics)
   const minCandlesForSignal = Math.max(
@@ -179,7 +173,6 @@ function createReferenceBreakoutExitTrailingAtrEngine(
   let maxCloseDeque: DequeEntry[] = [];
   let minCloseDeque: DequeEntry[] = [];
   let trailingStop: number | null = null;
-  let trailingStopBreachCount = 0;
 
   // For internal consistency checks
   let lastEntryTsMs: number | null = null;
@@ -218,7 +211,6 @@ function createReferenceBreakoutExitTrailingAtrEngine(
 
   const _resetTrailingState = (): void => {
     trailingStop = null;
-    trailingStopBreachCount = 0;
     closesSinceEntry = new Array(highestLookback);
     closesHead = 0;
     closesCount = 0;
@@ -559,7 +551,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
         entryTsMs: lastEntryTsMs,
         entryFillPrice: lastEntryFillPrice,
         trailingStop,
-        confirmCount: trailingStopBreachCount,
+        confirmCount: 0,
         exitTsMs: lastExitTsMs,
         exitFillPrice: lastExitFillPrice,
       });
@@ -582,7 +574,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
         entryTsMs: lastEntryTsMs,
         entryFillPrice: lastEntryFillPrice,
         trailingStop,
-        confirmCount: trailingStopBreachCount,
+        confirmCount: 0,
         exitTsMs: lastExitTsMs,
         exitFillPrice: lastExitFillPrice,
       });
@@ -606,7 +598,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
         entryTsMs: lastEntryTsMs,
         entryFillPrice: lastEntryFillPrice,
         trailingStop,
-        confirmCount: trailingStopBreachCount,
+        confirmCount: 0,
         exitTsMs: lastExitTsMs,
         exitFillPrice: lastExitFillPrice,
       });
@@ -631,12 +623,6 @@ function createReferenceBreakoutExitTrailingAtrEngine(
         const isStopBreached =
           current_position.side === "long" ? candle.low <= exitTrigger : candle.high >= exitTrigger;
 
-        if (isStopBreached) {
-          trailingStopBreachCount++;
-        } else {
-          trailingStopBreachCount = 0;
-        }
-
         if (withLogs) {
           console.log("=====================TRAILING STOP BREACH CHECK=======================");
           console.log("currentTime: ", toIso(currentTime.getTime()));
@@ -647,19 +633,15 @@ function createReferenceBreakoutExitTrailingAtrEngine(
           console.log("exitTrigger: ", exitTrigger);
           console.log("candle.low: ", candle.low);
           console.log("candle.high: ", candle.high);
-          console.log("minTrailConfirmBars: ", minTrailConfirmBars);
           console.log("isStopBreached: ", isStopBreached);
-          console.log("trailingStopBreachCount: ", trailingStopBreachCount);
 
           console.log("------------------------------------------------------------------------");
         }
 
-        if (trailingStopBreachCount >= minTrailConfirmBars) {
+        if (isStopBreached) {
           _closePositionIfAny(trailingStop, currentTime, "atr_trailing");
           closedByAtrThisBar = true;
         }
-      } else {
-        trailingStopBreachCount = 0;
       }
     }
 
@@ -710,7 +692,6 @@ function createReferenceBreakoutExitTrailingAtrEngine(
 
     if (enteredThisBar && current_position) {
       _updateTrailingStructures(candle.close, currentAtr, withLogs);
-      trailingStopBreachCount = 0;
     }
 
     // Calculate signal for NEXT iteration (after all checks and trades for current candle)
@@ -736,7 +717,7 @@ function createReferenceBreakoutExitTrailingAtrEngine(
       entryTsMs: lastEntryTsMs,
       entryFillPrice: lastEntryFillPrice,
       trailingStop,
-      confirmCount: trailingStopBreachCount,
+      confirmCount: 0,
       exitTsMs: lastExitTsMs,
       exitFillPrice: lastExitFillPrice,
     });
@@ -757,7 +738,6 @@ function createReferenceBreakoutExitTrailingAtrEngine(
     totalFeesPaid,
     perBarReturns,
     trailingStop,
-    trailingStopBreachCount,
     lastEntryTsMs,
     lastEntryFillPrice,
     lastExitTsMs,
@@ -833,7 +813,7 @@ export function _runBacktestInternalConsistencyTest(): void {
   // Deterministic ~50 candles with a couple of ramps + pullbacks to exercise:
   // - breakout entries (via calculateBreakoutSignal)
   // - trailing stop tightening
-  // - confirm bar counting
+  // - a single stop breach
   const candles: Candle[] = [];
   let price = 100;
   for (let i = 0; i < 50; i++) {
@@ -858,7 +838,6 @@ export function _runBacktestInternalConsistencyTest(): void {
     trailingAtrLength: 10,
     highestLookback: 10,
     trailMultiplier: 2,
-    trailConfirmBars: 2,
     signalParams: {
       N: 10,
       atr_len: 5,
@@ -888,7 +867,6 @@ function runBacktestReferenceEngineTrace(args: TailMultRunBacktestArgs): { trace
     trailingAtrLength,
     highestLookback,
     trailMultiplier,
-    trailConfirmBars,
     signalParams,
     requestedStartTime,
     margin: marginArg,
@@ -926,7 +904,6 @@ function runBacktestReferenceEngineTrace(args: TailMultRunBacktestArgs): { trace
     trailingAtrLength,
     highestLookback,
     trailMultiplier,
-    trailConfirmBars,
     signalParams,
     tradeStartMs,
     withLogs,
@@ -953,7 +930,6 @@ function runBacktestWithTrace(
     trailingAtrLength,
     highestLookback,
     trailMultiplier,
-    trailConfirmBars,
     signalParams,
     tickSize: tickSizeArg,
     pricePrecision: pricePrecisionArg,
@@ -993,7 +969,6 @@ function runBacktestWithTrace(
     trailingAtrLength,
     highestLookback,
     trailMultiplier,
-    trailConfirmBars,
     signalParams,
     tradeStartMs,
     withLogs,

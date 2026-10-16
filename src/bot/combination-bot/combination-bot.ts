@@ -164,7 +164,6 @@ const COMB_REQUIRED_KEYS: { env: string; type: "string" | "number" }[] = [
   { env: "N_SIGNAL_AND_ATR_LENGTH", type: "number" },
   { env: "UPDATE_INTERVAL_MINUTES", type: "number" },
   { env: "OPTIMIZATION_WINDOW_MINUTES", type: "number" },
-  { env: "TRAIL_CONFIRM_BARS", type: "number" },
   { env: "TRAIL_BOUND_STEP_SIZE", type: "number" },
   { env: "TRAIL_MULTIPLIER_BOUNDS_MIN", type: "number" },
   { env: "TRAIL_MULTIPLIER_BOUNDS_MAX", type: "number" },
@@ -650,7 +649,7 @@ class CombinationBot {
       lines.push(`Symbol: ${inst.symbol} | Leverage: X${inst.leverage}`);
       lines.push(inst.formatEquityStatus());
       lines.push(
-        `N Signal: ${inst.nSignal} | Opt Window: ${inst.optimizationWindowMinutes} min | Update Interval: ${inst.updateIntervalMinutes} min | Trigger Buffer: ${inst.triggerBufferPercentage}% | Trail confirm bars: ${inst.trailConfirmBars}`
+        `N Signal: ${inst.nSignal} | Opt Window: ${inst.optimizationWindowMinutes} min | Update Interval: ${inst.updateIntervalMinutes} min | Trigger Buffer: ${inst.triggerBufferPercentage}%`
       );
       lines.push(
         `Trail mult bounds: ${inst.trailMultiplierBounds.min} - ${inst.trailMultiplierBounds.max} | Step size: ${inst.trailBoundStepSize} | Current Trail mult: ${inst.trailingStopMultiplier} | Last optimized: ${inst.lastOptimizationAtMs > 0 ? toIso(inst.lastOptimizationAtMs + 1000) : "N/A"}`
@@ -983,7 +982,6 @@ class CombinationBot {
       N_SIGNAL_AND_ATR_LENGTH: nSignal,
       UPDATE_INTERVAL_MINUTES: updateIntervalMinutes,
       OPTIMIZATION_WINDOW_MINUTES: optimizationWindowMinutes,
-      TRAIL_CONFIRM_BARS: defaults.trailConfirmBars,
       TRAIL_BOUND_STEP_SIZE: defaults.trailBoundStepSize,
       TRAIL_MULTIPLIER_BOUNDS_MIN: minTrailMultiplier,
       TRAIL_MULTIPLIER_BOUNDS_MAX: maxTrailMultiplier,

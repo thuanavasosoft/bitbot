@@ -70,7 +70,6 @@ export type TMOBRunBacktestArgs = {
   trailingAtrLength: number;
   highestLookback: number;
   trailMultiplier: number;
-  trailConfirmBars: number;
   signalParams: SignalParams;
   triggerBufferPercentage: number;
   tickSize?: number;
@@ -147,7 +146,6 @@ export type TMOBRefStrategyConfig = {
   trailingAtrLength: number;
   highestLookback: number;
   trailMultiplier: number;
-  trailConfirmBars: number;
   signalParams: SignalParams;
   tradeStartMs: number;
   triggerBufferPercentage: number;

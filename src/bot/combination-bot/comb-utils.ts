@@ -104,7 +104,7 @@ class CombUtils {
     endFetchCandles.setMilliseconds(0);
     this.bot.lastOptimizationAtMs = endFetchCandles.getTime();
     const optimizationWindowStartDate = new Date(
-      endFetchCandles.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars) * 60 * 1000
+      endFetchCandles.getTime() - (this.bot.optimizationWindowMinutes + this.bot.nSignal) * 60 * 1000
     );
 
     await this.bot.combCandles.ensurePopulated();
@@ -135,7 +135,6 @@ class CombUtils {
       endCandle: formattedCandles[formattedCandles.length - 1],
       trailingAtrLength: this.bot.trailingAtrLength,
       highestLookback: this.bot.trailingHighestLookback,
-      trailConfirmBars: this.bot.trailConfirmBars,
       signalParams: {
         N: this.bot.nSignal,
         atr_len: COMB_DEFAULT_SIGNAL_PARAMS.atr_len,

@@ -67,7 +67,6 @@ ${this.bot.formatHardTakeProfitStatus()}
 ${this.bot.formatBadEntryStatus()}
 ${this.bot.formatTrailCutStatus()}
 Buffer: ${this.bot.triggerBufferPercentage}%
-Trail confirm bars: ${this.bot.trailConfirmBars}
 
 === PARAMS ===
 N Signal: ${this.bot.trailingAtrLength}

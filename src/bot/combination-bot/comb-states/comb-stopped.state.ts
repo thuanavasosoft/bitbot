@@ -17,7 +17,6 @@ class CombStoppedState {
     this.bot.shortTrigger = null;
 
     this.bot.resetTrailingStopTracking();
-    this.bot.trailingStopBreachCount = 0;
     this.bot.resetBadEntryTracking();
     this.bot.lastSignalResult = null;
 

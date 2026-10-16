@@ -130,7 +130,6 @@ class CombBotInstance {
   nSignal: number;
   optimizationWindowMinutes: number;
   updateIntervalMinutes: number;
-  trailConfirmBars: number;
   trailingAtrLength: number;
   trailingHighestLookback: number;
   trailBoundStepSize: number;
@@ -165,7 +164,6 @@ class CombBotInstance {
   trailExtremeValidAfterOpenMs?: number;
   trailingAtrWindow: ICandleInfo[] = [];
   trailingCloseWindow: number[] = [];
-  trailingStopBreachCount: number = 0;
   currTrailMultiplier?: number;
   trailingStopMultiplier: number = 0;
   /** Temporary override for trailing stop multiplier. Cleared when position is closed. */
@@ -215,7 +213,11 @@ class CombBotInstance {
   /** Best price since entry. Long: max high. Short: min low. */
   trailCutBestPrice?: number;
   trailCutStop?: { side: TPositionSide; rawLevel: number; bufferedLevel: number };
-  trailCutBreachCount = 0;
+  /**
+   * Set from the arm candle's close. True when that close was already on the
+   * adverse side of the cut trigger, matching the backtest.
+   */
+  trailCutArmedFromAdverse = false;
   lastOptimizationAtMs: number = 0;
   pricePrecision: number = 0;
   tickSize: number = 0;
@@ -321,7 +323,6 @@ class CombBotInstance {
     this.trailingHighestLookback = config.N_SIGNAL_AND_ATR_LENGTH;
     this.optimizationWindowMinutes = config.OPTIMIZATION_WINDOW_MINUTES;
     this.updateIntervalMinutes = config.UPDATE_INTERVAL_MINUTES;
-    this.trailConfirmBars = config.TRAIL_CONFIRM_BARS;
     this.trailBoundStepSize = config.TRAIL_BOUND_STEP_SIZE;
     this.trailMultiplierBounds = { min: config.TRAIL_MULTIPLIER_BOUNDS_MIN, max: config.TRAIL_MULTIPLIER_BOUNDS_MAX };
     this.telegramChatId = config.TELEGRAM_CHAT_ID;
@@ -375,13 +376,12 @@ class CombBotInstance {
     this.trailingCloseWindow = [];
     this.trailingStopTargets = undefined;
     this.trailExtremeValidAfterOpenMs = undefined;
-    this.trailingStopBreachCount = 0;
     this.trailCutBreakoutLevel = undefined;
     this.trailCutTightened = false;
     this.trailCutStallSinceMs = undefined;
     this.trailCutBestPrice = undefined;
     this.trailCutStop = undefined;
-    this.trailCutBreachCount = 0;
+    this.trailCutArmedFromAdverse = false;
   }
 
   isTrailCutEnabled(): boolean {
@@ -818,7 +818,7 @@ class CombBotInstance {
     this.trailCutStallSinceMs = undefined;
     this.trailCutBestPrice = undefined;
     this.trailCutStop = undefined;
-    this.trailCutBreachCount = 0;
+    this.trailCutArmedFromAdverse = false;
   }
 
   /** Turn trail cut off and drop any cut stop already armed. */
@@ -831,7 +831,7 @@ class CombBotInstance {
     this.trailCutStallSinceMs = undefined;
     this.trailCutBestPrice = undefined;
     this.trailCutStop = undefined;
-    this.trailCutBreachCount = 0;
+    this.trailCutArmedFromAdverse = false;
   }
 
   /**

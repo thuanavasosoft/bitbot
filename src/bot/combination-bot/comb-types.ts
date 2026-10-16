@@ -77,7 +77,6 @@ export type CombRunBacktestArgs = {
   trailingAtrLength: number;
   highestLookback: number;
   trailMultiplier: number;
-  trailConfirmBars: number;
   signalParams: CombSignalParams;
   tickSize?: number;
   pricePrecision?: number;
@@ -146,7 +145,6 @@ export interface CombInstanceConfig {
   N_SIGNAL_AND_ATR_LENGTH: number;
   UPDATE_INTERVAL_MINUTES: number;
   OPTIMIZATION_WINDOW_MINUTES: number;
-  TRAIL_CONFIRM_BARS: number;
   TRAIL_BOUND_STEP_SIZE: number;
   TRAIL_MULTIPLIER_BOUNDS_MIN: number;
   TRAIL_MULTIPLIER_BOUNDS_MAX: number;

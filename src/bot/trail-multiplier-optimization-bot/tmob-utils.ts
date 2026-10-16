@@ -63,7 +63,6 @@ class TMOBUtils {
       endCandle: formattedCandles[formattedCandles.length - 1],
       trailingAtrLength: this.bot.trailingAtrLength,
       highestLookback: this.bot.trailingHighestLookback,
-      trailConfirmBars: this.bot.trailConfirmBars,
       signalParams: { N: this.bot.nSignal, ...TMOB_DEFAULT_SIGNAL_PARAMS },
       tickSize: this.bot.tickSize,
       pricePrecision: this.bot.pricePrecision,

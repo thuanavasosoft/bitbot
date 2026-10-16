@@ -24,7 +24,7 @@ class CombCandles {
   constructor(private bot: CombBotInstance) { }
 
   private get capacity(): number {
-    return this.bot.optimizationWindowMinutes + this.bot.nSignal + this.bot.trailConfirmBars + 5;
+    return this.bot.optimizationWindowMinutes + this.bot.nSignal + 5;
   }
 
   async ensurePopulated(): Promise<void> {

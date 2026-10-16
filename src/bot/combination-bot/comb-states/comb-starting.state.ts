@@ -74,7 +74,6 @@ Symbol: ${this.bot.symbol}
 Leverage: X${this.bot.leverage}
 ${this.bot.formatEquityStatus()}
 Trigger buffer percentage: ${this.bot.triggerBufferPercentage}%
-Trail confirm bars: ${this.bot.trailConfirmBars}
 ${this.bot.formatMarginStopLossStatus()}
 ${this.bot.formatHardTakeProfitStatus()}
 ${this.bot.formatBadEntryStatus()}

@@ -265,9 +265,9 @@ class CombWaitForResolveState {
         !this.isManuallyClosingBy
       ) {
         const { bufferedLevel, rawLevel } = this.bot.trailCutStop;
-        const cutBreached = this._trailCutStopReached(priceBn, bufferedLevel);
-        this.bot.trailCutBreachCount = cutBreached ? this.bot.trailCutBreachCount + 1 : 0;
-        if (this.bot.trailCutBreachCount >= this.bot.trailConfirmBars) {
+        const cutCandle = this._postArmTrailCutCandle();
+        const cutBreached = cutCandle != null && this._trailCutCandleCrossed(position.side, bufferedLevel, cutCandle);
+        if (cutBreached) {
           shouldExit = true;
           exitReason = "trail_cut";
           this.isManuallyClosingBy = "trail_cut";
@@ -278,8 +278,6 @@ class CombWaitForResolveState {
             `✂️ Trail cut (${position.side}) triggered\nPrice: ${price}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
           );
         }
-      } else if (!shouldExit) {
-        this.bot.trailCutBreachCount = 0;
       }
 
       if (!shouldExit && this.bot.trailingStopTargets && this.bot.trailingStopTargets.side === position.side) {
@@ -287,9 +285,7 @@ class CombWaitForResolveState {
         const candleExtreme = this._candleExtremeForActiveTrail(position.side);
         const isBreached = this._trailLevelBreached(position.side, priceBn, bufferedLevel);
 
-        this.bot.trailingStopBreachCount = isBreached ? this.bot.trailingStopBreachCount + 1 : 0;
-
-        if (this.bot.trailingStopBreachCount >= this.bot.trailConfirmBars) {
+        if (isBreached) {
           shouldExit = true;
           exitReason = "atr_trailing";
           console.log(
@@ -299,8 +295,6 @@ class CombWaitForResolveState {
             `🟣 Trailing stop (${position.side}) triggered\nPrice: ${price}\nCandle ${position.side === "long" ? "low" : "high"}: ${candleExtreme ?? "N/A"}\nBuffered stop: ${bufferedLevel}\nRaw stop: ${rawLevel}`
           );
         }
-      } else if (!shouldExit) {
-        this.bot.trailingStopBreachCount = 0;
       }
 
       if (shouldExit) {
@@ -751,7 +745,7 @@ class CombWaitForResolveState {
 
     if (!this.bot.trailCutTightened) {
       this.bot.trailCutStop = undefined;
-      this.bot.trailCutBreachCount = 0;
+      this.bot.trailCutArmedFromAdverse = false;
       return;
     }
 
@@ -778,6 +772,11 @@ class CombWaitForResolveState {
     }
 
     if (justArmed) {
+      const close = candle.closePrice;
+      const trigger = this.bot.trailCutStop?.bufferedLevel;
+      this.bot.trailCutArmedFromAdverse = trigger != null && Number.isFinite(close) && Number.isFinite(trigger)
+        ? position.side === "long" ? close < trigger : close > trigger
+        : false;
       const stop = this.bot.trailCutStop?.bufferedLevel;
       const stopText = stop != null ? stop : "pending";
       const kind = this.bot.trailCutMode === "extreme" ? "lock extreme" : "cut multiplier";
@@ -906,25 +905,29 @@ class CombWaitForResolveState {
     return side === "long" ? BigNumber.min(...extremes) : BigNumber.max(...extremes);
   }
 
+  /** Latest candle that opened after the bar that armed or last updated the cut. */
+  private _postArmTrailCutCandle(): ICandleInfo | null {
+    const validAfterOpenMs = this.bot.trailExtremeValidAfterOpenMs;
+    if (validAfterOpenMs == null) return null;
+    const forming = this.bot.currCandles.filter((c) => c.openTime > validAfterOpenMs);
+    return forming.length ? forming[forming.length - 1] : null;
+  }
+
   /**
-   * The lock is a resting price. It is reached only when the market trades that
-   * level. A price sitting well above a short stop has not reached it.
+   * Same cross as the backtest. The arm close picks the side: if it was already
+   * adverse, a later candle must trade its best price back through the trigger.
+   * Otherwise a later candle must trade its worst price through the trigger.
    */
-  private _trailCutStopReached(priceBn: BigNumber, bufferedLevel: number): boolean {
+  private _trailCutCandleCrossed(side: TPositionSide, bufferedLevel: number, candle: ICandleInfo): boolean {
     const level = new BigNumber(bufferedLevel);
     if (!level.gt(0)) return false;
-    const bufferPct = this.bot.triggerBufferPercentage / 100 || 0;
-    const tolerance = level.times(bufferPct > 0 ? bufferPct : 0);
-    if (priceBn.minus(level).abs().lte(tolerance)) return true;
-
-    const validAfterOpenMs = this.bot.trailExtremeValidAfterOpenMs;
-    if (validAfterOpenMs == null) return false;
-    const forming = this.bot.currCandles.filter((c) => c.openTime > validAfterOpenMs).slice(-2);
-    return forming.some((c) => {
-      const low = new BigNumber(c.lowPrice);
-      const high = new BigNumber(c.highPrice);
-      return low.lte(level) && high.gte(level);
-    });
+    const low = new BigNumber(candle.lowPrice);
+    const high = new BigNumber(candle.highPrice);
+    if (!low.isFinite() || !high.isFinite()) return false;
+    if (this.bot.trailCutArmedFromAdverse) {
+      return side === "long" ? high.gt(level) : low.lt(level);
+    }
+    return side === "long" ? low.lt(level) : high.gt(level);
   }
 
   private _trailLevelBreached(side: TPositionSide, priceBn: BigNumber, bufferedLevel: number): boolean {
