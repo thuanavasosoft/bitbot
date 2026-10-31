@@ -214,6 +214,9 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
   const badEntryShortRocLowThreshold = optionalPercentThresholdToFraction(
     envNumRequired(prefix + "BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT"),
   );
+  const badEntryMinUnrealizedPnlPercent = optionalFiniteNumber(
+    envNumRequired(prefix + "BAD_ENTRY_MIN_UNREALIZED_PNL_PERCENT"),
+  );
   const marginTradeMode = parseCombTradeMarginMode(String(config.MARGIN_TRADE_MODE ?? ""));
   if (!marginTradeMode) {
     const message = `[COMB] Combination-bot stopped: invalid COMB_BOT_${botIndex}_MARGIN_TRADE_MODE. Use fixed or percent_balance.`;
@@ -252,6 +255,7 @@ function loadCombConfigForBot(botIndex: number): CombInstanceConfig {
     HARD_TAKE_PROFIT_PCT: hardTakeProfit,
     BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT: badEntryLongRocHighThreshold,
     BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT: badEntryShortRocLowThreshold,
+    BAD_ENTRY_MIN_UNREALIZED_PNL_PERCENT: badEntryMinUnrealizedPnlPercent,
     MARGIN_TRADE_MODE: marginTradeMode,
     STARTING_BALANCE: startingBalance,
     MARGIN_PERCENT_OF_BALANCE: marginPercentOfBalance,
@@ -675,7 +679,7 @@ class CombinationBot {
       lines.push(inst.formatHardTakeProfitStatus());
       lines.push(inst.formatTrailCutStatus());
       lines.push(
-        `Entry Filter Long ROC High: ${inst.badEntryLongRocHighThreshold != null ? `${inst.badEntryLongRocHighThreshold * 100}%` : "off"} | Long ROC Low: ${inst.badEntryShortRocLowThreshold != null ? `-${Math.abs(inst.badEntryShortRocLowThreshold * 100)}%` : "off"}`
+        `Entry Filter Long ROC High: ${inst.badEntryLongRocHighThreshold != null ? `${inst.badEntryLongRocHighThreshold * 100}%` : "off"} | Long ROC Low: ${inst.badEntryShortRocLowThreshold != null ? `-${Math.abs(inst.badEntryShortRocLowThreshold * 100)}%` : "off"} | min uPnL: ${inst.badEntryMinUnrealizedPnlPercent != null ? `>${inst.badEntryMinUnrealizedPnlPercent}% of margin` : "off"}`
       );
       lines.push("");
       lines.push(">>> Individual Symbol Profit <<<");
@@ -817,6 +821,8 @@ class CombinationBot {
         "/set_tp all|{SYMBOL} {percent} — Hard take profit as % of margin \n(e.g. /set_tp all 40). 0 = disabled.",
         para,
         "/set_roc_filter all|{SYMBOL} {long_pct} {short_pct} — Bad-entry ROC filter \n(e.g. /set_roc_filter all 0.6 0.6). Both values required. 0 = disabled for that side.",
+        para,
+        "/set_bad_entry_min_pnl all|{SYMBOL} {percent|off} — Bad-entry close only when candle-close uPnL (% of margin) is above this \n(e.g. /set_bad_entry_min_pnl all 10). off = consolidation alone. 0 means only when uPnL is positive.",
         para,
         "/update_trail_cut {SYMBOL|ALL} {lock|cut} {percent} {min_mfe_pct} {stall_minutes} {max_roc_close_pct}",
         "lock = lock extreme, cut = shrink the trail multiplier. percent is 0–100. The close is always virtual.",
@@ -990,6 +996,7 @@ class CombinationBot {
       HARD_TAKE_PROFIT_PCT: hardTakeProfit && hardTakeProfit > 0 ? hardTakeProfit : undefined,
       BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT: defaults.badEntryLongRocHighThreshold,
       BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT: defaults.badEntryShortRocLowThreshold,
+      BAD_ENTRY_MIN_UNREALIZED_PNL_PERCENT: defaults.badEntryMinUnrealizedPnlPercent,
       TRAIL_CUT_PERCENT: defaults.trailCutPercent,
       TRAIL_CUT_MODE: defaults.trailCutMode,
       TRAIL_CUT_STALL_MINUTES: defaults.trailCutStallMinutes,
@@ -1910,6 +1917,63 @@ class CombinationBot {
         for (const inst of this.instances) {
           applyToInstance(inst);
         }
+        return;
+      }
+
+      const inst = this.instances.find((i) => i.symbol.toUpperCase() === target.toUpperCase());
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      applyToInstance(inst);
+      TelegramService.queueMsgPriority(`${inst.formatBadEntryStatus()} for ${inst.symbol}.`, this.generalChatId);
+    });
+
+    TelegramService.appendTgCmdHandler("set_bad_entry_min_pnl", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const parts = (ctx.text || "").trim().split(/\s+/).filter(Boolean);
+      const usage =
+        "Usage: /set_bad_entry_min_pnl all {percent|off} or /set_bad_entry_min_pnl {SYMBOL} {percent|off} (e.g. /set_bad_entry_min_pnl all 10). off = consolidation alone. 0 means only when uPnL is positive. Negatives are allowed.";
+
+      if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
+        TelegramService.queueMsgPriority("Use /set_bad_entry_min_pnl in the general channel.", String(chatId));
+        return;
+      }
+
+      const target = parts[1];
+      const valueRaw = parts[2];
+      if (!target || valueRaw === undefined) {
+        TelegramService.queueMsgPriority(usage, this.generalChatId);
+        return;
+      }
+
+      const turningOff = valueRaw.toLowerCase() === "off";
+      const percent = turningOff ? undefined : Number(valueRaw);
+      if (!turningOff && (percent == null || !Number.isFinite(percent))) {
+        TelegramService.queueMsgPriority(usage, this.generalChatId);
+        return;
+      }
+
+      const applyToInstance = (inst: CombBotInstance): void => {
+        inst.applyBadEntryMinUnrealizedPnlPercent(percent);
+        if (inst.telegramChatId) {
+          TelegramService.queueMsg(`${inst.formatBadEntryStatus()} for ${inst.symbol}.`, inst.telegramChatId);
+        }
+      };
+
+      if (target.toLowerCase() === "all") {
+        const symbolsStr = this.instances.map((i) => i.symbol).join(", ");
+        TelegramService.queueMsgPriority(
+          turningOff
+            ? `Bad-entry min uPnL off on all instances (${symbolsStr}). Consolidation alone can close.`
+            : `Setting bad-entry min uPnL to >${percent}% of margin on all instances (${symbolsStr}).`,
+          this.generalChatId
+        );
+        for (const inst of this.instances) applyToInstance(inst);
         return;
       }
 

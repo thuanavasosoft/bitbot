@@ -216,6 +216,11 @@ class CombBotInstance {
   isConsolidationAfterBreakout: boolean = false;
   badEntryLongRocHighThreshold?: number;
   badEntryShortRocLowThreshold?: number;
+  /**
+   * Bad-entry close only when candle-close uPnL (% of margin) is above this.
+   * Undefined = consolidation alone. 0 and negatives are valid thresholds.
+   */
+  badEntryMinUnrealizedPnlPercent?: number;
   /** Trail cut percent in (0, 100). Undefined = off. */
   trailCutPercent?: number;
   trailCutMode: TrailCutMode = "extreme";
@@ -351,6 +356,7 @@ class CombBotInstance {
     this.hardTakeProfitPercent = config.HARD_TAKE_PROFIT_PCT;
     this.badEntryLongRocHighThreshold = config.BAD_ENTRY_LONG_ROC_HIGH_THRESHOLD_PCT;
     this.badEntryShortRocLowThreshold = config.BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT;
+    this.badEntryMinUnrealizedPnlPercent = config.BAD_ENTRY_MIN_UNREALIZED_PNL_PERCENT;
     this.trailCutPercent = config.TRAIL_CUT_PERCENT;
     this.trailCutMode = config.TRAIL_CUT_MODE ?? "extreme";
     this.trailCutStallMinutes = config.TRAIL_CUT_STALL_MINUTES;
@@ -469,16 +475,52 @@ class CombBotInstance {
     if (!this.shouldCloseBadEntryOnClosedCandle(consolidationFromPreviousBar, closedCandleOpenMs)) {
       return;
     }
-    const side = this.currActivePosition?.side ?? "unknown";
+    const position = this.currActivePosition;
+    if (!position) return;
+
+    const minPnl = this.badEntryMinUnrealizedPnlPercent;
+    let unrealizedPnl: number | null = null;
+    if (minPnl != null) {
+      const closedCandle = this.currCandles.find((candle) => candle.openTime === closedCandleOpenMs);
+      const close = closedCandle?.closePrice;
+      if (close == null || !Number.isFinite(close)) {
+        console.log(
+          `[COMB] badSignal skipped: closed candle missing symbol=${this.symbol} closedCandleOpen=${new Date(closedCandleOpenMs).toISOString()}`
+        );
+        return;
+      }
+      const exitFill = this.quantizeToTick(close, position.side === "long" ? "down" : "up");
+      unrealizedPnl = this.pnlPercentOfMargin(position.side, position.avgPrice, exitFill);
+      if (unrealizedPnl == null || unrealizedPnl <= minPnl) {
+        console.log(
+          `[COMB] badSignal skipped: uPnL=${unrealizedPnl ?? "n/a"} <= min=${minPnl} symbol=${this.symbol} exitFill=${exitFill}`
+        );
+        return;
+      }
+    }
+
+    const side = position.side;
     console.log(
-      `[COMB] badSignal candleClose (${side}) symbol=${this.symbol} closedCandleOpen=${new Date(closedCandleOpenMs).toISOString()}`
+      `[COMB] badSignal candleClose (${side}) symbol=${this.symbol} closedCandleOpen=${new Date(closedCandleOpenMs).toISOString()}` +
+      (unrealizedPnl != null ? ` uPnL=${unrealizedPnl}` : "")
     );
+    const pnlLine =
+      unrealizedPnl != null && minPnl != null
+        ? `\nuPnL at close: ${unrealizedPnl.toFixed(2)}% of margin (min > ${minPnl}%)`
+        : "";
     this.queueMsg(
       `ℹ️ℹ️ℹ️ Bad entry consolidation triggered at candle close (${side})\n` +
-      `Closed candle open: ${new Date(closedCandleOpenMs).toISOString()}\n` +
+      `Closed candle open: ${new Date(closedCandleOpenMs).toISOString()}${pnlLine}\n` +
       `${this.formatBadEntryStatus()}`
     );
     await this.virtualClosePosition("bad_signal");
+  }
+
+  /** Open PnL as a percent of margin. Same unit as the dashboard bad-entry filter. */
+  private pnlPercentOfMargin(side: TPositionSide, entryPrice: number, markPrice: number): number | null {
+    if (!(entryPrice > 0) || !(this.leverage > 0) || !Number.isFinite(markPrice)) return null;
+    const move = side === "long" ? (markPrice - entryPrice) / entryPrice : (entryPrice - markPrice) / entryPrice;
+    return move * this.leverage * 100;
   }
 
   /** ATR trail: last two finished candles vs their own stops. Candle watcher only, once per minute. */
@@ -612,7 +654,11 @@ class CombBotInstance {
   }
 
   formatBadEntryStatus(): string {
-    if (!this.isBadEntryCloseEnabled()) return "Bad-entry close: disabled";
+    const minPnl =
+      this.badEntryMinUnrealizedPnlPercent != null
+        ? ` | min uPnL > ${formatEnUsNumber(this.badEntryMinUnrealizedPnlPercent, 4)}% of margin`
+        : "";
+    if (!this.isBadEntryCloseEnabled()) return `Bad-entry close: disabled${minPnl}`;
     const longPct =
       this.badEntryLongRocHighThreshold != null
         ? `${(this.badEntryLongRocHighThreshold * 100)}%`
@@ -625,7 +671,7 @@ class CombBotInstance {
       this.currActivePosition && !this.justManuallyClosedBy
         ? ` | is currently flagged=${this.isBadEntrySignal ? "yes" : "no"}`
         : "";
-    return `Bad-entry close: long ROC high ${longPct} / short ROC low ${shortPct}${live}`;
+    return `Bad-entry close: long ROC high ${longPct} / short ROC low ${shortPct}${minPnl}${live}`;
   }
 
   private hasRealExchangePosition(): boolean {
@@ -966,6 +1012,18 @@ class CombBotInstance {
       Number.isFinite(longPct) && longPct > 0 ? longPct / 100 : undefined;
     this.badEntryShortRocLowThreshold =
       Number.isFinite(shortPct) && shortPct > 0 ? shortPct / 100 : undefined;
+  }
+
+  /**
+   * Min candle-close uPnL (% of margin) required before a bad-entry close.
+   * Undefined, or a non-finite value, turns the filter off. 0 and negatives stay as thresholds.
+   */
+  applyBadEntryMinUnrealizedPnlPercent(percent: number | undefined): void {
+    if (percent == null || !Number.isFinite(percent)) {
+      this.badEntryMinUnrealizedPnlPercent = undefined;
+      return;
+    }
+    this.badEntryMinUnrealizedPnlPercent = percent;
   }
 
   /** Refresh trailing stop levels (if in wait-for-resolve) and send the price chart to the instance channel. */

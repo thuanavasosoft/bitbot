@@ -159,6 +159,11 @@ export interface CombInstanceConfig {
   /** Short bad-entry if rocLow is below -abs(this) fraction. Undefined = disabled. */
   BAD_ENTRY_SHORT_ROC_LOW_THRESHOLD_PCT?: number;
   /**
+   * Bad-entry close only when candle-close unrealized PnL (% of margin) is above this.
+   * Any finite number, including 0 and negatives. Undefined = consolidation alone.
+   */
+  BAD_ENTRY_MIN_UNREALIZED_PNL_PERCENT?: number;
+  /**
    * Trail cut. Undefined = disabled.
    * Needs a cut percent in (0, 100) and at least one filter.
    */
