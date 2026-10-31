@@ -808,7 +808,7 @@ class CombinationBot {
         para,
         "/set_margin all|{SYMBOL} percent_balance {percent} {equity} — Set MARGIN_TRADE_MODE=percent_balance. Next-entry size = percent% of paper equity \n(e.g. /set_margin all percent_balance 10 1000 → 100 USDT). Paper equity compounds on natural close, not virtual SL/TP.",
         para,
-        "/set_margin all|{SYMBOL} fixed {usdt} — Set MARGIN_TRADE_MODE=fixed. Next-entry size is that USDT every trade \n(e.g. /set_margin BTCUSDT fixed 150). Paper compounding off.",
+        "/set_margin all|{SYMBOL} fixed {usdt} — Set MARGIN_TRADE_MODE=fixed. Next-entry size is that USDT every trade. Balance resets to 10 × that amount and refills only up to that cap \n(e.g. /set_margin BTCUSDT fixed 150 → balance cap 1500). The symbol stops when the balance falls below the next-entry size.",
         para,
         "/set_leverage all|{SYMBOL} {newLeverage} — Set leverage \n(e.g. /set_leverage all 10 or /set_leverage BTCUSDT 15).",
         para,
@@ -1496,8 +1496,10 @@ class CombinationBot {
         "  MARGIN_TRADE_MODE=percent_balance. Next-entry size = percent% of paper equity.\n" +
         "  Example: /set_margin all percent_balance 10 1000 → 10% of 1000 = 100 USDT per trade.\n" +
         "/set_margin all|{SYMBOL} fixed {usdt}\n" +
-        "  MARGIN_TRADE_MODE=fixed. Next-entry size = usdt every trade (no compounding).\n" +
-        "  Example: /set_margin BTCUSDT fixed 150.";
+        "  MARGIN_TRADE_MODE=fixed. Next-entry size = usdt every trade.\n" +
+        "  Balance resets to 10 × usdt and refills only up to that cap.\n" +
+        "  The symbol stops when the balance falls below the next-entry size.\n" +
+        "  Example: /set_margin BTCUSDT fixed 150 → balance cap 1500.";
 
       if (!this.generalChatId || String(chatId) !== String(this.generalChatId)) {
         TelegramService.queueMsgPriority(
@@ -1589,7 +1591,7 @@ class CombinationBot {
 
       const describeConfig =
         config.mode === "fixed"
-          ? `MARGIN_TRADE_MODE=fixed, next-entry size ${config.margin} USDT every trade (compounding OFF)`
+          ? `MARGIN_TRADE_MODE=fixed, next-entry size ${config.margin} USDT, balance reset to ${config.margin * 10} USDT (profits refill up to that cap)`
           : `MARGIN_TRADE_MODE=percent_balance, next-entry size ${config.percent}% of paper equity ${config.equity} USDT (compounding ON)`;
 
       if (target.toLowerCase() === "all") {

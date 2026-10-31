@@ -38,6 +38,7 @@ class CombWaitForSignalState {
   private async _handlePriceUpdate(price: number) {
     try {
       if (
+        this.bot.stopIfFixedBankrollBelowMargin() ||
         (this.bot.longTrigger === null && this.bot.shortTrigger === null) ||
         this.bot.currActivePosition ||
         this.bot.isOpeningPosition ||

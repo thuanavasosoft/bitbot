@@ -125,8 +125,9 @@ export interface CombInstanceConfig {
   /** Next-entry sizing. `percent_balance` requires STARTING_BALANCE. */
   MARGIN_TRADE_MODE: CombTradeMarginMode;
   /**
-   * Paper starting equity. Required when MARGIN_TRADE_MODE=percent_balance.
-   * Unused for sizing when mode is fixed.
+   * `percent_balance`: required paper starting equity. Equity compounds with PnL.
+   * `fixed`: optional balance cap. Omit to use 10 × MARGIN. Profits refill up to this cap.
+   * The symbol instance stops when the fixed balance falls below MARGIN.
    */
   STARTING_BALANCE?: number;
   /**

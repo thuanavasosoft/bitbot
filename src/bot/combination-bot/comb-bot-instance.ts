@@ -112,9 +112,15 @@ class CombBotInstance {
   symbol: string;
   leverage: number;
   margin: number;
-  /** Paper starting equity. Undefined = fixed-margin mode (no equity compounding). */
+  /**
+   * `percent_balance`: paper equity the book started from.
+   * `fixed`: balance cap. Profits cannot raise equity above this.
+   */
   startingBalance?: number;
-  /** Current paper equity. Only set when startingBalance is configured. */
+  /**
+   * `percent_balance`: current paper equity.
+   * `fixed`: current balance, never above startingBalance.
+   */
   equity?: number;
   /** Trade margin as % of equity (0 exclusive–100]. Derived from MARGIN if env percent omitted. */
   marginPercentOfBalance?: number;
@@ -122,6 +128,8 @@ class CombBotInstance {
   marginPercentBasis: "natural" | "virtual_independent" = "natural";
   /** Net PnL booked by the virtual close. Used for paper equity when basis is virtual_independent. */
   virtualCloseNetPnl?: number;
+  /** Fixed-balance PnL for this cycle was already booked at the exchange close. */
+  private fixedBankrollPnLBooked = false;
   /** Next-entry sizing: % of paper equity vs fixed USDT. */
   tradeMarginMode: CombTradeMarginMode = "fixed";
   /** Paper margin locked at the current cycle's entry. Cleared when the strategy cycle is finalized. */
@@ -161,6 +169,17 @@ class CombBotInstance {
   entryWsPrice?: { price: number; time: Date };
   resolveWsPrice?: { price: number; time: Date };
   trailingStopTargets?: { side: TPositionSide; rawLevel: number; bufferedLevel: number; updatedAt: number };
+  /**
+   * Last two finished candles, each paired with the stop used on that bar:
+   * closes from bars before it, ATR including that bar's high and low.
+   */
+  trailRecentCandleStops?: Array<{
+    side: TPositionSide;
+    candleOpenMs: number;
+    extreme: number;
+    rawLevel: number;
+    bufferedLevel: number;
+  }>;
   trailExtremeValidAfterOpenMs?: number;
   trailingAtrWindow: ICandleInfo[] = [];
   trailingCloseWindow: number[] = [];
@@ -303,7 +322,9 @@ class CombBotInstance {
     this.margin = config.MARGIN;
     this.tradeMarginMode = config.MARGIN_TRADE_MODE;
     const startingBalance = config.STARTING_BALANCE;
-    if (startingBalance != null && Number.isFinite(startingBalance) && startingBalance > 0) {
+    if (this.tradeMarginMode === "fixed") {
+      this.resetFixedBankroll(startingBalance);
+    } else if (startingBalance != null && Number.isFinite(startingBalance) && startingBalance > 0) {
       this.startingBalance = startingBalance;
       this.equity = startingBalance;
     }
@@ -375,6 +396,7 @@ class CombBotInstance {
     this.trailingAtrWindow = [];
     this.trailingCloseWindow = [];
     this.trailingStopTargets = undefined;
+    this.trailRecentCandleStops = undefined;
     this.trailExtremeValidAfterOpenMs = undefined;
     this.trailCutBreakoutLevel = undefined;
     this.trailCutTightened = false;
@@ -457,6 +479,13 @@ class CombBotInstance {
       `${this.formatBadEntryStatus()}`
     );
     await this.virtualClosePosition("bad_signal");
+  }
+
+  /** ATR trail: last two finished candles vs their own stops. Candle watcher only, once per minute. */
+  async closeAtrTrailIfNeededOnCandleClose(): Promise<void> {
+    if (this.currentState !== this.waitForResolveState) return;
+    if (!this.currActivePosition || this.justManuallyClosedBy || this.isClosingPosition) return;
+    await this.waitForResolveState.closeIfRecentCandleTrailBreached();
   }
 
   /**
@@ -616,6 +645,7 @@ class CombBotInstance {
       this.tradeMarginMode = "fixed";
       this.margin = args.margin;
       this.marginPercentOfBalance = undefined;
+      this.resetFixedBankroll();
     } else {
       this.tradeMarginMode = "percent_balance";
       this.equity = args.equity;
@@ -639,6 +669,43 @@ class CombBotInstance {
     );
   }
 
+  isFixedBankrollEnabled(): boolean {
+    return (
+      this.tradeMarginMode === "fixed" &&
+      this.startingBalance != null &&
+      this.startingBalance > 0 &&
+      this.equity != null
+    );
+  }
+
+  /** Fixed balance cannot fund the next entry. Entry size stays at MARGIN. */
+  isFixedBankrollBelowMargin(): boolean {
+    return this.isFixedBankrollEnabled() && (this.equity as number) < this.margin;
+  }
+
+  /**
+   * Set the fixed-mode balance and its cap.
+   * An explicit positive balance is the cap. Otherwise the cap is 10 × current margin.
+   */
+  resetFixedBankroll(explicitBalance?: number): void {
+    const explicit =
+      explicitBalance != null && Number.isFinite(explicitBalance) && explicitBalance > 0
+        ? explicitBalance
+        : undefined;
+    const bankroll =
+      explicit ??
+      (this.margin > 0 ? this.margin * CombBotInstance.FIXED_BANKROLL_MARGIN_MULTIPLE : 0);
+    if (!(bankroll > 0)) {
+      this.startingBalance = undefined;
+      this.equity = undefined;
+      this.fixedBankrollPnLBooked = false;
+      return;
+    }
+    this.startingBalance = bankroll;
+    this.equity = bankroll;
+    this.fixedBankrollPnLBooked = false;
+  }
+
   syncTradeMarginFromEquity(): void {
     if (!this.isEquitySizingEnabled()) return;
     const equity = this.equity!;
@@ -653,6 +720,14 @@ class CombBotInstance {
 
   formatEquityStatus(): string {
     const nextEntry = formatEnUsNumber(this.margin, 4);
+    if (this.isFixedBankrollEnabled()) {
+      const balance = formatEnUsNumber(this.equity ?? 0, 4);
+      const cap = formatEnUsNumber(this.startingBalance!, 2);
+      return [
+        `Fixed balance: ${balance} USDT (cap ${cap}; profits refill up to the cap)`,
+        `Next-entry size: ${nextEntry} USDT (fixed; same amount every trade)`,
+      ].join("\n");
+    }
     if (this.tradeMarginMode === "fixed" || !this.isEquitySizingEnabled()) {
       return [
         `Next-entry size: ${nextEntry} USDT (fixed; same amount every trade)`,
@@ -677,6 +752,7 @@ class CombBotInstance {
    * Used only for simulated natural PnL after a virtual close.
    */
   private static readonly DASHBOARD_FEE_RATE = 0.05 / 100;
+  private static readonly FIXED_BANKROLL_MARGIN_MULTIPLE = 10;
 
   private quantizeToTick(price: number, mode: "up" | "down"): number {
     if (!Number.isFinite(price)) return price;
@@ -753,6 +829,53 @@ class CombBotInstance {
       `Paper equity: ${previous.toFixed(4)} → ${this.equity.toFixed(4)} USDT\n` +
       `Next-entry size: ${this.margin.toFixed(4)} USDT (${this.marginPercentOfBalance}% of paper equity)`
     );
+  }
+
+  /**
+   * Book realized PnL into the fixed balance. Profits refill up to startingBalance.
+   * Entry size does not change.
+   */
+  applyFixedBankrollDelta(delta: number, source: "natural_close" | "virtual_close"): void {
+    if (!this.isFixedBankrollEnabled() || this.equity == null || this.startingBalance == null) return;
+    if (!Number.isFinite(delta)) return;
+    const previous = this.equity;
+    const uncapped = new BigNumber(previous).plus(delta);
+    const cap = new BigNumber(this.startingBalance);
+    const next = uncapped.isGreaterThan(cap) ? cap : uncapped;
+    this.equity = next.toNumber();
+    const applied = next.minus(previous).toNumber();
+    const clamped = uncapped.isGreaterThan(cap);
+    console.log(
+      `[COMB] fixed balance updated symbol=${this.symbol} source=${source} delta=${delta.toFixed(4)} applied=${applied.toFixed(4)} balance=${previous.toFixed(4)}→${this.equity.toFixed(4)} cap=${this.startingBalance.toFixed(4)} margin=${this.margin.toFixed(4)}`
+    );
+    const reason = source === "virtual_close" ? "exchange close" : "natural close";
+    this.queueMsg(
+      `📊 Fixed balance updated (MARGIN_TRADE_MODE: fixed)\n` +
+      `Reason: ${reason}\n` +
+      `Delta: ${applied >= 0 ? "🟩" : "🟥"} ${applied.toFixed(4)} USDT\n` +
+      `Balance: ${previous.toFixed(4)} → ${this.equity.toFixed(4)} USDT (cap ${this.startingBalance.toFixed(4)})\n` +
+      (clamped ? `Profit above the cap was not added.\n` : "") +
+      `Next-entry size: ${this.margin.toFixed(4)} USDT`
+    );
+  }
+
+  /**
+   * Stop this symbol when the fixed balance cannot fund the next entry.
+   * Returns true when this call performed the stop.
+   */
+  stopIfFixedBankrollBelowMargin(): boolean {
+    if (!this.isFixedBankrollBelowMargin() || this.isStopped) return false;
+    const balance = this.equity ?? 0;
+    const reason = `fixed_balance_below_margin: balance=${balance.toFixed(4)} margin=${this.margin.toFixed(4)}`;
+    this.stopInstance(reason);
+    this.queueMsg(
+      `⛔ Fixed balance is below the next-entry size.\n` +
+      `Balance: ${balance.toFixed(4)} USDT\n` +
+      `Next-entry size: ${this.margin.toFixed(4)} USDT\n` +
+      `Stopping this symbol instance. Other symbols keep running.`
+    );
+    this.stateBus.emit(EEventBusEventType.StateChange, this.stoppedState);
+    return true;
   }
 
   /**
@@ -1206,7 +1329,10 @@ class CombBotInstance {
         } else {
           this.applyEquityDelta(this.lastNetPnl ?? 0, "natural_close");
         }
+      } else if (this.isFixedBankrollEnabled() && !this.fixedBankrollPnLBooked) {
+        this.applyFixedBankrollDelta(this.lastNetPnl ?? 0, "natural_close");
       }
+      this.fixedBankrollPnLBooked = false;
       this.currPositionTradeMargin = undefined;
 
       this.currActivePosition = undefined;
@@ -1223,6 +1349,9 @@ class CombBotInstance {
       this.currTakeProfitPrice = undefined;
       this.resetBadEntryTracking();
 
+      if (this.stopIfFixedBankrollBelowMargin()) {
+        return;
+      }
       if (!_options?.suppressStateChange) {
         this.stateBus.emit(EEventBusEventType.StateChange);
       }
@@ -1391,6 +1520,10 @@ class CombBotInstance {
         closedPosition.id,
       );
       this.virtualCloseNetPnl = netPnl;
+      if (this.isFixedBankrollEnabled()) {
+        this.applyFixedBankrollDelta(netPnl, "virtual_close");
+        this.fixedBankrollPnLBooked = true;
+      }
 
       this.notifyInstanceEvent({
         type: "position_closed",

@@ -306,6 +306,7 @@ class CombCandleWatcher {
             consolidationFromPreviousBar,
             closedCandleOpenMs,
           );
+          await this.bot.closeAtrTrailIfNeededOnCandleClose();
 
           const nowMs = Date.now();
           const nextMinuteStartMs = (Math.floor(nowMs / 60_000) + 1) * 60_000;
