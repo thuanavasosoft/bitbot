@@ -188,6 +188,12 @@ class CombBotInstance {
   /** Temporary override for trailing stop multiplier. Cleared when position is closed. */
   temporaryTrailMultiplier?: number;
   /**
+   * When reoptimization is due, keep the open position.
+   * The multiplier steering that position is frozen as a temp override.
+   * The optimized multiplier is stored for the next position.
+   */
+  preventReoptClose = false;
+  /**
    * TP_PB v2: percent of the gap between avg price and LTP at command time. 0 = disabled.
    * Fixed take-profit price is stored in tpPbFixedPrice until disabled or position finalized.
    */

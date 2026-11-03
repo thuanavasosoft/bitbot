@@ -76,6 +76,7 @@ Trail multiplier bounds: ${this.bot.trailMultiplierBounds.min} - ${this.bot.trai
 Current trail multiplier: ${this.bot.currTrailMultiplier}
 Last optimized: ${this.bot.lastOptimizationAtMs > 0 ? toIso(this.bot.lastOptimizationAtMs + 1000) : "N/A"}
 Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(this.bot.lastOptimizationAtMs, this.bot.updateIntervalMinutes, nowMs) / 1000))}
+Prevent reopt close: ${this.bot.preventReoptClose ? "on" : "off"}${this.bot.temporaryTrailMultiplier != null ? `\nTemporary trail multiplier: ${this.bot.temporaryTrailMultiplier}` : ""}
 
 === DETAILS ===
 ${await this.getFullUpdateDetailsMsg()}${this.bot.justManuallyClosedBy ? "\n" + formatCombJustManuallyClosedIndicator(this.bot.justManuallyClosedBy, this.bot.lastNetPnl) : ""}

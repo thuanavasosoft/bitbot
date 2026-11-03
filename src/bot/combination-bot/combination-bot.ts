@@ -661,6 +661,9 @@ class CombinationBot {
       lines.push(
         `Next reoptimization in: ${formatDurationAsHoursMinutes(Math.floor(getCombNextOptimizationRemainingMs(inst.lastOptimizationAtMs, inst.updateIntervalMinutes, nowMs) / 1000))}`
       );
+      lines.push(
+        `Prevent reopt close: ${inst.preventReoptClose ? "on" : "off"}${inst.temporaryTrailMultiplier != null ? ` | Active temp trail: ${inst.temporaryTrailMultiplier}` : ""}`
+      );
       lines.push(``)
       lines.push(`>>> Runtime Details <<<`)
       if (inst.currActivePosition) {
@@ -808,6 +811,8 @@ class CombinationBot {
         para,
         "/temp_tm all|{SYMBOL} {value} — Set temporary trail multiplier \n(e.g. /temp_tm all 20). Cleared when position closes.",
         para,
+        "/prevent_reopt_close all|{SYMBOL} [off?] — Keep an open position when reoptimization is due. The current trail multiplier is locked as a temp value until that position closes, and the new multiplier is used on the next position. off disables it.",
+        para,
         "/tp_pb all|{SYMBOL} {percent} — Fixed TP at % of avg–LTP gap \n(e.g. /tp_pb all 50). 0 = disabled.",
         para,
         "/set_margin all|{SYMBOL} percent_balance {percent} {equity} — Set MARGIN_TRADE_MODE=percent_balance. Next-entry size = percent% of paper equity \n(e.g. /set_margin all percent_balance 10 1000 → 100 USDT). Paper equity compounds on natural close, not virtual SL/TP.",
@@ -858,6 +863,8 @@ class CombinationBot {
       "/close_pos — Close the active position for this bot instance (instance keeps running).",
       para,
       "/temp_tm {value} — Set temporary trail multiplier \n(e.g. /temp_tm 100). Cleared when position closes.",
+      para,
+      "/prevent_reopt_close [off?] — Keep the open position when reoptimization is due. The current trail multiplier stays as a temp value until the position closes. The new multiplier is used on the next position. off disables it.",
       para,
       "/tp_pb {percent} — Fixed TP: avg ± (gap×%) where gap = |LTP−avg| at command time \n(e.g. /tp_pb 50). 0 = disabled.",
       para,
@@ -1413,6 +1420,70 @@ class CombinationBot {
         bot.telegramChatId
       );
       await bot.refreshChartAndTrailingLevels();
+    });
+
+    TelegramService.appendTgCmdHandler("prevent_reopt_close", async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (chatId === undefined) return;
+      const parts = (ctx.text || "").trim().split(/\s+/).filter(Boolean);
+      const describe = (enabled: boolean) =>
+        enabled
+          ? "Prevent reopt close enabled. An open position stays open when reoptimization is due. Its current trail multiplier is locked as a temp value until that position closes. The new trail multiplier is used on the next position."
+          : "Prevent reopt close disabled. The next reoptimization will close an open position before applying the new trail multiplier.";
+
+      if (this.isGeneralChat(chatId)) {
+        const target = parts[1];
+        const mode = (parts[2] ?? "on").toLowerCase();
+        if (!target || (mode !== "on" && mode !== "off")) {
+          TelegramService.queueMsgPriority(
+            "Usage: /prevent_reopt_close all|{SYMBOL} [off?] (e.g. /prevent_reopt_close all or /prevent_reopt_close BTCUSDT off)",
+            this.generalChatId
+          );
+          return;
+        }
+        const enabled = mode === "on";
+        if (target.toLowerCase() === "all") {
+          if (this.instances.length === 0) {
+            TelegramService.queueMsgPriority("No instances are running.", this.generalChatId);
+            return;
+          }
+          for (const inst of this.instances) {
+            inst.preventReoptClose = enabled;
+            if (inst.telegramChatId) TelegramService.queueMsg(describe(enabled), inst.telegramChatId);
+          }
+          TelegramService.queueMsgPriority(
+            `Prevent reopt close ${enabled ? "enabled" : "disabled"} for ${this.instances.map((inst) => inst.symbol).join(", ")}.`,
+            this.generalChatId
+          );
+          return;
+        }
+        const inst = this.findInstanceBySymbol(target);
+        if (!inst) {
+          TelegramService.queueMsgPriority(
+            `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+            this.generalChatId
+          );
+          return;
+        }
+        inst.preventReoptClose = enabled;
+        const msg = `${inst.symbol}: ${describe(enabled)}`;
+        TelegramService.queueMsgPriority(msg, this.generalChatId);
+        if (inst.telegramChatId) TelegramService.queueMsg(describe(enabled), inst.telegramChatId);
+        return;
+      }
+
+      const bot = this.getInstanceByChatId(chatId);
+      if (!bot) {
+        TelegramService.queueMsg("Unknown channel.", String(chatId));
+        return;
+      }
+      const mode = (parts[1] ?? "on").toLowerCase();
+      if (mode !== "on" && mode !== "off") {
+        TelegramService.queueMsg("Usage: /prevent_reopt_close [off?]", bot.telegramChatId);
+        return;
+      }
+      bot.preventReoptClose = mode === "on";
+      TelegramService.queueMsg(describe(bot.preventReoptClose), bot.telegramChatId);
     });
 
     TelegramService.appendTgCmdHandler("tp_pb", async (ctx) => {

@@ -65,7 +65,20 @@ class CombOptimizationLoop {
       const triggerTs = Date.now();
       const activePosition = this.bot.currActivePosition;
 
-      if (this.bot.isClosingPosition) {
+      if (this.bot.preventReoptClose) {
+        if (this.bot.temporaryTrailMultiplier == null) {
+          this.bot.temporaryTrailMultiplier = this.bot.trailingStopMultiplier;
+        }
+        console.log(
+          `[COMB] optimizeLiveParams symbol=${this.bot.symbol} keepPositionOnReopt positionId=${activePosition.id} side=${activePosition.side} tempTrailMult=${this.bot.temporaryTrailMultiplier}`
+        );
+        this.bot.queueMsg(
+          `⏱️ [${toIso(triggerTs)}] Optimization update due — position kept open.\n` +
+          `Position ID: ${activePosition.id} (${activePosition.side})\n` +
+          `Current trail multiplier locked as temp: ${this.bot.temporaryTrailMultiplier}\n` +
+          `The new trail multiplier will be used on the next position.`
+        );
+      } else if (this.bot.isClosingPosition) {
         console.log(`[COMB] optimizeLiveParams symbol=${this.bot.symbol} close skipped: lock held by another close path`);
         this.bot.queueMsg(
           `⚠️ [${this.bot.symbol}] Optimization close order blocked: another close (trailing stop / liquidation) is already in progress — lock is held. Skipping to avoid double order.`
@@ -120,14 +133,21 @@ class CombOptimizationLoop {
     if (this.bot.currTrailMultiplier !== undefined) {
       this.bot.trailingStopMultiplier = this.bot.currTrailMultiplier;
       const nextOptimizationMs = this.bot.lastOptimizationAtMs + intervalMs + 1000;
+      const deferToNextPosition = this.bot.preventReoptClose && this.bot.currActivePosition != null && this.bot.temporaryTrailMultiplier != null;
       console.log(
-        `[COMB] optimizeLiveParams done symbol=${this.bot.symbol} newTrailMult=${this.bot.trailingStopMultiplier} nextDue=${toIso(nextOptimizationMs)}`
+        `[COMB] optimizeLiveParams done symbol=${this.bot.symbol} newTrailMult=${this.bot.trailingStopMultiplier} nextDue=${toIso(nextOptimizationMs)} deferToNextPosition=${deferToNextPosition}`
       );
       this.bot.queueMsg(
-        `✅ Optimization updated\n` +
-        `Trailing ATR Length: ${this.bot.trailingAtrLength} (fixed)\n` +
-        `Trailing Multiplier: ${this.bot.trailingStopMultiplier}\n` +
-        `Next optimization: ${toIso(nextOptimizationMs)}`
+        deferToNextPosition
+          ? `✅ Optimization updated\n` +
+            `Trailing ATR Length: ${this.bot.trailingAtrLength} (fixed)\n` +
+            `Trailing Multiplier: ${this.bot.trailingStopMultiplier} (next position)\n` +
+            `Current position keeps temp multiplier: ${this.bot.temporaryTrailMultiplier}\n` +
+            `Next optimization: ${toIso(nextOptimizationMs)}`
+          : `✅ Optimization updated\n` +
+            `Trailing ATR Length: ${this.bot.trailingAtrLength} (fixed)\n` +
+            `Trailing Multiplier: ${this.bot.trailingStopMultiplier}\n` +
+            `Next optimization: ${toIso(nextOptimizationMs)}`
       );
     }
   }
