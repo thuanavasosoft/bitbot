@@ -13,6 +13,8 @@ import type { CombInstanceConfig, CombState, CombInstanceEvent, CombMarginPercen
 import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
 import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
 import { formatCombJustManuallyClosedIndicator } from "./comb-candle-watcher";
+import { buildToolsRcRunRequest, formatToolsRcTag } from "./comb-tools-rc";
+import BacktestDashboardService from "@/services/backtest-dashboard.service";
 
 function toIso(ms: number): string {
   return new Date(ms).toISOString();
@@ -846,6 +848,8 @@ class CombinationBot {
         "/un_pnl — Show current unrealized PnL for all instances (one symbol per line).",
         para,
         "/reopt_ls — List all symbols with time until next reoptimization.",
+        para,
+        "/trigger_tools_rc all|{SYMBOL} — Start a trail-multiplier optimization run on the backtest dashboard using live instance params (start=runStart, end=now, tag=RC_DD-MM-YYYY UTC).",
       ].join("\n");
     }
 
@@ -2289,6 +2293,68 @@ class CombinationBot {
       }
       TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
     });
+
+    TelegramService.appendTgCmdHandler("trigger_tools_rc", async (ctx) => {
+      await this.handleTriggerToolsRcCommand(ctx);
+    });
+  }
+
+  private async handleTriggerToolsRcCommand(ctx: { chat?: { id: string | number }; text?: string }): Promise<void> {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    const usage = "Usage: /trigger_tools_rc all|{SYMBOL} (e.g. /trigger_tools_rc all or /trigger_tools_rc BTCUSDT)";
+
+    if (!this.isGeneralChat(chatId)) {
+      TelegramService.queueMsgPriority("Use /trigger_tools_rc in the general channel.", String(chatId));
+      return;
+    }
+
+    const parts = (ctx.text || "").trim().split(/\s+/).filter(Boolean);
+    const target = parts[1];
+    if (!target) {
+      TelegramService.queueMsgPriority(usage, this.generalChatId);
+      return;
+    }
+
+    let targets: CombBotInstance[];
+    if (target.toLowerCase() === "all") {
+      targets = [...this.instances];
+      if (targets.length === 0) {
+        TelegramService.queueMsgPriority("No instances are running.", this.generalChatId);
+        return;
+      }
+    } else {
+      const inst = this.findInstanceBySymbol(target);
+      if (!inst) {
+        TelegramService.queueMsgPriority(
+          `Unknown symbol: ${target}. Available: ${this.instances.map((i) => i.symbol).join(", ")}`,
+          this.generalChatId
+        );
+        return;
+      }
+      targets = [inst];
+    }
+
+    const tag = formatToolsRcTag();
+    const symbolsStr = targets.map((i) => i.symbol).join(", ");
+    TelegramService.queueMsgPriority(
+      `🧪 Triggering tools RC run(s) tag=${tag} for ${symbolsStr}...`,
+      this.generalChatId
+    );
+
+    const lines: string[] = [`[COMB] Tools RC results (tag=${tag}):`, ""];
+    const now = new Date();
+    for (const inst of targets) {
+      try {
+        const body = buildToolsRcRunRequest(inst, now);
+        const created = await BacktestDashboardService.createTrailMultiplierOptimizationRun(body);
+        lines.push(`✅ ${inst.symbol} — run ${created.id} (${created.status})`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        lines.push(`❌ ${inst.symbol} — ${message}`);
+      }
+    }
+    TelegramService.queueMsgLongPriority(lines.join("\n"), this.generalChatId);
   }
 
   async startMakeMoney(): Promise<void> {
