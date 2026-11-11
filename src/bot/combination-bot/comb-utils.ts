@@ -258,11 +258,12 @@ Optimization duration: ${(finishedOptimizationDate.getTime() - startOptimization
   }
 
   async broadcastToCopyTraders(msg: string): Promise<void> {
+    return;
     try {
       console.log("broadcastToCopyTraders: ", msg);
       this.bot.queueMsg(`🚀 broadcastToCopyTraders async: ${msg}`);
-      await this.bot.combinationBot.combWsServerService.broadcastMsg(msg);
-      await this.bot.combinationBot.combMsgBrokerService.publishFanout(msg);
+      // await this.bot.combinationBot.combWsServerService.broadcastMsg(msg);
+      // await this.bot.combinationBot.combMsgBrokerService.publishFanout(msg);
     } catch (error) {
       console.log(error);
       this.bot.queueMsg(`[COMB] broadcastToCopyTraders error: ${String(error)}`);

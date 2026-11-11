@@ -10,8 +10,8 @@ import BigNumber from "bignumber.js";
 import CombBotInstance from "./comb-bot-instance";
 import { formatDurationAsHoursMinutes, getCombNextOptimizationRemainingMs } from "./comb-utils";
 import type { CombInstanceConfig, CombState, CombInstanceEvent, CombMarginPercentBasis, CombTradeMarginMode, IClosePositionMsgToCopyTrader, IOpenPositionMsgToCopyTrader, TrailCutMode } from "./comb-types";
-import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
-import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
+// import CombMsgBrokerService from "./comb-services/comb-msg-broker.service";
+// import CombWsServerService, { ILeverageMap, IWSMessage, IWSWelcomeMessage } from "./comb-services/comb-ws-server.service";
 import { formatCombJustManuallyClosedIndicator } from "./comb-candle-watcher";
 import { buildToolsRcRunRequest, formatToolsRcTag } from "./comb-tools-rc";
 import BacktestDashboardService from "@/services/backtest-dashboard.service";
@@ -283,54 +283,54 @@ function discoverCombBotCount(): number {
  * All logic lives in combination-bot folder; no imports from other bots.
  */
 class CombinationBot {
-  combWsServerService: CombWsServerService;
-  combMsgBrokerService: CombMsgBrokerService;
+  // combWsServerService: CombWsServerService;
+  // combMsgBrokerService: CombMsgBrokerService;
   connectedCopyTraderLabels: Set<string> = new Set();
   label: string = envStrRequired("COMB_BOT_LABEL") ?? "Combination Bot " + generateRandomString(10);
   isPreventMinorityEnabled: boolean = envBool("COMBINATION_BOT_IS_PREVENT_MINORITY", true);
 
-  /**
-   * Copy-trading infrastructure: optional RabbitMQ fanout + WebSocket server. Used only when running combination bot.
-   */
-  async startCopyTradingServices(): Promise<void> {
-    TelegramService.queueMsg("🗄 Starting copy trading services...", this.generalChatId);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    try {
-      await this.combMsgBrokerService.connect();
+  // /**
+  //  * Copy-trading infrastructure: optional RabbitMQ fanout + WebSocket server. Used only when running combination bot.
+  //  */
+  // async startCopyTradingServices(): Promise<void> {
+  //   TelegramService.queueMsg("🗄 Starting copy trading services...", this.generalChatId);
+  //   await new Promise(resolve => setTimeout(resolve, 1000));
+  //   try {
+  //     await this.combMsgBrokerService.connect();
 
-      this.combWsServerService.start();
-      this.combWsServerService.addMsgHandler((rawMsg, client) => {
-        const msg: IWSMessage = JSON.parse(rawMsg);
-        if (msg.type === "halo") {
-          console.log("halo message received", msg);
+  //     this.combWsServerService.start();
+  //     this.combWsServerService.addMsgHandler((rawMsg, client) => {
+  //       const msg: IWSMessage = JSON.parse(rawMsg);
+  //       if (msg.type === "halo") {
+  //         console.log("halo message received", msg);
 
-          const leverageMap: ILeverageMap = {};
-          if (msg.data.label !== "__verify_connection__") {
-            this.connectedCopyTraderLabels.add(msg.data.label);
-            this.queueGeneralMessage(`🔌 [COMB] Copy trader connected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
-            for (const inst of this.instances) {
-              leverageMap[inst.symbol] = inst.leverage;
-            }
-          }
+  //         const leverageMap: ILeverageMap = {};
+  //         if (msg.data.label !== "__verify_connection__") {
+  //           this.connectedCopyTraderLabels.add(msg.data.label);
+  //           this.queueGeneralMessage(`🔌 [COMB] Copy trader connected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
+  //           for (const inst of this.instances) {
+  //             leverageMap[inst.symbol] = inst.leverage;
+  //           }
+  //         }
 
-          client.send(JSON.stringify({
-            type: "welcome",
-            data: leverageMap,
-            label: this.label,
-          } as IWSWelcomeMessage));
-        }
+  //         client.send(JSON.stringify({
+  //           type: "welcome",
+  //           data: leverageMap,
+  //           label: this.label,
+  //         } as IWSWelcomeMessage));
+  //       }
 
-        if (msg.type === "bye") {
-          console.log("bye message received", msg);
+  //       if (msg.type === "bye") {
+  //         console.log("bye message received", msg);
 
-          this.connectedCopyTraderLabels.delete(msg.data.label);
-          this.queueGeneralMessage(`🔌 [COMB] Copy trader disconnected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
-        }
-      })
-    } catch (error) {
-      TelegramService.queueMsg("🗄 Error starting copy trading services: " + error, this.generalChatId);
-    }
-  }
+  //         this.connectedCopyTraderLabels.delete(msg.data.label);
+  //         this.queueGeneralMessage(`🔌 [COMB] Copy trader disconnected ${msg.data.label} (total traders: ${this.connectedCopyTraderLabels.size})`);
+  //       }
+  //     })
+  //   } catch (error) {
+  //     TelegramService.queueMsg("🗄 Error starting copy trading services: " + error, this.generalChatId);
+  //   }
+  // }
 
   private instances: CombBotInstance[] = [];
   private chatIdToInstance: Map<string, CombBotInstance> = new Map();
@@ -346,8 +346,8 @@ class CombinationBot {
       throw new Error("At least one bot must be configured. Set COMB_BOT_1_SYMBOL (and other COMB_BOT_1_* vars).");
     }
 
-    this.combWsServerService = new CombWsServerService(this);
-    this.combMsgBrokerService = new CombMsgBrokerService(this);
+    // this.combWsServerService = new CombWsServerService(this);
+    // this.combMsgBrokerService = new CombMsgBrokerService(this);
 
     console.log("[COMB] Loading", count, "bot instance(s) (BOT_1, BOT_2, ...)");
 
@@ -627,10 +627,10 @@ class CombinationBot {
       );
     }
     lines.push("");
-    lines.push("=== COPY TRADING ===");
-    lines.push(`🐰 Message broker (RabbitMQ): ${this.combMsgBrokerService.getConnectionStatusText()}`);
-    lines.push(`🔌 Connected Copy traders: ${this.connectedCopyTraderLabels.size}`);
-    lines.push("");
+    // lines.push("=== COPY TRADING ===");
+    // lines.push(`🐰 Message broker (RabbitMQ): ${this.combMsgBrokerService.getConnectionStatusText()}`);
+    // lines.push(`🔌 Connected Copy traders: ${this.connectedCopyTraderLabels.size}`);
+    // lines.push("");
     const nowMs = Date.now();
     let mergedPnL = 0;
     let earliestRunStart: Date | undefined;
@@ -1284,8 +1284,8 @@ class CombinationBot {
       }
 
       console.log("broadcast_open_position", msg);
-      this.combWsServerService.broadcastMsg(JSON.stringify(msg));
-      this.combMsgBrokerService.publishFanout(JSON.stringify(msg));
+      // this.combWsServerService.broadcastMsg(JSON.stringify(msg));
+      // this.combMsgBrokerService.publishFanout(JSON.stringify(msg));
     });
 
     TelegramService.appendTgCmdHandler("broadcast_close_position", async (ctx) => {
@@ -1301,8 +1301,8 @@ class CombinationBot {
       }
 
       console.log("broadcast_close_position", msg);
-      this.combWsServerService.broadcastMsg(JSON.stringify(msg));
-      this.combMsgBrokerService.publishFanout(JSON.stringify(msg));
+      // this.combWsServerService.broadcastMsg(JSON.stringify(msg));
+      // this.combMsgBrokerService.publishFanout(JSON.stringify(msg));
     });
 
     TelegramService.appendTgCmdHandler("pnl_graph", async (ctx) => {
@@ -2359,7 +2359,7 @@ class CombinationBot {
 
   async startMakeMoney(): Promise<void> {
     this.queueGeneralMessage(`🚀 Starting Combination Bot for ${this.instances.length} instance(s)`);
-    await this.startCopyTradingServices();
+    // await this.startCopyTradingServices();
 
     console.log("[COMB] Starting", this.instances.length, "instance(s)");
 
