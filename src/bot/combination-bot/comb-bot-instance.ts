@@ -529,10 +529,15 @@ class CombBotInstance {
     return move * this.leverage * 100;
   }
 
-  /** ATR trail: last two finished candles vs their own stops. Candle watcher only, once per minute. */
+  /**
+   * ATR trail (blue line): last two finished candles vs their own stops.
+   * Candle watcher only, once per minute.
+   * Still runs after a virtual close (trail cut included). That close keeps state
+   * until this natural trail is hit, which is what clears it.
+   */
   async closeAtrTrailIfNeededOnCandleClose(): Promise<void> {
     if (this.currentState !== this.waitForResolveState) return;
-    if (!this.currActivePosition || this.justManuallyClosedBy || this.isClosingPosition) return;
+    if (!this.currActivePosition || this.isClosingPosition) return;
     await this.waitForResolveState.closeIfRecentCandleTrailBreached();
   }
 

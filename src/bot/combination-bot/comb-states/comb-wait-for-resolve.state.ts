@@ -46,25 +46,40 @@ class CombWaitForResolveState {
   /**
    * Once per closed minute: candle -2 and candle -1 against the stop that was active while each formed.
    * Not called from the LTP listener.
+   * A virtual close (trail cut included) must not skip this. The blue line is what clears that preserved state.
    */
   async closeIfRecentCandleTrailBreached(): Promise<void> {
     if (this.isExited) return;
-    if (!this.bot.currActivePosition || this.bot.justManuallyClosedBy || this.bot.isClosingPosition) return;
+    if (!this.bot.currActivePosition || this.bot.isClosingPosition) return;
 
     await this._updateTrailingStopLevels();
     const position = this.bot.currActivePosition;
-    if (this.isExited || !position || this.bot.justManuallyClosedBy || this.bot.isClosingPosition) return;
+    if (this.isExited || !position || this.bot.isClosingPosition) return;
 
     const wickBreach = this._breachedRecentCandleStop(position.side);
     if (!wickBreach) return;
 
     const extremeLabel = position.side === "long" ? "low" : "high";
     console.log(
-      `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=${position.side} candle=${toIso(wickBreach.candleOpenMs)} candleExtreme=${wickBreach.extreme} bufferedLevel=${wickBreach.bufferedLevel} rawLevel=${wickBreach.rawLevel}`
+      `[COMB] waitForResolve trailingStopTriggered symbol=${this.bot.symbol} side=${position.side} candle=${toIso(wickBreach.candleOpenMs)} candleExtreme=${wickBreach.extreme} bufferedLevel=${wickBreach.bufferedLevel} rawLevel=${wickBreach.rawLevel} alreadyClosedBy=${this.bot.justManuallyClosedBy ?? "none"}`
     );
     this.bot.queueMsg(
       `🟣 Trailing stop (${position.side}) triggered\nCandle: ${toIso(wickBreach.candleOpenMs)}\nCandle ${extremeLabel}: ${wickBreach.extreme}\nBuffered stop: ${wickBreach.bufferedLevel}\nRaw stop: ${wickBreach.rawLevel}`
     );
+
+    // Exchange position is already flat. Clear the preserved state only.
+    if (this.bot.justManuallyClosedBy) {
+      await this.bot.finalizeClosedPosition(position, {
+        activePosition: position,
+        triggerTimestamp: wickBreach.candleOpenMs,
+        fillTimestamp: Date.now(),
+        triggerPrice: wickBreach.bufferedLevel,
+        shouldTrackSlippage: false,
+        exitReason: "atr_trailing",
+      });
+      return;
+    }
+
     this._clearPriceListener();
     await this._closeCurrPosition("atr_trailing");
   }
